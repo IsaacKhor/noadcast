@@ -1,55 +1,53 @@
-//
-//  ContentView.swift
-//  Noadcast
-//
-//  Created by Isaac Khor on 2026.05.15.
-//
-
 import SwiftUI
 import SwiftData
+import os
 
 struct ContentView: View {
-    @Environment(\.modelContext) private var modelContext
-    @Query private var items: [Item]
+    @Environment(\.modelContext) private var context
+    @State private var showFullPlayer = false
+
+    private let player = PlayerService.shared
 
     var body: some View {
-        NavigationSplitView {
-            List {
-                ForEach(items) { item in
-                    NavigationLink {
-                        Text("Item at \(item.timestamp, format: Date.FormatStyle(date: .numeric, time: .standard))")
-                    } label: {
-                        Text(item.timestamp, format: Date.FormatStyle(date: .numeric, time: .standard))
-                    }
-                }
-                .onDelete(perform: deleteItems)
+        TabView {
+            Tab("Queue", systemImage: "list.bullet") {
+                QueueView()
             }
-            .toolbar {
-                ToolbarItem(placement: .navigationBarTrailing) {
-                    EditButton()
-                }
-                ToolbarItem {
-                    Button(action: addItem) {
-                        Label("Add Item", systemImage: "plus")
-                    }
-                }
+            Tab("Podcasts", systemImage: "rectangle.stack.fill") {
+                PodcastsView()
             }
-        } detail: {
-            Text("Select an item")
+            Tab("Downloads", systemImage: "arrow.down.circle") {
+                DownloadsView()
+            }
+            Tab("Settings", systemImage: "gear") {
+                SettingsView()
+            }
         }
-    }
-
-    private func addItem() {
-        withAnimation {
-            let newItem = Item(timestamp: Date())
-            modelContext.insert(newItem)
+        .tabViewBottomAccessory {
+            MiniPlayerBar(onTap: {
+                if player.currentEpisodeID != nil {
+                    showFullPlayer = true
+                }
+            })
         }
-    }
+        .sheet(isPresented: $showFullPlayer) {
+            NowPlayingView()
+        }
+        .task {
+            let taskState = Log.signposter.beginInterval("ContentView.task")
+            defer { Log.signposter.endInterval("ContentView.task", taskState) }
+            Log.signposter.withIntervalSignpost("AppSettings.current") {
+                _ = AppSettings.current(in: context)
+            }
+            PlayerService.shared.restoreLastPlayedEpisode(context: context)
 
-    private func deleteItems(offsets: IndexSet) {
-        withAnimation {
-            for index in offsets {
-                modelContext.delete(items[index])
+            // Backfill cached Podcast.latestEpisodeAt for any rows that
+            // pre-date the field. Runs on a background `@ModelActor` so the
+            // expensive episode-relationship walk doesn't block the UI.
+            let container = context.container
+            Task.detached(priority: .background) {
+                let backfiller = MetadataBackfillActor(modelContainer: container)
+                await backfiller.backfillLatestEpisodeDates()
             }
         }
     }
@@ -57,5 +55,8 @@ struct ContentView: View {
 
 #Preview {
     ContentView()
-        .modelContainer(for: Item.self, inMemory: true)
+        .modelContainer(for: [
+            Podcast.self, Episode.self, AdMarker.self,
+            TranscriptSegment.self, QueueItem.self, AppSettings.self
+        ], inMemory: true)
 }

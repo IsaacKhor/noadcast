@@ -1,27 +1,43 @@
-//
-//  NoadcastApp.swift
-//  Noadcast
-//
-//  Created by Isaac Khor on 2026.05.15.
-//
-
 import SwiftUI
 import SwiftData
+import os
 
 @main
 struct NoadcastApp: App {
-    var sharedModelContainer: ModelContainer = {
-        let schema = Schema([
-            Item.self,
-        ])
-        let modelConfiguration = ModelConfiguration(schema: schema, isStoredInMemoryOnly: false)
+    @UIApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
 
-        do {
-            return try ModelContainer(for: schema, configurations: [modelConfiguration])
-        } catch {
-            fatalError("Could not create ModelContainer: \(error)")
+    let sharedModelContainer: ModelContainer = {
+        Log.signposter.withIntervalSignpost("ModelContainer.init") {
+            let schema = Schema([
+                Podcast.self,
+                Episode.self,
+                TranscriptSegment.self,
+                AdMarker.self,
+                QueueItem.self,
+                AppSettings.self
+            ])
+            let configuration = ModelConfiguration(schema: schema, isStoredInMemoryOnly: false)
+            do {
+                return try ModelContainer(for: schema, configurations: [configuration])
+            } catch {
+                fatalError("Could not create ModelContainer: \(error)")
+            }
         }
     }()
+
+    init() {
+        Log.signposter.withIntervalSignpost("NoadcastApp.init") {
+            Log.signposter.withIntervalSignpost("Wire.PlayerService") {
+                PlayerService.shared.setModelContainer(sharedModelContainer)
+            }
+            Log.signposter.withIntervalSignpost("Wire.ProcessingPipeline") {
+                ProcessingPipeline.shared.setModelContainer(sharedModelContainer)
+            }
+            Log.signposter.withIntervalSignpost("Wire.NetworkMonitor") {
+                _ = NetworkMonitor.shared
+            }
+        }
+    }
 
     var body: some Scene {
         WindowGroup {
