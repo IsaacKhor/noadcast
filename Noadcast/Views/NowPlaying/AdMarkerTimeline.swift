@@ -36,11 +36,12 @@ struct AdMarkerTimeline: View {
                             let xStart = start * width
                             let xEnd = end * width
                             let regionWidth = max(3, xEnd - xStart)
+                            let color = region.kind.tint
                             RoundedRectangle(cornerRadius: 3)
-                                .fill(Color.orange)
+                                .fill(color)
                                 .overlay(
                                     RoundedRectangle(cornerRadius: 3)
-                                        .stroke(Color.orange.opacity(0.4), lineWidth: 0.5)
+                                        .stroke(color.opacity(0.4), lineWidth: 0.5)
                                 )
                                 .frame(width: regionWidth, height: Self.adHeight)
                                 .position(

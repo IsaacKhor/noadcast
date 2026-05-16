@@ -216,6 +216,7 @@ final class ProcessingPipeline {
                 startSeconds: ad.startSeconds,
                 endSeconds: ad.endSeconds,
                 summary: ad.summary,
+                kind: ad.kind,
                 episode: episode
             )
             context.insert(m)

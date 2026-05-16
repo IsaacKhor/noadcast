@@ -6,11 +6,14 @@ import SwiftData
 import UIKit
 import os
 
-/// Lightweight snapshot of an episode's ad-skip metadata, captured at the time
-/// playback starts so the audio loop doesn't need to talk to SwiftData.
+/// Lightweight snapshot of an episode's skip-segment metadata, captured at
+/// the time playback starts so the audio loop doesn't need to talk to
+/// SwiftData. `kind` is consulted by `maybeSkipAd` to decide whether the
+/// user's per-kind toggle says to skip this one.
 struct AdRegion: Sendable, Equatable {
     let startSeconds: Double
     let endSeconds: Double
+    let kind: SegmentKind
 }
 
 @MainActor
@@ -49,6 +52,16 @@ final class PlayerService {
     /// compute audio-time deltas for the speedup savings counter, and to
     /// ignore deltas that look like seeks rather than natural progress.
     private var lastObservedTime: Double = 0
+
+    /// Skip-policy snapshot captured at `load(episode:settings:)` time. Each
+    /// kind has its own toggle; changes the user makes mid-playback take
+    /// effect on the next load.
+    private var skipAdsEnabled: Bool = true
+    private var skipIntrosAndOutrosEnabled: Bool = true
+    /// Gap in seconds: when the player skips a segment it then peeks ahead
+    /// for another segment whose start is within this window and chains
+    /// through it too.
+    private var chainSkipGapSeconds: Double = 5
 
     init() {
         Log.signposter.withIntervalSignpost("PlayerService.init") {
@@ -101,9 +114,12 @@ final class PlayerService {
         adRegions = analysisEnabled
             ? episode.adMarkers
                 .filter { !$0.isDeleted }
-                .map { AdRegion(startSeconds: $0.startSeconds, endSeconds: $0.endSeconds) }
+                .map { AdRegion(startSeconds: $0.startSeconds, endSeconds: $0.endSeconds, kind: $0.kind) }
                 .sorted { $0.startSeconds < $1.startSeconds }
             : []
+        skipAdsEnabled = settings.skipAds
+        skipIntrosAndOutrosEnabled = settings.skipIntrosAndOutros
+        chainSkipGapSeconds = Double(settings.chainSkipGapSeconds)
         skippedAds = 0
 
         let resume = episode.playbackPosition
@@ -270,13 +286,38 @@ final class PlayerService {
     // MARK: - Ad skipping
 
     private func maybeSkipAd() {
-        guard let ad = adRegions.first(where: { $0.startSeconds <= currentTime && currentTime < $0.endSeconds }) else {
-            return
+        // Find the region we're currently inside, and only act if the user
+        // wants this kind skipped.
+        guard let initial = adRegions.first(where: { $0.startSeconds <= currentTime && currentTime < $0.endSeconds }),
+              shouldSkip(kind: initial.kind)
+        else { return }
+
+        // Chain-skip: walk forward through additional regions whose start
+        // is within `chainSkipGapSeconds` of the previous region's end and
+        // that the user also wants skipped. The seek jumps past all of
+        // them in one go.
+        var targetEnd = initial.endSeconds
+        var skipped = 1
+        while let next = adRegions.first(where: { region in
+            region.startSeconds > targetEnd
+                && region.startSeconds - targetEnd <= chainSkipGapSeconds
+                && shouldSkip(kind: region.kind)
+        }) {
+            targetEnd = max(targetEnd, next.endSeconds)
+            skipped += 1
         }
-        skippedAds += 1
-        let saved = max(0, ad.endSeconds - currentTime)
+
+        skippedAds += skipped
+        let saved = max(0, targetEnd - currentTime)
         bumpLifetime(\.lifetimeAdSkipSeconds, by: saved)
-        seek(to: ad.endSeconds + 0.05)
+        seek(to: targetEnd + 0.05)
+    }
+
+    private func shouldSkip(kind: SegmentKind) -> Bool {
+        switch kind {
+        case .ad: skipAdsEnabled
+        case .intro, .outro: skipIntrosAndOutrosEnabled
+        }
     }
 
     private func bumpLifetime(_ keyPath: ReferenceWritableKeyPath<AppSettings, Double>, by amount: Double) {

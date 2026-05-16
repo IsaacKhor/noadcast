@@ -84,7 +84,15 @@ struct PodcastDetailView: View {
 
             Section("Episodes") {
                 ForEach(sortedEpisodes) { episode in
-                    EpisodeRow(episode: episode)
+                    EpisodeRow(episode: episode, style: .episodeOnly)
+                        .swipeActions(edge: .leading) {
+                            Button {
+                                SubscriptionService.shared.addToQueue(episode, in: context)
+                            } label: {
+                                Label("Queue", systemImage: "text.badge.plus")
+                            }
+                            .tint(.blue)
+                        }
                 }
             }
         }
@@ -103,118 +111,3 @@ struct PodcastDetailView: View {
     }
 }
 
-struct EpisodeRow: View {
-    @Environment(\.modelContext) private var context
-    @Bindable var episode: Episode
-    @State private var showNotes = false
-    let player = PlayerService.shared
-    let pipeline = ProcessingPipeline.shared
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            HStack {
-                // Tap the title/date area to read the show notes. The action
-                // button on the trailing edge handles its own tap so play /
-                // download isn't accidentally consumed.
-                Button {
-                    showNotes = true
-                } label: {
-                    VStack(alignment: .leading) {
-                        Text(episode.title).font(.subheadline.bold()).lineLimit(2)
-                        if let date = episode.publishedAt {
-                            Text(date.formatted(date: .abbreviated, time: .omitted))
-                                .font(.caption2)
-                                .foregroundStyle(.secondary)
-                        }
-                    }
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-                actionButton
-            }
-            if episode.processingState != .ready, episode.processingState != .new {
-                processingFooter
-            } else if !episode.adMarkers.filter({ !$0.isDeleted }).isEmpty {
-                Label(
-                    "\(episode.adMarkers.filter { !$0.isDeleted }.count) ads detected",
-                    systemImage: "speaker.slash"
-                )
-                .font(.caption2)
-                .foregroundStyle(.orange)
-            }
-        }
-        .swipeActions(edge: .leading) {
-            Button {
-                addToQueue()
-            } label: {
-                Label("Queue", systemImage: "text.badge.plus")
-            }
-            .tint(.blue)
-        }
-        .sheet(isPresented: $showNotes) {
-            ShowNotesView(episode: episode)
-        }
-    }
-
-    @ViewBuilder
-    private var actionButton: some View {
-        if episode.processingState == .ready, episode.hasLocalFile {
-            Button {
-                play()
-            } label: {
-                Image(systemName: "play.circle.fill").font(.title)
-            }
-            .buttonStyle(.plain)
-        } else if pipeline.isProcessing(episodeID: episode.persistentModelID) {
-            ProgressView()
-        } else {
-            Button {
-                pipeline.process(episode: episode)
-            } label: {
-                Image(systemName: "arrow.down.circle").font(.title)
-            }
-            .buttonStyle(.plain)
-        }
-    }
-
-    private var processingFooter: some View {
-        VStack(alignment: .leading, spacing: 2) {
-            ProgressView(value: episode.processingProgress)
-            HStack(spacing: 6) {
-                Text(label(for: episode.processingState))
-                if let detail = TimeFormatting.progressDetail(for: episode) {
-                    Text("·")
-                    Text(detail).monospacedDigit()
-                }
-            }
-            .font(.caption2)
-            .foregroundStyle(.secondary)
-            if let err = episode.processingError {
-                Text(err).font(.caption2).foregroundStyle(.red)
-            }
-        }
-    }
-
-    private func label(for state: EpisodeProcessingState) -> String {
-        switch state {
-        case .downloading: "Downloading…"
-        case .downloaded: "Downloaded"
-        case .transcribing: "Transcribing…"
-        case .detectingAds: "Detecting ads…"
-        case .ready: "Ready"
-        case .failed: "Failed"
-        case .new: ""
-        }
-    }
-
-    private func play() {
-        let settings = AppSettings.current(in: context)
-        player.load(episode: episode, settings: settings)
-        player.play()
-    }
-
-    private func addToQueue() {
-        SubscriptionService.shared.addToQueue(episode, in: context)
-    }
-}

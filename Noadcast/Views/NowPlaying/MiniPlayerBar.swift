@@ -124,7 +124,7 @@ struct MiniPlayerBar: View {
                     let xStart = max(0, min(1, start)) * geo.size.width
                     let xEnd = max(0, min(1, end)) * geo.size.width
                     Rectangle()
-                        .fill(Color.orange)
+                        .fill(region.kind.tint)
                         .frame(width: max(1.5, xEnd - xStart), height: 2)
                         .offset(x: xStart)
                 }

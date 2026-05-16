@@ -1,8 +1,8 @@
 import SwiftUI
 
-/// Sheet showing only the transcript lines that fall inside detected ads,
-/// grouped by ad. Reached by tapping the "ads detected" summary in
-/// `NowPlayingView`.
+/// Sheet showing the transcript lines that fall inside each detected
+/// skippable segment (ad, intro, or outro), grouped by segment. Reached
+/// by tapping the segments summary in `NowPlayingView`.
 struct AdsTranscriptView: View {
     let segments: [TranscriptSegment]
     let ads: [AdMarker]
@@ -23,9 +23,9 @@ struct AdsTranscriptView: View {
             Group {
                 if sortedAds.isEmpty {
                     ContentUnavailableView {
-                        Label("No ads detected", systemImage: "speaker.slash")
+                        Label("Nothing to skip", systemImage: "speaker.slash")
                     } description: {
-                        Text("This episode looks ad-free, or it hasn't finished processing yet.")
+                        Text("No intro, outro, or ads detected — or the episode hasn't finished processing yet.")
                     }
                 } else {
                     List {
@@ -54,7 +54,7 @@ struct AdsTranscriptView: View {
                     }
                 }
             }
-            .navigationTitle("Ads")
+            .navigationTitle("Skip Segments")
             .navigationBarTitleDisplayMode(.inline)
         }
     }
@@ -64,14 +64,28 @@ private struct AdHeader: View {
     let ad: AdMarker
     let onSeek: (Double) -> Void
 
+    private var fallbackTitle: String {
+        switch ad.kind {
+        case .ad: "Advertisement"
+        case .intro: "Intro"
+        case .outro: "Outro"
+        }
+    }
+
     var body: some View {
         Button {
             onSeek(ad.startSeconds)
         } label: {
             HStack(alignment: .firstTextBaseline, spacing: 6) {
                 Image(systemName: "speaker.slash.fill")
-                    .foregroundStyle(.orange)
-                Text(ad.summary.isEmpty ? "Advertisement" : ad.summary)
+                    .foregroundStyle(ad.kind.tint)
+                Text(ad.kind.label.uppercased())
+                    .font(.caption2.bold())
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 5)
+                    .padding(.vertical, 1)
+                    .background(ad.kind.tint, in: Capsule())
+                Text(ad.summary.isEmpty ? fallbackTitle : ad.summary)
                     .font(.subheadline.bold())
                     .foregroundStyle(.primary)
                 Spacer()

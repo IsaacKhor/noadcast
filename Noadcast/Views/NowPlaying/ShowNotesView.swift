@@ -9,6 +9,10 @@ struct ShowNotesView: View {
 
     @State private var toast: String?
     @State private var showTranscript = false
+    /// Rendered show-notes HTML. Parsed lazily in `.task` so the sheet's
+    /// appearance animation isn't blocked by NSAttributedString's HTML
+    /// parser (which uses WebKit and must run on the main thread).
+    @State private var renderedNotes: AttributedString?
 
     private let player = PlayerService.shared
 
@@ -40,10 +44,27 @@ struct ShowNotesView: View {
                         .padding(.top, 4)
                     }
                     Divider()
-                    Text(rendered(episode.episodeDescription ?? "No show notes."))
-                        .textSelection(.enabled)
+                    if let renderedNotes {
+                        Text(renderedNotes).textSelection(.enabled)
+                    } else {
+                        // Placeholder while the HTML parser runs on the next
+                        // main-thread tick — keeps the sheet animation smooth.
+                        Text(episode.episodeDescription ?? "No show notes.")
+                            .foregroundStyle(.secondary)
+                            .redacted(reason: .placeholder)
+                    }
                 }
                 .padding()
+            }
+            .task {
+                // Yield once so the sheet's slide-in animation gets a frame
+                // to start before the (heavy, main-thread-only) HTML parse
+                // begins. Without this delay the parse blocks the runloop
+                // for ~100–500 ms on long show notes and the sheet "snaps"
+                // in instead of animating.
+                try? await Task.sleep(for: .milliseconds(80))
+                if Task.isCancelled { return }
+                renderedNotes = rendered(episode.episodeDescription ?? "No show notes.")
             }
             .navigationTitle("Show Notes")
             .navigationBarTitleDisplayMode(.inline)
@@ -171,7 +192,7 @@ struct ShowNotesView: View {
     private var adRegionsForEpisode: [AdRegion] {
         episode.adMarkers
             .filter { !$0.isDeleted }
-            .map { AdRegion(startSeconds: $0.startSeconds, endSeconds: $0.endSeconds) }
+            .map { AdRegion(startSeconds: $0.startSeconds, endSeconds: $0.endSeconds, kind: $0.kind) }
             .sorted { $0.startSeconds < $1.startSeconds }
     }
 

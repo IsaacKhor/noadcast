@@ -26,8 +26,6 @@ struct QueueView: View {
         return items.filter { $0.episode?.persistentModelID != id }
     }
 
-    @State private var showFullPlayer = false
-
     var body: some View {
         NavigationStack {
             // Always render the list so the "Latest episodes" link is
@@ -43,9 +41,6 @@ struct QueueView: View {
             }
             .task {
                 SubscriptionService.shared.processQueuedEpisodes(context: context)
-            }
-            .sheet(isPresented: $showFullPlayer) {
-                NowPlayingView()
             }
         }
     }
@@ -65,10 +60,12 @@ struct QueueView: View {
 
             if let episode = currentEpisode {
                 Section {
-                    NowPlayingRow(
-                        episode: episode,
-                        onTap: { showFullPlayer = true }
-                    )
+                    EpisodeRow(episode: episode, style: .withPodcast) {
+                        Image(systemName: "waveform")
+                            .symbolEffect(.variableColor.iterative, options: .repeating)
+                            .foregroundStyle(.tint)
+                            .font(.title3)
+                    }
                 } header: {
                     Text("Now Playing")
                 }
@@ -77,7 +74,10 @@ struct QueueView: View {
             if !pendingItems.isEmpty {
                 Section {
                     ForEach(pendingItems) { item in
-                        QueueRow(item: item, onPlay: { play(item) })
+                        if let episode = item.episode {
+                            EpisodeRow(episode: episode, style: .withPodcast) {
+                                QueueRowTrailing(episode: episode, onPlay: { play(item) })
+                            }
                             .swipeActions(edge: .leading, allowsFullSwipe: true) {
                                 Button {
                                     moveToTop(item)
@@ -91,6 +91,7 @@ struct QueueView: View {
                                     Label("Remove", systemImage: "trash")
                                 }
                             }
+                        }
                     }
                     .onMove(perform: move)
                 } header: {
@@ -239,86 +240,16 @@ struct QueueView: View {
     }
 }
 
-private struct NowPlayingRow: View {
-    let episode: Episode
-    let onTap: () -> Void
-
-    var body: some View {
-        Button(action: onTap) {
-            HStack(spacing: 12) {
-                AsyncImage(url: episode.podcast?.artworkDisplayURL) { phase in
-                    switch phase {
-                    case .success(let image): image.resizable()
-                    default: Color.gray.opacity(0.2)
-                    }
-                }
-                .frame(width: 44, height: 44)
-                .clipShape(RoundedRectangle(cornerRadius: 6))
-
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(episode.title)
-                        .font(.subheadline.bold())
-                        .lineLimit(2)
-                    Text(episode.podcast?.title ?? "")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-                Spacer()
-                Image(systemName: "waveform")
-                    .symbolEffect(.variableColor.iterative, options: .repeating)
-                    .foregroundStyle(.tint)
-                    .font(.title3)
-            }
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-    }
-}
-
-private struct QueueRow: View {
-    @Bindable var item: QueueItem
+/// Queue rows show a play/download button plus the drag-handle glyph (which
+/// is purely cosmetic — `.onMove` drives the actual reorder gesture).
+private struct QueueRowTrailing: View {
+    @Bindable var episode: Episode
     let onPlay: () -> Void
-    @State private var showNotes = false
 
     var body: some View {
-        HStack(spacing: 12) {
-            // Tap the artwork + title region to open the episode's show
-            // notes. Play / drag affordances on the trailing edge handle
-            // their own gestures.
-            Button {
-                if item.episode != nil { showNotes = true }
-            } label: {
-                HStack(spacing: 12) {
-                    AsyncImage(url: item.episode?.podcast?.artworkDisplayURL) { phase in
-                        switch phase {
-                        case .success(let image): image.resizable()
-                        default: Color.gray.opacity(0.2)
-                        }
-                    }
-                    .frame(width: 44, height: 44)
-                    .clipShape(RoundedRectangle(cornerRadius: 6))
-
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(item.episode?.title ?? "Unknown")
-                            .font(.subheadline.bold()).lineLimit(2)
-                        Text(item.episode?.podcast?.title ?? "")
-                            .font(.caption).foregroundStyle(.secondary)
-                        if let ep = item.episode, ep.processingState != .ready {
-                            HStack(spacing: 4) {
-                                ProgressView(value: ep.processingProgress).frame(width: 80)
-                                Text(state(ep.processingState))
-                                    .font(.caption2)
-                                    .foregroundStyle(.secondary)
-                            }
-                        }
-                    }
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                }
-                .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
+        HStack(spacing: 8) {
             Button(action: onPlay) {
-                Image(systemName: item.episode?.processingState == .ready ? "play.circle.fill" : "arrow.down.circle")
+                Image(systemName: episode.processingState == .ready ? "play.circle.fill" : "arrow.down.circle")
                     .font(.title2)
             }
             .buttonStyle(.plain)
@@ -326,23 +257,6 @@ private struct QueueRow: View {
                 .font(.body)
                 .foregroundStyle(.tertiary)
                 .accessibilityHidden(true)
-        }
-        .sheet(isPresented: $showNotes) {
-            if let episode = item.episode {
-                ShowNotesView(episode: episode)
-            }
-        }
-    }
-
-    private func state(_ s: EpisodeProcessingState) -> String {
-        switch s {
-        case .downloading: "Downloading"
-        case .transcribing: "Transcribing"
-        case .detectingAds: "Detecting ads"
-        case .downloaded: "Queued"
-        case .ready: "Ready"
-        case .failed: "Failed"
-        case .new: "Waiting"
         }
     }
 }

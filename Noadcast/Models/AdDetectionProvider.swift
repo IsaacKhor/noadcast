@@ -5,12 +5,14 @@ import Foundation
 /// (`AdSegmentsJSON`) constrained by the provider's response-schema feature.
 nonisolated enum AdDetectionProvider: String, Codable, CaseIterable, Sendable {
     case geminiFlashLite
+    case geminiFlash
     case gpt54Nano
     case gpt54Mini
 
     var label: String {
         switch self {
         case .geminiFlashLite: "Gemini Flash-Lite (latest)"
+        case .geminiFlash: "Gemini Flash (latest)"
         case .gpt54Nano: "GPT-5.4 nano"
         case .gpt54Mini: "GPT-5.4 mini"
         }
@@ -20,6 +22,7 @@ nonisolated enum AdDetectionProvider: String, Codable, CaseIterable, Sendable {
     var apiModel: String {
         switch self {
         case .geminiFlashLite: "gemini-flash-lite-latest"
+        case .geminiFlash: "gemini-flash-latest"
         case .gpt54Nano: "gpt-5.4-nano"
         case .gpt54Mini: "gpt-5.4-mini"
         }
@@ -27,7 +30,7 @@ nonisolated enum AdDetectionProvider: String, Codable, CaseIterable, Sendable {
 
     var requiresGoogleKey: Bool {
         switch self {
-        case .geminiFlashLite: true
+        case .geminiFlashLite, .geminiFlash: true
         default: false
         }
     }

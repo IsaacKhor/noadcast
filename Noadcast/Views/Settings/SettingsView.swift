@@ -17,6 +17,7 @@ struct SettingsView: View {
                 if let s = settings {
                     timeSavedSection(settings: s)
                     playbackSection(settings: s)
+                    skippingSection(settings: s)
                     downloadsSection(settings: s)
                     adProviderSection(settings: s)
                     adDetectionSection(settings: s)
@@ -75,6 +76,26 @@ struct SettingsView: View {
             }
             .pickerStyle(.menu)
             Toggle("Auto-delete after fully played", isOn: $s.autoDeleteAfterPlayed)
+        }
+    }
+
+    @ViewBuilder
+    private func skippingSection(settings: AppSettings) -> some View {
+        @Bindable var s = settings
+        Section {
+            Toggle("Skip ads", isOn: $s.skipAds)
+            Toggle("Skip intros & outros", isOn: $s.skipIntrosAndOutros)
+            Stepper(value: $s.chainSkipGapSeconds, in: 0...30) {
+                LabeledContent("Chain-skip gap") {
+                    Text("\(s.chainSkipGapSeconds) s")
+                        .monospacedDigit()
+                        .foregroundStyle(.secondary)
+                }
+            }
+        } header: {
+            Text("Skipping")
+        } footer: {
+            Text("Detected segments are still marked on the timeline and transcript regardless. After skipping a segment, the player peeks ahead by the chain-skip gap for another nearby segment and jumps that too. Set to 0 to skip only the current segment.")
         }
     }
 
@@ -139,7 +160,7 @@ struct SettingsView: View {
 
     private func providerFooter(for provider: AdDetectionProvider) -> String {
         switch provider {
-        case .geminiFlashLite:
+        case .geminiFlashLite, .geminiFlash:
             "Sends the full transcript to Google in a single request and parses a structured JSON response. Get an API key at aistudio.google.com."
         case .gpt54Nano, .gpt54Mini:
             "Sends the full transcript to OpenAI in a single request and parses a structured JSON response. Get an API key at platform.openai.com."

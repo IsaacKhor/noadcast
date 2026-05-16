@@ -137,7 +137,7 @@ struct NowPlayingView: View {
                 Image(systemName: "speaker.slash.fill")
                     .foregroundStyle(.orange)
                 VStack(alignment: .leading) {
-                    Text("\(player.adRegions.count) ad\(player.adRegions.count == 1 ? "" : "s") detected")
+                    Text(detectionSummary)
                         .font(.subheadline.bold())
                     Text("\(player.skippedAds) skipped this session")
                         .font(.caption)
@@ -154,6 +154,19 @@ struct NowPlayingView: View {
         }
         .buttonStyle(.plain)
         .disabled(player.adRegions.isEmpty)
+    }
+
+    /// Headline of the segments pill, e.g. "3 ads · intro · outro".
+    private var detectionSummary: String {
+        let adCount = player.adRegions.filter { $0.kind == .ad }.count
+        let hasIntro = player.adRegions.contains { $0.kind == .intro }
+        let hasOutro = player.adRegions.contains { $0.kind == .outro }
+        var parts: [String] = []
+        if adCount > 0 { parts.append("\(adCount) ad\(adCount == 1 ? "" : "s")") }
+        if hasIntro { parts.append("intro") }
+        if hasOutro { parts.append("outro") }
+        if parts.isEmpty { return "Nothing to skip" }
+        return parts.joined(separator: " · ")
     }
 
     private var transportControls: some View {

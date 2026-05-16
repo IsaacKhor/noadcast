@@ -53,7 +53,16 @@ struct DownloadsView: View {
                         if !inProgress.isEmpty {
                             Section("In progress") {
                                 ForEach(inProgress) { episode in
-                                    InProgressRow(episode: episode)
+                                    EpisodeRow(episode: episode, style: .withPodcast) {
+                                        Button {
+                                            pipeline.cancel(episodeID: episode.persistentModelID)
+                                        } label: {
+                                            Image(systemName: "xmark.circle.fill")
+                                                .foregroundStyle(.secondary)
+                                                .font(.title3)
+                                        }
+                                        .buttonStyle(.plain)
+                                    }
                                 }
                             }
                         }
@@ -61,7 +70,15 @@ struct DownloadsView: View {
                         if !failed.isEmpty {
                             Section("Failed") {
                                 ForEach(failed) { episode in
-                                    FailedRow(episode: episode)
+                                    EpisodeRow(episode: episode, style: .withPodcast) {
+                                        Button {
+                                            pipeline.process(episode: episode)
+                                        } label: {
+                                            Image(systemName: "arrow.clockwise.circle")
+                                                .font(.title2)
+                                        }
+                                        .buttonStyle(.plain)
+                                    }
                                 }
                             }
                         }
@@ -79,7 +96,11 @@ struct DownloadsView: View {
                         if !downloaded.isEmpty {
                             Section("Downloaded") {
                                 ForEach(downloaded) { episode in
-                                    DownloadedRow(episode: episode)
+                                    EpisodeRow(episode: episode, style: .withPodcast) {
+                                        Text(TimeFormatting.fileSize(episode.fileSizeBytes ?? 0))
+                                            .font(.caption.monospacedDigit())
+                                            .foregroundStyle(.secondary)
+                                    }
                                 }
                                 .onDelete(perform: deleteDownloaded)
                             }
@@ -124,145 +145,5 @@ struct DownloadsView: View {
             SubscriptionService.shared.deleteEpisodeContent(episode, in: context, save: false)
         }
         try? context.save()
-    }
-}
-
-// MARK: - Rows
-
-private struct InProgressRow: View {
-    @Bindable var episode: Episode
-    @State private var showNotes = false
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            HStack(alignment: .top) {
-                Button {
-                    showNotes = true
-                } label: {
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(episode.title).font(.subheadline.bold()).lineLimit(2)
-                        Text(episode.podcast?.title ?? "")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                            .lineLimit(1)
-                    }
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-                Button {
-                    ProcessingPipeline.shared.cancel(episodeID: episode.persistentModelID)
-                } label: {
-                    Image(systemName: "xmark.circle.fill")
-                        .foregroundStyle(.secondary)
-                        .font(.title3)
-                }
-                .buttonStyle(.plain)
-            }
-
-            ProgressView(value: episode.processingProgress)
-
-            HStack {
-                Label(stageLabel, systemImage: stageSymbol)
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
-                Spacer()
-                if let detail = TimeFormatting.progressDetail(for: episode) {
-                    Text(detail)
-                        .font(.caption2.monospacedDigit())
-                        .foregroundStyle(.secondary)
-                }
-            }
-        }
-        .padding(.vertical, 2)
-        .sheet(isPresented: $showNotes) {
-            ShowNotesView(episode: episode)
-        }
-    }
-
-    private var stageLabel: String {
-        switch episode.processingState {
-        case .downloading: "Downloading"
-        case .transcribing: "Transcribing"
-        case .detectingAds: "Detecting ads"
-        default: ""
-        }
-    }
-
-    private var stageSymbol: String {
-        switch episode.processingState {
-        case .downloading: "arrow.down.circle"
-        case .transcribing: "waveform"
-        case .detectingAds: "sparkles"
-        default: "circle"
-        }
-    }
-}
-
-private struct FailedRow: View {
-    @Bindable var episode: Episode
-    @State private var showNotes = false
-
-    var body: some View {
-        HStack(alignment: .top) {
-            Button {
-                showNotes = true
-            } label: {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(episode.title).font(.subheadline.bold()).lineLimit(2)
-                    Text(episode.podcast?.title ?? "")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                    if let err = episode.processingError {
-                        Text(err)
-                            .font(.caption2)
-                            .foregroundStyle(.red)
-                            .lineLimit(3)
-                    }
-                }
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            Button {
-                ProcessingPipeline.shared.process(episode: episode)
-            } label: {
-                Image(systemName: "arrow.clockwise.circle")
-                    .font(.title3)
-            }
-            .buttonStyle(.plain)
-        }
-        .sheet(isPresented: $showNotes) {
-            ShowNotesView(episode: episode)
-        }
-    }
-}
-
-private struct DownloadedRow: View {
-    let episode: Episode
-    @State private var showNotes = false
-
-    var body: some View {
-        Button {
-            showNotes = true
-        } label: {
-            HStack {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(episode.title).font(.subheadline).lineLimit(2)
-                    Text(episode.podcast?.title ?? "")
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
-                }
-                Spacer()
-                Text(TimeFormatting.fileSize(episode.fileSizeBytes ?? 0))
-                    .font(.caption.monospacedDigit())
-                    .foregroundStyle(.secondary)
-            }
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .sheet(isPresented: $showNotes) {
-            ShowNotesView(episode: episode)
-        }
     }
 }

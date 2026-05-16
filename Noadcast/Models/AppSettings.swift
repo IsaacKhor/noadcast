@@ -24,6 +24,16 @@ final class AppSettings {
     /// Sum with `lifetimeAdSkipSeconds` to get the total audio "consumed".
     var lifetimePlayedSeconds: Double = 0
 
+    /// Skip detected mid-episode ads during playback. Defaults on (it's the
+    /// whole point of the app). Off lets you hear ads if you want — markers
+    /// are still rendered on the timeline / transcript regardless.
+    var skipAds: Bool = true
+    /// Skip detected intros and outros during playback. Defaults on.
+    var skipIntrosAndOutros: Bool = true
+    /// When the player skips a segment, it then peeks ahead by this many
+    /// seconds for another segment to chain-skip. Set to 0 to disable.
+    var chainSkipGapSeconds: Int = 5
+
     /// Which cloud model performs ad detection. See `AdDetectionProvider`.
     var adDetectionProviderRaw: String = AdDetectionProvider.geminiFlashLite.rawValue
     /// API key for Google AI Studio (Gemini providers). Stored unencrypted in

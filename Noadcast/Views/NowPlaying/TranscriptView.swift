@@ -16,7 +16,7 @@ struct TranscriptView: View {
     var body: some View {
         NavigationStack {
             List(sortedSegments) { seg in
-                let inAd = adRegions.contains {
+                let region = adRegions.first {
                     seg.startSeconds < $0.endSeconds && seg.endSeconds > $0.startSeconds
                 }
                 Button {
@@ -27,22 +27,22 @@ struct TranscriptView: View {
                             .font(.caption.monospacedDigit())
                             .foregroundStyle(.secondary)
                             .frame(width: 56, alignment: .leading)
-                        if inAd {
-                            Text("AD")
+                        if let region {
+                            Text(region.kind.label.uppercased())
                                 .font(.caption2.bold())
                                 .foregroundStyle(.white)
                                 .padding(.horizontal, 6)
                                 .padding(.vertical, 2)
-                                .background(.orange, in: Capsule())
+                                .background(region.kind.tint, in: Capsule())
                         }
                         Text(seg.text)
-                            .foregroundStyle(inAd ? .orange : .primary)
+                            .foregroundStyle(region?.kind.tint ?? .primary)
                             .textSelection(.enabled)
                         Spacer()
                     }
                 }
                 .buttonStyle(.plain)
-                .listRowBackground(inAd ? Color.orange.opacity(0.12) : Color.clear)
+                .listRowBackground(region.map { $0.kind.tint.opacity(0.12) } ?? Color.clear)
             }
             .navigationTitle("Transcript")
             .navigationBarTitleDisplayMode(.inline)

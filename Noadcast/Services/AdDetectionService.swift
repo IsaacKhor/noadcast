@@ -5,6 +5,7 @@ nonisolated struct DetectedAd: Sendable {
     let startSeconds: Double
     let endSeconds: Double
     let summary: String
+    let kind: SegmentKind
     var duration: Double { endSeconds - startSeconds }
 }
 
@@ -28,6 +29,10 @@ nonisolated struct AdSegmentJSON: Decodable, Sendable {
     let startSeconds: Double
     let endSeconds: Double
     let summary: String
+    /// `"ad"`, `"intro"`, or `"outro"` — enforced by the response-schema
+    /// `enum` on the provider side, so a malformed value here means the
+    /// model ignored the schema.
+    let kind: String
 }
 
 nonisolated struct AdSegmentsJSON: Decodable, Sendable {
@@ -44,17 +49,33 @@ actor AdDetectionService {
     /// The system prompt sent to whichever model is doing ad detection.
     /// Hardcoded — the Settings screen shows this text but can't edit it.
     nonisolated static let detectionPrompt: String = """
-    You are analyzing a podcast transcript to identify advertisement segments. \
-    Advertisements include: sponsored messages, host-read ads, promo codes, \
-    paid endorsements, and cross-promotion of other podcasts. They do NOT include: \
-    editorial mentions, listener mail, the host's own products discussed editorially, \
-    or interview segments.
+    You are analyzing a podcast transcript and identifying segments the \
+    listener probably wants to skip. Each segment you return has a `kind`:
 
-    Given a list of timestamped transcript lines, return the start and end seconds \
-    of each contiguous ad segment. Use the timestamps provided. Be conservative — \
-    only flag a segment if you are confident it is a paid advertisement. Return an \
-    empty list if no ads are present. If two ads segment are adjacent, merge them \
-    into one longer segment.
+    - "intro": a single contiguous segment at the very BEGINNING of the \
+    episode covering theme music, branding, host introductions, episode \
+    teasers, and any preroll ads played before the main content starts. \
+    There is at most one intro per episode, and it spans from the start \
+    of the episode through to where the substantive content begins.
+
+    - "outro": a single contiguous segment at the very END of the episode \
+    covering closing music, credits, next-episode teasers, postroll ads, \
+    and farewells. There is at most one outro per episode, and it spans \
+    from where the substantive content finishes through to the end of \
+    the episode. Intros and outros may include ads — they're still a \
+    single intro/outro segment, not separate entries.
+
+    - "ad": a mid-episode advertisement, sponsored message, host-read ad, \
+    promo code, paid endorsement, or cross-promotion of another podcast \
+    that appears BETWEEN the intro and outro (i.e. inside the main \
+    content). Editorial mentions, listener mail, the host's own products \
+    discussed editorially, and interview segments are NOT ads.
+
+    Given the timestamped transcript lines, return the start and end \
+    seconds of each segment using only timestamps that appear in the \
+    transcript. Be conservative — flag ads only when you're confident. \
+    Return an empty list if nothing should be skipped. If two ad segments \
+    are adjacent (no real content between them), merge them into one.
     """
 
     private let urlSession: URLSession = .shared
@@ -77,7 +98,7 @@ actor AdDetectionService {
         let prompt = Self.buildPrompt(transcript: transcript)
         let raw: [DetectedAd]
         switch provider {
-        case .geminiFlashLite:
+        case .geminiFlashLite, .geminiFlash:
             guard let key = googleAPIKey, !key.isEmpty else {
                 throw AdDetectionError.modelUnavailable("Google API key missing — add one in Settings → Detection model")
             }
@@ -114,11 +135,13 @@ actor AdDetectionService {
 
         \(lines)
 
-        Identify every advertisement segment in this transcript. Use only the \
-        timestamps that appear in the transcript above. Return an object with \
-        a `segments` array; each entry has `startSeconds`, `endSeconds`, and a \
-        one-sentence `summary` describing what's being advertised. If no ads \
-        are present, return an empty `segments` array.
+        Identify every segment the listener would want to skip — the intro \
+        (at most one, at the start), the outro (at most one, at the end), \
+        and every mid-episode advertisement. Use only the timestamps that \
+        appear in the transcript above. Return an object with a `segments` \
+        array; each entry has `startSeconds`, `endSeconds`, a one-sentence \
+        `summary`, and a `kind` of "intro", "outro", or "ad". Return an \
+        empty `segments` array if nothing should be skipped.
         """
     }
 
@@ -155,9 +178,13 @@ actor AdDetectionService {
                                 "properties": [
                                     "startSeconds": ["type": "NUMBER"],
                                     "endSeconds": ["type": "NUMBER"],
-                                    "summary": ["type": "STRING"]
+                                    "summary": ["type": "STRING"],
+                                    "kind": [
+                                        "type": "STRING",
+                                        "enum": ["ad", "intro", "outro"]
+                                    ]
                                 ],
-                                "required": ["startSeconds", "endSeconds", "summary"]
+                                "required": ["startSeconds", "endSeconds", "summary", "kind"]
                             ]
                         ]
                     ],
@@ -216,9 +243,13 @@ actor AdDetectionService {
                                     "properties": [
                                         "startSeconds": ["type": "number"],
                                         "endSeconds": ["type": "number"],
-                                        "summary": ["type": "string"]
+                                        "summary": ["type": "string"],
+                                        "kind": [
+                                            "type": "string",
+                                            "enum": ["ad", "intro", "outro"]
+                                        ]
                                     ],
-                                    "required": ["startSeconds", "endSeconds", "summary"]
+                                    "required": ["startSeconds", "endSeconds", "summary", "kind"]
                                 ]
                             ]
                         ],
@@ -276,10 +307,15 @@ actor AdDetectionService {
         }
         return parsed.segments.compactMap { seg -> DetectedAd? in
             guard seg.endSeconds > seg.startSeconds else { return nil }
+            // The schema constrains `kind` to ad/intro/outro, but a model
+            // can still go off the rails — fall back to `.ad` rather than
+            // dropping the segment entirely.
+            let kind = SegmentKind(rawValue: seg.kind) ?? .ad
             return DetectedAd(
                 startSeconds: seg.startSeconds,
                 endSeconds: seg.endSeconds,
-                summary: seg.summary
+                summary: seg.summary,
+                kind: kind
             )
         }
     }
