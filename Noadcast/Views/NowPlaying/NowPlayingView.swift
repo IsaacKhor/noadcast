@@ -110,7 +110,7 @@ struct NowPlayingView: View {
     }
 
     private func artwork(for episode: Episode) -> some View {
-        let url = episode.podcast?.artworkURL
+        let url = episode.podcast?.artworkDisplayURL
         return AsyncImage(url: url) { phase in
             switch phase {
             case .success(let image):

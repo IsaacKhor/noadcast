@@ -29,6 +29,8 @@ final class SubscriptionService {
         importEpisodes(parsed.episodes, into: podcast, context: context)
         podcast.lastFetched = .now
         try context.save()
+        await ArtworkService.shared.cache(for: podcast)
+        try? context.save()
         return podcast
     }
 
@@ -37,10 +39,22 @@ final class SubscriptionService {
         if podcast.title.isEmpty { podcast.title = parsed.title }
         podcast.author = parsed.author ?? podcast.author
         podcast.summary = parsed.summary ?? podcast.summary
-        if podcast.artworkURL == nil { podcast.artworkURL = parsed.artworkURL }
+        // Always pick up updated artwork from the feed — the show might have
+        // rebranded since we first subscribed. `ArtworkService.cache(for:)`
+        // below diffs against `cachedArtworkSourceURL` and only re-downloads
+        // when the URL actually changed.
+        if let artwork = parsed.artworkURL {
+            podcast.artworkURL = artwork
+        }
         importEpisodes(parsed.episodes, into: podcast, context: context)
         podcast.lastFetched = .now
         try context.save()
+        await ArtworkService.shared.cache(for: podcast)
+        try? context.save()
+        // Newly-imported episodes that auto-enqueued in importEpisodes now
+        // exist with persisted IDs; tell the pipeline to download/analyze
+        // anything in the queue that isn't already ready.
+        processQueuedEpisodes(context: context)
     }
 
     func refreshAll(context: ModelContext) async {
@@ -56,6 +70,7 @@ final class SubscriptionService {
         for episode in podcast.episodes {
             deleteEpisodeContent(episode, in: context, save: false)
         }
+        ArtworkService.shared.deleteCache(for: podcast)
         context.delete(podcast)
         try context.save()
     }
@@ -109,6 +124,96 @@ final class SubscriptionService {
         }
     }
 
+    /// Re-runs the entire AI pipeline (download + transcribe + ad detection)
+    /// for one episode. Wipes the local audio file, cached transcript, and
+    /// existing ad markers, then enqueues processing. Preserves any
+    /// `QueueItem`s pointing at the episode so the user's queue placement
+    /// isn't lost when they ask the system to redo the analysis. Best for
+    /// dynamically-ad-inserted feeds where the audio file itself may differ
+    /// between downloads.
+    func redownloadAndReprocess(_ episode: Episode, in context: ModelContext) {
+        ProcessingPipeline.shared.cancel(episodeID: episode.persistentModelID)
+        PlayerService.shared.unloadIfCurrent(episodeID: episode.persistentModelID)
+
+        if let url = episode.localFileURL {
+            try? FileManager.default.removeItem(at: url)
+        }
+        episode.localFilename = nil
+        episode.fileSizeBytes = nil
+        episode.playbackPosition = 0
+        episode.isPlayed = false
+        episode.datePlayed = nil
+        episode.processingState = .new
+        episode.processingProgress = 0
+        episode.processingCurrent = nil
+        episode.processingTotal = nil
+        episode.processingError = nil
+        for segment in episode.transcript { context.delete(segment) }
+        for marker in episode.adMarkers { context.delete(marker) }
+        try? context.save()
+
+        ProcessingPipeline.shared.process(episode: episode)
+    }
+
+    /// Re-runs only transcription + ad detection on the **existing** local
+    /// file (does not re-download). Useful when the user has tweaked the
+    /// detection prompt or filter policy and wants fresh markers without
+    /// re-fetching audio. Falls back to a full re-download if the file is
+    /// no longer on disk. Doesn't unload the player — playback can keep
+    /// going against the same audio while AI re-runs in the background.
+    func reanalyzeEpisode(_ episode: Episode, in context: ModelContext) {
+        guard episode.hasLocalFile else {
+            redownloadAndReprocess(episode, in: context)
+            return
+        }
+        ProcessingPipeline.shared.cancel(episodeID: episode.persistentModelID)
+
+        for segment in episode.transcript { context.delete(segment) }
+        for marker in episode.adMarkers { context.delete(marker) }
+        episode.processingState = .downloaded
+        episode.processingProgress = 0
+        episode.processingCurrent = nil
+        episode.processingTotal = nil
+        episode.processingError = nil
+        try? context.save()
+
+        ProcessingPipeline.shared.process(episode: episode)
+    }
+
+    /// Adds an episode to the **top** of the queue (just after the
+    /// currently-playing episode, if any) so manually-queued episodes are
+    /// the next thing to play. Returns `true` if a new `QueueItem` was
+    /// inserted, `false` if it was already present.
+    @discardableResult
+    func addToQueue(_ episode: Episode, in context: ModelContext) -> Bool {
+        let descriptor = FetchDescriptor<QueueItem>(
+            sortBy: [SortDescriptor(\QueueItem.position)]
+        )
+        let existing = (try? context.fetch(descriptor)) ?? []
+        if existing.contains(where: { $0.episode == episode }) {
+            return false
+        }
+
+        let playingID = PlayerService.shared.currentEpisodeID
+        let playing = existing.first { $0.episode?.persistentModelID == playingID }
+
+        var pos = 0
+        if let playing {
+            playing.position = pos
+            pos += 1
+        }
+        let newItem = QueueItem(position: pos, episode: episode)
+        context.insert(newItem)
+        pos += 1
+        for item in existing where item !== playing {
+            item.position = pos
+            pos += 1
+        }
+        try? context.save()
+        processQueuedEpisodes(context: context)
+        return true
+    }
+
     // MARK: - Private
 
     private func importEpisodes(
@@ -118,6 +223,25 @@ final class SubscriptionService {
     ) {
         let existingGUIDs = Set(podcast.episodes.map(\.guid))
         var newestSeen: Date? = podcast.latestEpisodeAt
+
+        // `lastFetched == nil` is the first import for this podcast — i.e.,
+        // the initial subscribe. We don't auto-enqueue then, otherwise the
+        // user's queue would get flooded with the show's entire archive.
+        // On subsequent refreshes, anything new in the feed is genuinely a
+        // newly-published episode and should join the up-next queue
+        // (gated by the per-podcast `autoDownloadEnabled` switch).
+        let isRefresh = podcast.lastFetched != nil
+        let autoEnqueue = isRefresh && podcast.autoDownloadEnabled
+
+        // Pre-compute the next queue position once so we can append
+        // multiple new episodes in order without re-querying.
+        var nextQueuePosition: Int = {
+            guard autoEnqueue else { return 0 }
+            let descriptor = FetchDescriptor<QueueItem>(sortBy: [SortDescriptor(\QueueItem.position)])
+            let existing = (try? context.fetch(descriptor)) ?? []
+            return (existing.last?.position ?? -1) + 1
+        }()
+
         for entry in parsed where !existingGUIDs.contains(entry.guid) {
             let ep = Episode(
                 guid: entry.guid,
@@ -134,8 +258,16 @@ final class SubscriptionService {
                newestSeen == nil || pub > newestSeen! {
                 newestSeen = pub
             }
+            if autoEnqueue {
+                let item = QueueItem(position: nextQueuePosition, episode: ep)
+                context.insert(item)
+                nextQueuePosition += 1
+            }
         }
         if let newestSeen { podcast.latestEpisodeAt = newestSeen }
+        // Caller is responsible for saving and then invoking
+        // `processQueuedEpisodes` (idempotent + cheap) so the pipeline only
+        // ever looks up *persisted* `PersistentIdentifier`s.
     }
 
     /// Triggers `ProcessingPipeline` for every queued episode that isn't yet

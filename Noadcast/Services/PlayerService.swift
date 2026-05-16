@@ -35,7 +35,10 @@ final class PlayerService {
     private var endObserver: NSObjectProtocol?
 
     private weak var modelContainer: ModelContainer?
-    private var saveTimer: Timer?
+    /// Last time `persistPosition(force:)` actually wrote, in
+    /// `ProcessInfo.systemUptime` seconds. Used to throttle saves.
+    private var lastPersistTime: TimeInterval = 0
+    private var willResignObserver: NSObjectProtocol?
 
     /// Cached artwork keyed by URL so we don't re-fetch every load.
     private var artworkCache: [URL: UIImage] = [:]
@@ -56,6 +59,19 @@ final class PlayerService {
                 configureRemoteCommands()
             }
             player.allowsExternalPlayback = false
+            // Flush the current playback position whenever the app moves to
+            // background — catches clean exits and graceful suspensions.
+            // During a sudden crash, the in-flight 3-second throttled save
+            // is the safety net (worst case: lose up to 3 s of progress).
+            willResignObserver = NotificationCenter.default.addObserver(
+                forName: UIApplication.willResignActiveNotification,
+                object: nil,
+                queue: .main
+            ) { _ in
+                Task { @MainActor [weak self] in
+                    self?.persistPosition(force: true)
+                }
+            }
         }
     }
 
@@ -80,7 +96,7 @@ final class PlayerService {
         currentEpisodeID = episode.persistentModelID
         currentEpisodeTitle = episode.title
         currentPodcastTitle = episode.podcast?.title ?? ""
-        artworkURL = episode.podcast?.artworkURL
+        artworkURL = episode.podcast?.artworkDisplayURL
         let analysisEnabled = episode.podcast?.aiProcessingEnabled ?? true
         adRegions = analysisEnabled
             ? episode.adMarkers
@@ -98,6 +114,7 @@ final class PlayerService {
             currentTime = 0
         }
         lastObservedTime = resume
+        lastPersistTime = 0  // allow the first throttled persist to write immediately
         if let dur = episode.duration { duration = dur }
 
         let speed = episode.podcast?.customPlaybackSpeed ?? settings.defaultPlaybackSpeed
@@ -105,7 +122,7 @@ final class PlayerService {
         installPeriodicObserver()
         installEndObserver()
         updateNowPlayingInfo()
-        loadArtworkForNowPlaying(url: episode.podcast?.artworkURL)
+        loadArtworkForNowPlaying(url: episode.podcast?.artworkDisplayURL)
 
         settings.lastPlayedEpisodeGUID = episode.guid
         if let container = modelContainer {
@@ -209,7 +226,7 @@ final class PlayerService {
                 if let dur = self.player.currentItem?.duration.seconds, dur.isFinite, dur > 0 {
                     self.duration = dur
                 }
-                self.accumulateSpeedupSavings()
+                self.accumulatePlayedTime()
                 self.maybeSkipAd()
                 self.persistPosition(force: false)
                 self.lastObservedTime = self.currentTime
@@ -217,17 +234,16 @@ final class PlayerService {
         }
     }
 
-    /// Add to `AppSettings.lifetimeSpeedupSeconds` based on how far the audio
+    /// Add to `AppSettings.lifetimePlayedSeconds` based on how far the audio
     /// advanced since the last tick. Filter out anything that doesn't look
-    /// like natural forward progress (seeks, ad skips).
-    private func accumulateSpeedupSavings() {
-        guard playbackRate > 1.0 else { return }
+    /// like natural forward progress (seeks, ad skips — those are accounted
+    /// for separately in `maybeSkipAd`).
+    private func accumulatePlayedTime() {
         let delta = currentTime - lastObservedTime
         // A single observer tick advances by ~rate × interval, capped at ~2s
         // even at 3.6×. Anything outside (0, 5] is a seek or a glitch.
         guard delta > 0, delta <= 5 else { return }
-        let savings = delta * (1.0 - 1.0 / playbackRate)
-        bumpLifetime(\.lifetimeSpeedupSeconds, by: savings)
+        bumpLifetime(\.lifetimePlayedSeconds, by: delta)
     }
 
     private func installEndObserver() {
@@ -271,16 +287,19 @@ final class PlayerService {
 
     // MARK: - Persistence
 
+    private static let persistInterval: TimeInterval = 3.0
+
     private func persistPosition(force: Bool) {
         guard let id = currentEpisodeID, let container = modelContainer else { return }
-        // Throttle: write at most every ~3 s of playback unless forced.
-        if !force {
-            saveTimer?.invalidate()
-            saveTimer = Timer.scheduledTimer(withTimeInterval: 3, repeats: false) { _ in
-                Task { @MainActor [weak self] in self?.persistPosition(force: true) }
-            }
-            return
-        }
+        // Throttle: persist at most once every `persistInterval` seconds
+        // during continuous playback. Forced calls (pause, background,
+        // playback-finished) write immediately. The previous implementation
+        // used a *debounce* — a 3-second timer reset on every periodic
+        // observer tick — which meant the timer never fired during normal
+        // playback and the position only got saved when playback paused.
+        let now = ProcessInfo.processInfo.systemUptime
+        if !force, now - lastPersistTime < Self.persistInterval { return }
+        lastPersistTime = now
 
         let position = currentTime
         let context = ModelContext(container)
@@ -397,6 +416,15 @@ final class PlayerService {
         }
         if let cached = artworkCache[url] {
             applyNowPlayingArtwork(cached)
+            return
+        }
+        // Locally-cached artwork (from `ArtworkService`) is a file:// URL —
+        // skip the URLSession round-trip and load it synchronously.
+        if url.isFileURL {
+            if let image = UIImage(contentsOfFile: url.path) {
+                artworkCache[url] = image
+                applyNowPlayingArtwork(image)
+            }
             return
         }
         // Drop the previous episode's artwork while we fetch the new one,

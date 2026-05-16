@@ -18,8 +18,8 @@ struct SettingsView: View {
                     timeSavedSection(settings: s)
                     playbackSection(settings: s)
                     downloadsSection(settings: s)
+                    adProviderSection(settings: s)
                     adDetectionSection(settings: s)
-                    adFilterSection(settings: s)
                     importSection
                 }
             }
@@ -41,23 +41,25 @@ struct SettingsView: View {
 
     @ViewBuilder
     private func timeSavedSection(settings: AppSettings) -> some View {
-        Section("Time saved") {
-            LabeledContent("Skipped ads") {
-                Text(TimeFormatting.longDuration(settings.lifetimeAdSkipSeconds))
+        let played = settings.lifetimePlayedSeconds
+        let skipped = settings.lifetimeAdSkipSeconds
+        let total = played + skipped
+        let adPercent = total > 0 ? skipped / total * 100 : 0
+        Section("Listening") {
+            LabeledContent("Played (incl. ads)") {
+                Text(TimeFormatting.minutesDuration(total))
                     .monospacedDigit()
                     .foregroundStyle(.secondary)
             }
-            LabeledContent("Faster playback") {
-                Text(TimeFormatting.longDuration(settings.lifetimeSpeedupSeconds))
+            LabeledContent("Ads skipped") {
+                Text(TimeFormatting.minutesDuration(skipped))
                     .monospacedDigit()
                     .foregroundStyle(.secondary)
             }
-            LabeledContent("Total") {
-                Text(TimeFormatting.longDuration(
-                    settings.lifetimeAdSkipSeconds + settings.lifetimeSpeedupSeconds
-                ))
-                .monospacedDigit()
-                .bold()
+            LabeledContent("Ads") {
+                Text(String(format: "%.1f%%", adPercent))
+                    .monospacedDigit()
+                    .foregroundStyle(.secondary)
             }
         }
     }
@@ -92,10 +94,63 @@ struct SettingsView: View {
     }
 
     @ViewBuilder
+    private func adProviderSection(settings: AppSettings) -> some View {
+        @Bindable var s = settings
+        let provider = s.adDetectionProvider
+        Section {
+            Picker("Model", selection: Binding(
+                get: { s.adDetectionProvider },
+                set: { s.adDetectionProvider = $0 }
+            )) {
+                ForEach(AdDetectionProvider.allCases, id: \.self) { p in
+                    Text(p.label).tag(p)
+                }
+            }
+            if provider.requiresGoogleKey {
+                SecureField(
+                    "Google AI API key",
+                    text: Binding(
+                        get: { s.googleAPIKey ?? "" },
+                        set: { s.googleAPIKey = $0.isEmpty ? nil : $0 }
+                    )
+                )
+                .textContentType(.password)
+                .autocorrectionDisabled()
+                .textInputAutocapitalization(.never)
+            }
+            if provider.requiresOpenAIKey {
+                SecureField(
+                    "OpenAI API key",
+                    text: Binding(
+                        get: { s.openAIAPIKey ?? "" },
+                        set: { s.openAIAPIKey = $0.isEmpty ? nil : $0 }
+                    )
+                )
+                .textContentType(.password)
+                .autocorrectionDisabled()
+                .textInputAutocapitalization(.never)
+            }
+        } header: {
+            Text("Detection model")
+        } footer: {
+            Text(providerFooter(for: provider))
+        }
+    }
+
+    private func providerFooter(for provider: AdDetectionProvider) -> String {
+        switch provider {
+        case .geminiFlashLite:
+            "Sends the full transcript to Google in a single request and parses a structured JSON response. Get an API key at aistudio.google.com."
+        case .gpt54Nano, .gpt54Mini:
+            "Sends the full transcript to OpenAI in a single request and parses a structured JSON response. Get an API key at platform.openai.com."
+        }
+    }
+
+    @ViewBuilder
     private func adDetectionSection(settings: AppSettings) -> some View {
         Section("Ad detection") {
             NavigationLink {
-                AdPromptView(settings: settings)
+                AdPromptView()
             } label: {
                 Label("Detection prompt", systemImage: "text.bubble")
             }
@@ -103,29 +158,6 @@ struct SettingsView: View {
     }
 
     @ViewBuilder
-    private func adFilterSection(settings: AppSettings) -> some View {
-        @Bindable var s = settings
-        Section {
-            Stepper(value: $s.adMergeGapSeconds, in: 0...60) {
-                LabeledContent("Merge gap") {
-                    Text("\(s.adMergeGapSeconds) s")
-                        .monospacedDigit()
-                        .foregroundStyle(.secondary)
-                }
-            }
-            Stepper(value: $s.adMinDurationSeconds, in: 0...120) {
-                LabeledContent("Min ad length") {
-                    Text("\(s.adMinDurationSeconds) s")
-                        .monospacedDigit()
-                        .foregroundStyle(.secondary)
-                }
-            }
-        } header: {
-            Text("Ad filtering")
-        } footer: {
-            Text("Adjacent ads less than \(s.adMergeGapSeconds) s apart are merged into one. Detected ads shorter than \(s.adMinDurationSeconds) s are discarded as likely false positives. Re-run ad detection on existing episodes from the Downloads tab to apply changes.")
-        }
-    }
 
     private var importSection: some View {
         Section("Import") {

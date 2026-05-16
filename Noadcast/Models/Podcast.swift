@@ -24,6 +24,16 @@ final class Podcast {
     /// or battery on the AI pipeline (e.g. ad-free or short shows).
     var aiProcessingEnabled: Bool = true
 
+    /// Filename (under `ArtworkService.artworkDirectory`) of the locally
+    /// cached artwork. Populated by `ArtworkService.cache(for:)` on subscribe
+    /// and refresh; `nil` means no cache yet or download failed.
+    var cachedArtworkFilename: String?
+
+    /// The remote URL the cached file was downloaded from. Used by the cache
+    /// to decide whether the artwork has changed on the server and needs a
+    /// re-download.
+    var cachedArtworkSourceURL: URL?
+
     /// Denormalized: the most recent `Episode.publishedAt` for this podcast.
     /// Maintained by `SubscriptionService.importEpisodes` and the launch-time
     /// backfill, so views never have to fault the entire episode relationship
@@ -53,5 +63,19 @@ final class Podcast {
         self.customPlaybackSpeed = customPlaybackSpeed
         self.autoDownloadEnabled = autoDownloadEnabled
         self.aiProcessingEnabled = aiProcessingEnabled
+    }
+
+    /// The URL views should pass to `AsyncImage`. Prefers the locally
+    /// cached file (no network hit, even on cold launch) and falls back to
+    /// the remote URL if no cache exists yet (e.g. between adding a podcast
+    /// and the first refresh finishing).
+    var artworkDisplayURL: URL? {
+        if let filename = cachedArtworkFilename {
+            let local = ArtworkService.localURL(filename: filename)
+            if FileManager.default.fileExists(atPath: local.path) {
+                return local
+            }
+        }
+        return artworkURL
     }
 }

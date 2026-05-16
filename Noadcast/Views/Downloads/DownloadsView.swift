@@ -131,18 +131,25 @@ struct DownloadsView: View {
 
 private struct InProgressRow: View {
     @Bindable var episode: Episode
+    @State private var showNotes = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
             HStack(alignment: .top) {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(episode.title).font(.subheadline.bold()).lineLimit(2)
-                    Text(episode.podcast?.title ?? "")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
+                Button {
+                    showNotes = true
+                } label: {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(episode.title).font(.subheadline.bold()).lineLimit(2)
+                        Text(episode.podcast?.title ?? "")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .contentShape(Rectangle())
                 }
-                Spacer()
+                .buttonStyle(.plain)
                 Button {
                     ProcessingPipeline.shared.cancel(episodeID: episode.persistentModelID)
                 } label: {
@@ -168,6 +175,9 @@ private struct InProgressRow: View {
             }
         }
         .padding(.vertical, 2)
+        .sheet(isPresented: $showNotes) {
+            ShowNotesView(episode: episode)
+        }
     }
 
     private var stageLabel: String {
@@ -191,22 +201,29 @@ private struct InProgressRow: View {
 
 private struct FailedRow: View {
     @Bindable var episode: Episode
+    @State private var showNotes = false
 
     var body: some View {
         HStack(alignment: .top) {
-            VStack(alignment: .leading, spacing: 2) {
-                Text(episode.title).font(.subheadline.bold()).lineLimit(2)
-                Text(episode.podcast?.title ?? "")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                if let err = episode.processingError {
-                    Text(err)
-                        .font(.caption2)
-                        .foregroundStyle(.red)
-                        .lineLimit(3)
+            Button {
+                showNotes = true
+            } label: {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(episode.title).font(.subheadline.bold()).lineLimit(2)
+                    Text(episode.podcast?.title ?? "")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    if let err = episode.processingError {
+                        Text(err)
+                            .font(.caption2)
+                            .foregroundStyle(.red)
+                            .lineLimit(3)
+                    }
                 }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .contentShape(Rectangle())
             }
-            Spacer()
+            .buttonStyle(.plain)
             Button {
                 ProcessingPipeline.shared.process(episode: episode)
             } label: {
@@ -215,24 +232,37 @@ private struct FailedRow: View {
             }
             .buttonStyle(.plain)
         }
+        .sheet(isPresented: $showNotes) {
+            ShowNotesView(episode: episode)
+        }
     }
 }
 
 private struct DownloadedRow: View {
     let episode: Episode
+    @State private var showNotes = false
 
     var body: some View {
-        HStack {
-            VStack(alignment: .leading, spacing: 2) {
-                Text(episode.title).font(.subheadline).lineLimit(2)
-                Text(episode.podcast?.title ?? "")
-                    .font(.caption2)
+        Button {
+            showNotes = true
+        } label: {
+            HStack {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(episode.title).font(.subheadline).lineLimit(2)
+                    Text(episode.podcast?.title ?? "")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                }
+                Spacer()
+                Text(TimeFormatting.fileSize(episode.fileSizeBytes ?? 0))
+                    .font(.caption.monospacedDigit())
                     .foregroundStyle(.secondary)
             }
-            Spacer()
-            Text(TimeFormatting.fileSize(episode.fileSizeBytes ?? 0))
-                .font(.caption.monospacedDigit())
-                .foregroundStyle(.secondary)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .sheet(isPresented: $showNotes) {
+            ShowNotesView(episode: episode)
         }
     }
 }

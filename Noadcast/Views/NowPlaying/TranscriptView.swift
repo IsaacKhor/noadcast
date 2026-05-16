@@ -1,13 +1,21 @@
 import SwiftUI
+import UIKit
 
 struct TranscriptView: View {
     let segments: [TranscriptSegment]
     let adRegions: [AdRegion]
     let onSeek: (Double) -> Void
 
+    @Environment(\.dismiss) private var dismiss
+    @State private var didCopy = false
+
+    private var sortedSegments: [TranscriptSegment] {
+        segments.sorted { $0.startSeconds < $1.startSeconds }
+    }
+
     var body: some View {
         NavigationStack {
-            List(segments.sorted { $0.startSeconds < $1.startSeconds }) { seg in
+            List(sortedSegments) { seg in
                 let inAd = adRegions.contains {
                     seg.startSeconds < $0.endSeconds && seg.endSeconds > $0.startSeconds
                 }
@@ -29,6 +37,7 @@ struct TranscriptView: View {
                         }
                         Text(seg.text)
                             .foregroundStyle(inAd ? .orange : .primary)
+                            .textSelection(.enabled)
                         Spacer()
                     }
                 }
@@ -37,6 +46,33 @@ struct TranscriptView: View {
             }
             .navigationTitle("Transcript")
             .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarLeading) {
+                    Button("Done") { dismiss() }
+                }
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button {
+                        copyAllToClipboard()
+                    } label: {
+                        Image(systemName: didCopy ? "checkmark" : "doc.on.doc")
+                            .symbolEffect(.bounce, value: didCopy)
+                    }
+                    .disabled(sortedSegments.isEmpty)
+                    .accessibilityLabel("Copy transcript")
+                }
+            }
+        }
+    }
+
+    private func copyAllToClipboard() {
+        let plainText = sortedSegments
+            .map { "[\(TimeFormatting.timestamp($0.startSeconds))] \($0.text)" }
+            .joined(separator: "\n")
+        UIPasteboard.general.string = plainText
+        didCopy = true
+        Task {
+            try? await Task.sleep(for: .seconds(1.5))
+            await MainActor.run { didCopy = false }
         }
     }
 }

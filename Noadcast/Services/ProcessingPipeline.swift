@@ -186,16 +186,16 @@ final class ProcessingPipeline {
                 )
             }
 
-        let policy = AdMergePolicy(
-            mergeGapSeconds: Double(settings.adMergeGapSeconds),
-            minDurationSeconds: Double(settings.adMinDurationSeconds)
-        )
+        let provider = settings.adDetectionProvider
+        let googleKey = settings.googleAPIKey
+        let openAIKey = settings.openAIAPIKey
         let episodeID = episode.persistentModelID
         let container = modelContainer
         let ads = try await AdDetectionService.shared.detectAds(
             in: transcript,
-            instructions: settings.adDetectionPrompt,
-            mergePolicy: policy,
+            provider: provider,
+            googleAPIKey: googleKey,
+            openAIAPIKey: openAIKey,
             progress: { current, total in
                 Task { @MainActor in
                     guard let container,

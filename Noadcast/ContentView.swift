@@ -49,6 +49,14 @@ struct ContentView: View {
                 let backfiller = MetadataBackfillActor(modelContainer: container)
                 await backfiller.backfillLatestEpisodeDates()
             }
+
+            // Backfill artwork for podcasts that were subscribed before the
+            // local-cache feature shipped (or whose previous cache attempt
+            // failed). `cache(for:)` is a no-op when the file is already on
+            // disk, so this is cheap to call against the whole library.
+            Task {
+                await ArtworkService.shared.backfillAllPodcasts(context: context)
+            }
         }
     }
 }

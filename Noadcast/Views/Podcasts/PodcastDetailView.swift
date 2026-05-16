@@ -28,7 +28,7 @@ struct PodcastDetailView: View {
         List {
             Section {
                 HStack(spacing: 12) {
-                    AsyncImage(url: podcast.artworkURL) { phase in
+                    AsyncImage(url: podcast.artworkDisplayURL) { phase in
                         switch phase {
                         case .success(let image): image.resizable()
                         default: Color.gray.opacity(0.2)
@@ -215,15 +215,6 @@ struct EpisodeRow: View {
     }
 
     private func addToQueue() {
-        let descriptor = FetchDescriptor<QueueItem>(
-            sortBy: [SortDescriptor(\QueueItem.position)]
-        )
-        let existing = (try? context.fetch(descriptor)) ?? []
-        guard !existing.contains(where: { $0.episode == episode }) else { return }
-        let position = (existing.last?.position ?? -1) + 1
-        let item = QueueItem(position: position, episode: episode)
-        context.insert(item)
-        try? context.save()
-        SubscriptionService.shared.processQueuedEpisodes(context: context)
+        SubscriptionService.shared.addToQueue(episode, in: context)
     }
 }

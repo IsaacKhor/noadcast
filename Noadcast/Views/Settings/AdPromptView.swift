@@ -1,24 +1,20 @@
 import SwiftUI
 
+/// Read-only display of the hardcoded ad-detection system prompt. The
+/// prompt is no longer user-configurable; this view exists so curious
+/// users can see what's being sent to the model.
 struct AdPromptView: View {
-    @Bindable var settings: AppSettings
-
     var body: some View {
         Form {
             Section {
-                Text("This prompt is sent to Apple's on-device language model along with the transcript of each episode. Adjust if it's flagging too many false positives or missing host-read ads.")
+                Text("This system prompt is sent to whichever model is configured for ad detection (on-device or cloud) along with the timestamped transcript of each episode.")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
             }
             Section("Prompt") {
-                TextEditor(text: $settings.adDetectionPrompt)
-                    .frame(minHeight: 240)
+                Text(AdDetectionService.detectionPrompt)
                     .font(.body.monospaced())
-            }
-            Section {
-                Button("Restore default", role: .destructive) {
-                    settings.adDetectionPrompt = AppSettings.defaultAdDetectionPrompt
-                }
+                    .textSelection(.enabled)
             }
         }
         .navigationTitle("Detection prompt")

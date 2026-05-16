@@ -66,6 +66,19 @@ enum TimeFormatting {
         return "\(absolute) · \(relative)"
     }
 
+    /// Whole-minutes duration, rounded down. Returns `"4h 23m"` or `"23m"`
+    /// (locale-formatted via `Duration.UnitsFormatStyle`). Used by the
+    /// listening-stats rows in Settings where seconds-level precision is
+    /// noise.
+    static func minutesDuration(_ seconds: Double) -> String {
+        let minutes = max(0, Int(seconds) / 60)
+        let duration = Duration.seconds(minutes * 60)
+        let allowed: Set<Duration.UnitsFormatStyle.Unit> = minutes >= 60
+            ? [.hours, .minutes]
+            : [.minutes]
+        return duration.formatted(.units(allowed: allowed, width: .abbreviated))
+    }
+
     /// Long-form duration for the lifetime time-saved counters. Uses
     /// `Duration.UnitsFormatStyle` so the units render in the user's locale
     /// (e.g. `1 hr 23 min` in en, `1 hod 23 min` in cs, etc.).

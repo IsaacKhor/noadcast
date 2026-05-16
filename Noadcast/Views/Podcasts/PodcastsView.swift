@@ -6,6 +6,7 @@ struct PodcastsView: View {
     @Query private var podcasts: [Podcast]
     @Query private var settingsList: [AppSettings]
     @State private var showAdd = false
+    @State private var searchText = ""
 
     private var settings: AppSettings? { settingsList.first }
     private var sortMode: PodcastSortMode { settings?.podcastSortMode ?? .latestEpisode }
@@ -23,6 +24,15 @@ struct PodcastsView: View {
         }
     }
 
+    private var visiblePodcasts: [Podcast] {
+        let trimmed = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return sortedPodcasts }
+        return sortedPodcasts.filter { podcast in
+            podcast.title.localizedCaseInsensitiveContains(trimmed) ||
+            (podcast.author?.localizedCaseInsensitiveContains(trimmed) ?? false)
+        }
+    }
+
     var body: some View {
         NavigationStack {
             Group {
@@ -32,9 +42,11 @@ struct PodcastsView: View {
                     } description: {
                         Text("Tap + to add a podcast by feed URL or search the iTunes directory.")
                     }
+                } else if visiblePodcasts.isEmpty {
+                    ContentUnavailableView.search(text: searchText)
                 } else {
                     List {
-                        if let lastRefresh = settings?.lastGlobalRefreshAt {
+                        if let lastRefresh = settings?.lastGlobalRefreshAt, searchText.isEmpty {
                             Section {
                                 HStack {
                                     Label("Last refresh", systemImage: "arrow.clockwise")
@@ -47,7 +59,7 @@ struct PodcastsView: View {
                             }
                         }
                         Section {
-                            ForEach(sortedPodcasts) { podcast in
+                            ForEach(visiblePodcasts) { podcast in
                                 NavigationLink {
                                     PodcastDetailView(podcast: podcast)
                                 } label: {
@@ -61,6 +73,7 @@ struct PodcastsView: View {
             }
             .navigationTitle("Podcasts")
             .navigationBarTitleDisplayMode(.inline)
+            .searchable(text: $searchText, prompt: "Search podcasts")
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) { sortMenu }
                 ToolbarItem(placement: .topBarTrailing) {
@@ -100,7 +113,7 @@ struct PodcastsView: View {
     }
 
     private func deletePodcasts(at offsets: IndexSet) {
-        let toDelete = offsets.map { sortedPodcasts[$0] }
+        let toDelete = offsets.map { visiblePodcasts[$0] }
         for podcast in toDelete {
             try? SubscriptionService.shared.unsubscribe(podcast, in: context)
         }
@@ -112,7 +125,7 @@ private struct PodcastRow: View {
 
     var body: some View {
         HStack(spacing: 12) {
-            AsyncImage(url: podcast.artworkURL) { phase in
+            AsyncImage(url: podcast.artworkDisplayURL) { phase in
                 switch phase {
                 case .success(let image): image.resizable()
                 default: Color.gray.opacity(0.2)

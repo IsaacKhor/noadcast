@@ -30,17 +30,10 @@ struct QueueView: View {
 
     var body: some View {
         NavigationStack {
-            Group {
-                if currentEpisode == nil && pendingItems.isEmpty {
-                    ContentUnavailableView {
-                        Label("Queue is empty", systemImage: "list.bullet")
-                    } description: {
-                        Text("Swipe an episode in Podcasts and tap Queue to add it.")
-                    }
-                } else {
-                    queueList
-                }
-            }
+            // Always render the list so the "Latest episodes" link is
+            // reachable even with an empty queue. Empty state appears as
+            // an inline placeholder section.
+            queueList
             .navigationTitle("Queue")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -62,6 +55,14 @@ struct QueueView: View {
         // Drag-to-reorder still works via long-press on the row; the
         // drag-handle glyph at the row's trailing edge is a visual cue.
         List {
+            Section {
+                NavigationLink {
+                    LatestEpisodesView()
+                } label: {
+                    Label("Latest episodes", systemImage: "clock.arrow.circlepath")
+                }
+            }
+
             if let episode = currentEpisode {
                 Section {
                     NowPlayingRow(
@@ -94,6 +95,12 @@ struct QueueView: View {
                     .onMove(perform: move)
                 } header: {
                     Text("Up Next")
+                }
+            } else if currentEpisode == nil {
+                Section {
+                    Text("Swipe an episode in Podcasts and tap Queue to add it.")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
                 }
             }
         }
@@ -239,7 +246,7 @@ private struct NowPlayingRow: View {
     var body: some View {
         Button(action: onTap) {
             HStack(spacing: 12) {
-                AsyncImage(url: episode.podcast?.artworkURL) { phase in
+                AsyncImage(url: episode.podcast?.artworkDisplayURL) { phase in
                     switch phase {
                     case .success(let image): image.resizable()
                     default: Color.gray.opacity(0.2)
@@ -271,33 +278,45 @@ private struct NowPlayingRow: View {
 private struct QueueRow: View {
     @Bindable var item: QueueItem
     let onPlay: () -> Void
+    @State private var showNotes = false
 
     var body: some View {
         HStack(spacing: 12) {
-            AsyncImage(url: item.episode?.podcast?.artworkURL) { phase in
-                switch phase {
-                case .success(let image): image.resizable()
-                default: Color.gray.opacity(0.2)
-                }
-            }
-            .frame(width: 44, height: 44)
-            .clipShape(RoundedRectangle(cornerRadius: 6))
-
-            VStack(alignment: .leading, spacing: 2) {
-                Text(item.episode?.title ?? "Unknown")
-                    .font(.subheadline.bold()).lineLimit(2)
-                Text(item.episode?.podcast?.title ?? "")
-                    .font(.caption).foregroundStyle(.secondary)
-                if let ep = item.episode, ep.processingState != .ready {
-                    HStack(spacing: 4) {
-                        ProgressView(value: ep.processingProgress).frame(width: 80)
-                        Text(state(ep.processingState))
-                            .font(.caption2)
-                            .foregroundStyle(.secondary)
+            // Tap the artwork + title region to open the episode's show
+            // notes. Play / drag affordances on the trailing edge handle
+            // their own gestures.
+            Button {
+                if item.episode != nil { showNotes = true }
+            } label: {
+                HStack(spacing: 12) {
+                    AsyncImage(url: item.episode?.podcast?.artworkDisplayURL) { phase in
+                        switch phase {
+                        case .success(let image): image.resizable()
+                        default: Color.gray.opacity(0.2)
+                        }
                     }
+                    .frame(width: 44, height: 44)
+                    .clipShape(RoundedRectangle(cornerRadius: 6))
+
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(item.episode?.title ?? "Unknown")
+                            .font(.subheadline.bold()).lineLimit(2)
+                        Text(item.episode?.podcast?.title ?? "")
+                            .font(.caption).foregroundStyle(.secondary)
+                        if let ep = item.episode, ep.processingState != .ready {
+                            HStack(spacing: 4) {
+                                ProgressView(value: ep.processingProgress).frame(width: 80)
+                                Text(state(ep.processingState))
+                                    .font(.caption2)
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
                 }
+                .contentShape(Rectangle())
             }
-            Spacer()
+            .buttonStyle(.plain)
             Button(action: onPlay) {
                 Image(systemName: item.episode?.processingState == .ready ? "play.circle.fill" : "arrow.down.circle")
                     .font(.title2)
@@ -307,6 +326,11 @@ private struct QueueRow: View {
                 .font(.body)
                 .foregroundStyle(.tertiary)
                 .accessibilityHidden(true)
+        }
+        .sheet(isPresented: $showNotes) {
+            if let episode = item.episode {
+                ShowNotesView(episode: episode)
+            }
         }
     }
 
