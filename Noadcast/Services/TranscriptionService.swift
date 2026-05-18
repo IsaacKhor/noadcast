@@ -38,6 +38,39 @@ nonisolated private final class ConverterConsumed: @unchecked Sendable {
     var value: Bool = false
 }
 
+/// Caps how many `transcribe(...)` calls can run concurrently. Each call
+/// spins up a `SpeechAnalyzer` + `AVAudioConverter` + buffer pipeline that
+/// pulls real CPU and memory; if the user queues a dozen episodes at once,
+/// letting them all start in parallel just thrashes. Three is empirically a
+/// good balance — keeps the cores busy without making any one transcription
+/// crawl.
+private actor TranscriptionSlots {
+    static let shared = TranscriptionSlots(limit: 3)
+
+    private var available: Int
+    private var waiters: [CheckedContinuation<Void, Never>] = []
+
+    init(limit: Int) { self.available = limit }
+
+    func acquire() async {
+        if available > 0 {
+            available -= 1
+            return
+        }
+        await withCheckedContinuation { cont in
+            waiters.append(cont)
+        }
+    }
+
+    func release() {
+        if !waiters.isEmpty {
+            waiters.removeFirst().resume()
+        } else {
+            available += 1
+        }
+    }
+}
+
 /// Wraps Apple's iOS 26 `SpeechAnalyzer` + `SpeechTranscriber` to produce
 /// timestamped segments from a local audio file.
 ///
@@ -63,6 +96,13 @@ actor TranscriptionService {
         locale: Locale = .current,
         progress: (@Sendable (Double, Double) -> Void)? = nil
     ) async throws -> [TranscribedSegment] {
+        // Cap concurrent transcriptions to keep CPU + memory under control.
+        // Late arrivals queue here until one of the three running slots
+        // finishes. Locale resolution + model install happens *after* the
+        // wait so we don't hold a slot during the no-op early steps.
+        await TranscriptionSlots.shared.acquire()
+        defer { Task { await TranscriptionSlots.shared.release() } }
+
         Log.transcription.info("Begin transcription — file=\(fileURL.lastPathComponent, privacy: .public) locale=\(locale.identifier, privacy: .public)")
         let resolvedLocale = await Self.resolveLocale(locale)
         Log.transcription.debug("Resolved locale → \(resolvedLocale.identifier, privacy: .public)")

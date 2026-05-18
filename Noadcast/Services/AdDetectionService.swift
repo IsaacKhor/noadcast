@@ -9,6 +9,18 @@ nonisolated struct DetectedAd: Sendable {
     var duration: Double { endSeconds - startSeconds }
 }
 
+/// Token usage reported by a provider for a single detection call. `nil`
+/// fields mean that provider's response didn't include the breakdown.
+nonisolated struct TokenUsage: Sendable {
+    var inputTokens: Int
+    var outputTokens: Int
+}
+
+nonisolated struct DetectionResult: Sendable {
+    let ads: [DetectedAd]
+    let usage: TokenUsage?
+}
+
 
 enum AdDetectionError: LocalizedError {
     case modelUnavailable(String)
@@ -89,20 +101,21 @@ actor AdDetectionService {
         googleAPIKey: String? = nil,
         openAIAPIKey: String? = nil,
         progress: (@Sendable (Int, Int) -> Void)? = nil
-    ) async throws -> [DetectedAd] {
-        guard !transcript.isEmpty else { return [] }
+    ) async throws -> DetectionResult {
+        guard !transcript.isEmpty else { return DetectionResult(ads: [], usage: nil) }
 
         Log.adDetection.info("Begin ad detection — provider=\(provider.label, privacy: .public) segments=\(transcript.count)")
         progress?(0, 1)
 
         let prompt = Self.buildPrompt(transcript: transcript)
         let raw: [DetectedAd]
+        let usage: TokenUsage?
         switch provider {
         case .geminiFlashLite, .geminiFlash:
             guard let key = googleAPIKey, !key.isEmpty else {
                 throw AdDetectionError.modelUnavailable("Google API key missing — add one in Settings → Detection model")
             }
-            raw = try await callGemini(
+            (raw, usage) = try await callGemini(
                 model: provider.apiModel,
                 prompt: prompt,
                 apiKey: key
@@ -111,7 +124,7 @@ actor AdDetectionService {
             guard let key = openAIAPIKey, !key.isEmpty else {
                 throw AdDetectionError.modelUnavailable("OpenAI API key missing — add one in Settings → Detection model")
             }
-            raw = try await callOpenAI(
+            (raw, usage) = try await callOpenAI(
                 model: provider.apiModel,
                 prompt: prompt,
                 apiKey: key
@@ -120,8 +133,8 @@ actor AdDetectionService {
         progress?(1, 1)
 
         let sorted = raw.sorted { $0.startSeconds < $1.startSeconds }
-        Log.adDetection.info("Ad detection complete — provider=\(provider.label, privacy: .public) ads=\(sorted.count)")
-        return sorted
+        Log.adDetection.info("Ad detection complete — provider=\(provider.label, privacy: .public) ads=\(sorted.count) input_tokens=\(usage?.inputTokens ?? 0) output_tokens=\(usage?.outputTokens ?? 0)")
+        return DetectionResult(ads: sorted, usage: usage)
     }
 
     // MARK: - Prompt assembly
@@ -151,7 +164,7 @@ actor AdDetectionService {
         model: String,
         prompt: String,
         apiKey: String
-    ) async throws -> [DetectedAd] {
+    ) async throws -> ([DetectedAd], TokenUsage?) {
         let urlString = "https://generativelanguage.googleapis.com/v1beta/models/\(model):generateContent?key=\(apiKey)"
         guard let url = URL(string: urlString) else {
             throw AdDetectionError.generationFailure(URLError(.badURL))
@@ -200,7 +213,10 @@ actor AdDetectionService {
         guard let text = decoded.candidates.first?.content.parts.first?.text else {
             throw AdDetectionError.generationFailure(URLError(.cannotParseResponse))
         }
-        return try Self.parseAdsJSON(text)
+        let usage = decoded.usageMetadata.map {
+            TokenUsage(inputTokens: $0.promptTokenCount ?? 0, outputTokens: $0.candidatesTokenCount ?? 0)
+        }
+        return (try Self.parseAdsJSON(text), usage)
     }
 
     // MARK: - OpenAI
@@ -209,7 +225,7 @@ actor AdDetectionService {
         model: String,
         prompt: String,
         apiKey: String
-    ) async throws -> [DetectedAd] {
+    ) async throws -> ([DetectedAd], TokenUsage?) {
         guard let url = URL(string: "https://api.openai.com/v1/chat/completions") else {
             throw AdDetectionError.generationFailure(URLError(.badURL))
         }
@@ -266,7 +282,10 @@ actor AdDetectionService {
         guard let content = decoded.choices.first?.message.content else {
             throw AdDetectionError.generationFailure(URLError(.cannotParseResponse))
         }
-        return try Self.parseAdsJSON(content)
+        let usage = decoded.usage.map {
+            TokenUsage(inputTokens: $0.prompt_tokens ?? 0, outputTokens: $0.completion_tokens ?? 0)
+        }
+        return (try Self.parseAdsJSON(content), usage)
     }
 
     // MARK: - HTTP + JSON helpers
@@ -326,6 +345,7 @@ actor AdDetectionService {
 
 nonisolated private struct GeminiResponse: Decodable {
     let candidates: [Candidate]
+    let usageMetadata: UsageMetadata?
     struct Candidate: Decodable {
         let content: Content
         struct Content: Decodable {
@@ -335,14 +355,23 @@ nonisolated private struct GeminiResponse: Decodable {
             }
         }
     }
+    struct UsageMetadata: Decodable {
+        let promptTokenCount: Int?
+        let candidatesTokenCount: Int?
+    }
 }
 
 nonisolated private struct OpenAIResponse: Decodable {
     let choices: [Choice]
+    let usage: Usage?
     struct Choice: Decodable {
         let message: Message
         struct Message: Decodable {
             let content: String
         }
+    }
+    struct Usage: Decodable {
+        let prompt_tokens: Int?
+        let completion_tokens: Int?
     }
 }

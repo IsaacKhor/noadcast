@@ -95,6 +95,8 @@ struct EpisodeRow<Trailing: View>: View {
             Image(systemName: "arrow.down.circle.fill").foregroundStyle(.tint)
         case .downloading, .transcribing, .detectingAds:
             Image(systemName: "arrow.down.circle").foregroundStyle(.tint)
+        case .uploading:
+            Image(systemName: "arrow.up.circle").foregroundStyle(.tint)
         case .failed:
             Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.red)
         case .new:
@@ -156,8 +158,9 @@ struct EpisodeRow<Trailing: View>: View {
     private var processingLabel: String {
         switch episode.processingState {
         case .downloading: "Downloading…"
+        case .uploading: "Uploading…"
         case .transcribing: "Transcribing…"
-        case .detectingAds: "Detecting ads…"
+        case .detectingAds: "Analyzing…"
         default: ""
         }
     }

@@ -151,10 +151,16 @@ struct SettingsView: View {
                 .autocorrectionDisabled()
                 .textInputAutocapitalization(.never)
             }
+            Toggle("Cloud transcription", isOn: $s.useCloudTranscription)
+                .disabled(!provider.supportsCloudTranscription)
         } header: {
             Text("Detection model")
         } footer: {
-            Text(providerFooter(for: provider))
+            VStack(alignment: .leading, spacing: 4) {
+                Text(providerFooter(for: provider))
+                Text(cloudTranscriptionFooter(provider: provider, enabled: s.useCloudTranscription))
+                Text(tokensFooter(settings: settings))
+            }
         }
     }
 
@@ -165,6 +171,53 @@ struct SettingsView: View {
         case .gpt54Nano, .gpt54Mini:
             "Sends the full transcript to OpenAI in a single request and parses a structured JSON response. Get an API key at platform.openai.com."
         }
+    }
+
+    /// Explains what flipping the cloud-transcription toggle changes, and
+    /// disables itself when the picked provider doesn't support it (OpenAI
+    /// audio input is wired up separately later).
+    private func cloudTranscriptionFooter(provider: AdDetectionProvider, enabled: Bool) -> String {
+        guard provider.supportsCloudTranscription else {
+            return "Cloud transcription is only available on Gemini providers right now."
+        }
+        if enabled {
+            return "On: uploads the audio file directly and gets back transcript + segments in one call. Higher token cost, but bypasses on-device transcription entirely."
+        }
+        return "Off: transcribes locally with Apple's SpeechAnalyzer, then sends the transcript text for ad detection."
+    }
+
+    /// Compact running totals shown under the provider footer so the user
+    /// can keep an eye on API spend. Summed across providers.
+    private func tokensFooter(settings: AppSettings) -> String {
+        let input = settings.lifetimeAdDetectionInputTokens
+        let output = settings.lifetimeAdDetectionOutputTokens
+        let cost = settings.lifetimeAdDetectionCostUSD
+        return "Tokens used: \(Self.formatTokens(input)) in · \(Self.formatTokens(output)) out · ~\(Self.formatCost(cost))"
+    }
+
+    private static func formatTokens(_ count: Int) -> String {
+        if count >= 1_000_000 {
+            return String(format: "%.1fM", Double(count) / 1_000_000)
+        }
+        if count >= 1_000 {
+            return String(format: "%.1fK", Double(count) / 1_000)
+        }
+        return count.formatted()
+    }
+
+    /// Costs are typically pennies; show fractions of a cent precisely
+    /// rather than rounding to $0.00 and looking broken.
+    private static func formatCost(_ amount: Double) -> String {
+        if amount >= 1 {
+            return String(format: "$%.2f", amount)
+        }
+        if amount >= 0.01 {
+            return String(format: "$%.3f", amount)
+        }
+        if amount > 0 {
+            return String(format: "$%.4f", amount)
+        }
+        return "$0"
     }
 
     @ViewBuilder

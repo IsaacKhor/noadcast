@@ -187,6 +187,7 @@ final class PlayerService {
     }
 
     func play() {
+        activateAudioSessionIfNeeded()
         player.rate = Float(playbackRate)
         isPlaying = true
         updateNowPlayingInfo()
@@ -391,14 +392,25 @@ final class PlayerService {
 
     // MARK: - Audio session + remote commands
 
+    /// Set up the shared audio session's category, but DON'T activate it yet.
+    ///
+    /// Calling `setActive(true)` with the `.playback` category interrupts
+    /// whatever else is producing audio (Music, Spotify, podcasts in other
+    /// apps), which is jarring if the user just opened Noadcast to browse
+    /// — they didn't ask us to take over. We defer activation until the
+    /// user actually presses play.
     private func configureAudioSession() {
         let session = AVAudioSession.sharedInstance()
         Log.signposter.withIntervalSignpost("AVAudioSession.setCategory") {
             try? session.setCategory(.playback, mode: .spokenAudio, policy: .longFormAudio)
         }
-        Log.signposter.withIntervalSignpost("AVAudioSession.setActive") {
-            try? session.setActive(true)
-        }
+    }
+
+    /// Activate the shared audio session right before starting playback.
+    /// Idempotent: AVAudioSession ignores `setActive(true)` when already
+    /// active. Called from `play()` only.
+    private func activateAudioSessionIfNeeded() {
+        try? AVAudioSession.sharedInstance().setActive(true)
     }
 
     private func configureRemoteCommands() {

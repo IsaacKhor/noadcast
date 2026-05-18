@@ -1,0 +1,209 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Noadcast — a podcast app that actually skips ads</title>
+<meta name="description" content="Noadcast transcribes every episode on-device and uses an LLM to find and auto-skip ads, intros, and outros. iOS 26+, SwiftUI, SwiftData.">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<header class="hero">
+  <nav class="nav">
+    <span class="brand">Noadcast</span>
+    <a class="nav-link" href="#features">Features</a>
+    <a class="nav-link" href="#how">How it works</a>
+    <a class="nav-link" href="#stack">Tech</a>
+  </nav>
+  <div class="hero-inner">
+    <h1>A podcast app that actually&nbsp;skips&nbsp;ads.</h1>
+    <p class="lede">
+      Noadcast transcribes every episode on-device with Apple's
+      SpeechAnalyzer and uses a cloud LLM to mark every ad, intro, and
+      outro. Playback jumps right over them — including back-to-back
+      sponsor reads — without you touching the screen.
+    </p>
+    <div class="hero-meta">
+      <span class="pill">iOS 26+</span>
+      <span class="pill">SwiftUI</span>
+      <span class="pill">SwiftData</span>
+      <span class="pill">On-device speech</span>
+    </div>
+  </div>
+  <img class="hero-screenshot" src="screenshots/now-playing.svg" alt="Now Playing screen with an ad-marker timeline">
+</header>
+
+<section id="features" class="section">
+  <h2 class="section-title">What it does</h2>
+  <div class="feature-grid">
+    <article class="feature">
+      <div class="feature-icon" aria-hidden="true">
+        <svg viewBox="0 0 24 24" width="32" height="32" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M5 4l14 8-14 8z"/></svg>
+      </div>
+      <h3>Auto-skip mid-roll ads</h3>
+      <p>Detected ad segments are skipped the moment playback enters them. Listen continuously without thumbing the 30-second button.</p>
+    </article>
+    <article class="feature">
+      <div class="feature-icon" aria-hidden="true">
+        <svg viewBox="0 0 24 24" width="32" height="32" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12h18M3 6h18M3 18h18"/></svg>
+      </div>
+      <h3>Intros &amp; outros, separately</h3>
+      <p>Recognises the show's theme music and outro credits as their own segment kind — marked indigo on the timeline so you know what's about to be skipped.</p>
+    </article>
+    <article class="feature">
+      <div class="feature-icon" aria-hidden="true">
+        <svg viewBox="0 0 24 24" width="32" height="32" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12l4-4 5 5 4-4 5 5"/></svg>
+      </div>
+      <h3>Chain-skip adjacent segments</h3>
+      <p>Two sponsor reads with only a breath between them? Noadcast peeks ahead and jumps the entire run in one seek.</p>
+    </article>
+    <article class="feature">
+      <div class="feature-icon" aria-hidden="true">
+        <svg viewBox="0 0 24 24" width="32" height="32" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12l4 4 10-10"/></svg>
+      </div>
+      <h3>Per-kind skip toggles</h3>
+      <p>Toggle ads, intros, and outros independently in Settings. Markers always render on the timeline and in the transcript — skipping is a separate choice.</p>
+    </article>
+    <article class="feature">
+      <div class="feature-icon" aria-hidden="true">
+        <svg viewBox="0 0 24 24" width="32" height="32" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 3"/></svg>
+      </div>
+      <h3>Transcript view, with timestamps</h3>
+      <p>Every line is tappable to seek. Ad / intro / outro lines are color-coded, with a separate "Skip Segments" view showing just the parts that would be skipped.</p>
+    </article>
+    <article class="feature">
+      <div class="feature-icon" aria-hidden="true">
+        <svg viewBox="0 0 24 24" width="32" height="32" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12h16M4 6h16M4 18h10"/></svg>
+      </div>
+      <h3>Queue with drag-reorder</h3>
+      <p>Up Next list with swipe-to-top, swipe-to-remove, group-by-podcast sorting, and auto-advance when an episode ends.</p>
+    </article>
+    <article class="feature">
+      <div class="feature-icon" aria-hidden="true">
+        <svg viewBox="0 0 24 24" width="32" height="32" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12M6 9l6 6 6-6M5 21h14"/></svg>
+      </div>
+      <h3>Background downloads</h3>
+      <p>Auto-downloads new queued episodes over Wi-Fi (configurable) and runs transcription + ad detection in the background so they're ready when you press play.</p>
+    </article>
+    <article class="feature">
+      <div class="feature-icon" aria-hidden="true">
+        <svg viewBox="0 0 24 24" width="32" height="32" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="3"/><path d="M8 10h8M8 14h5"/></svg>
+      </div>
+      <h3>Lock-screen &amp; Dynamic Island</h3>
+      <p>Now Playing info, artwork, skip-forward / skip-back, and scrubbing all wired through <code>MPNowPlayingInfoCenter</code>.</p>
+    </article>
+    <article class="feature">
+      <div class="feature-icon" aria-hidden="true">
+        <svg viewBox="0 0 24 24" width="32" height="32" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h16M4 12h16M4 17h10"/></svg>
+      </div>
+      <h3>OPML import</h3>
+      <p>Bring your existing subscriptions across in one go. Duplicates are skipped automatically.</p>
+    </article>
+  </div>
+</section>
+
+<section id="screens" class="section">
+  <h2 class="section-title">Screens</h2>
+  <p class="section-blurb">Placeholders for now — drop real exports into <code>website/screenshots/</code> with the same filenames and they'll replace these.</p>
+  <div class="shots">
+    <figure class="shot">
+      <img src="screenshots/queue.svg" alt="Queue tab placeholder">
+      <figcaption>Queue — Now Playing on top, drag-to-reorder Up Next below.</figcaption>
+    </figure>
+    <figure class="shot">
+      <img src="screenshots/now-playing.svg" alt="Now Playing placeholder">
+      <figcaption>Now Playing — ad-marker timeline shows what's coming up.</figcaption>
+    </figure>
+    <figure class="shot">
+      <img src="screenshots/transcript.svg" alt="Transcript view placeholder">
+      <figcaption>Transcript — color-coded segments, tap any line to seek.</figcaption>
+    </figure>
+    <figure class="shot">
+      <img src="screenshots/settings.svg" alt="Settings placeholder">
+      <figcaption>Settings — pick a detection model, tune the skip behavior.</figcaption>
+    </figure>
+  </div>
+</section>
+
+<section id="how" class="section section-alt">
+  <h2 class="section-title">How it works</h2>
+  <ol class="steps">
+    <li>
+      <span class="step-num">1</span>
+      <div>
+        <h3>Subscribe</h3>
+        <p>Search the iTunes directory or paste an RSS URL. Episode metadata is imported via <code>FeedService</code>; podcast artwork is fetched and cached locally so it survives offline.</p>
+      </div>
+    </li>
+    <li>
+      <span class="step-num">2</span>
+      <div>
+        <h3>Download</h3>
+        <p>Queued episodes auto-download in the background (Wi-Fi by default, configurable). Progress streams to the Downloads tab with bytes-completed and ETA.</p>
+      </div>
+    </li>
+    <li>
+      <span class="step-num">3</span>
+      <div>
+        <h3>Transcribe on-device</h3>
+        <p>Apple's <code>SpeechAnalyzer</code> (iOS 26) runs the audio through <code>SpeechTranscriber</code> in 30-minute streaming chunks. Transcripts stay on your device — nothing leaves until you ask for ad detection.</p>
+      </div>
+    </li>
+    <li>
+      <span class="step-num">4</span>
+      <div>
+        <h3>Detect ads, intros, outros</h3>
+        <p>The full timestamped transcript is sent in a single structured-JSON request to your chosen cloud model. The response is parsed against a strict schema and written as <code>AdMarker</code> rows.</p>
+      </div>
+    </li>
+    <li>
+      <span class="step-num">5</span>
+      <div>
+        <h3>Play with confidence</h3>
+        <p>While you listen, a periodic time observer checks whether the current position is inside a skip region — and if it is, jumps to the end (and keeps walking forward to chain through adjacent ones).</p>
+      </div>
+    </li>
+  </ol>
+</section>
+
+<section id="stack" class="section">
+  <h2 class="section-title">Tech stack</h2>
+  <div class="stack-grid">
+    <div class="stack-card">
+      <h3>Apple frameworks</h3>
+      <ul>
+        <li><strong>SwiftUI</strong> — every view, including the mini-player and Now Playing sheet.</li>
+        <li><strong>SwiftData</strong> — <code>@Model</code> types for Podcast, Episode, AdMarker, QueueItem, AppSettings.</li>
+        <li><strong>SpeechAnalyzer</strong> (iOS 26) — on-device transcription with audio time ranges.</li>
+        <li><strong>AVFoundation</strong> — playback, audio session, time observers.</li>
+        <li><strong>MediaPlayer</strong> — lock-screen + Dynamic Island integration.</li>
+      </ul>
+    </div>
+    <div class="stack-card">
+      <h3>Cloud LLMs (pluggable)</h3>
+      <ul>
+        <li>Gemini Flash-Lite (latest)</li>
+        <li>Gemini Flash (latest)</li>
+        <li>GPT-5.4 nano</li>
+        <li>GPT-5.4 mini</li>
+      </ul>
+      <p class="muted">Bring your own API key. Single-shot structured-JSON request per episode — no streaming, no batching gymnastics.</p>
+    </div>
+    <div class="stack-card">
+      <h3>Performance notes</h3>
+      <ul>
+        <li>Denormalized <code>isInProgress</code>, <code>latestEpisodeAt</code>, <code>processingStateRaw</code> fields so SwiftData predicates hit SQL instead of faulting relationships.</li>
+        <li>Two-tier artwork cache: on-disk under <code>Application Support/artwork/</code>, plus an in-memory <code>NSCache&lt;NSURL, UIImage&gt;</code> for jank-free scrolling.</li>
+        <li>Throttled playback-position persistence (every 3 s) with a willResignActive flush so a crash loses ≤ 3 s of progress.</li>
+      </ul>
+    </div>
+  </div>
+</section>
+
+<footer class="footer">
+  <p>Noadcast is a personal project. Not affiliated with Apple, Google, or OpenAI.</p>
+</footer>
+
+</body>
+</html>

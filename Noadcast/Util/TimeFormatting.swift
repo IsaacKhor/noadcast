@@ -25,12 +25,12 @@ enum TimeFormatting {
     /// Stage-specific detail string rendered next to the progress bar while
     /// an episode is being processed. Returns `nil` when there's nothing
     /// meaningful to show yet.
-    /// * `.downloading` → "12.3 MB / 50 MB" (or "12.3 MB" if total unknown)
+    /// * `.downloading` / `.uploading` → "12.3 MB / 50 MB" (or "12.3 MB" if total unknown)
     /// * `.transcribing` → "12:34 / 45:00"
     /// * `.detectingAds` → "Chunk 3 of 12"
     static func progressDetail(for episode: Episode) -> String? {
         switch episode.processingState {
-        case .downloading:
+        case .downloading, .uploading:
             let current = episode.processingCurrent.map { Int64($0) }
             let total = episode.processingTotal.map { Int64($0) }
             switch (current, total) {

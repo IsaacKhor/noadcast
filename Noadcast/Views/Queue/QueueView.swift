@@ -49,6 +49,8 @@ struct QueueView: View {
         // Plain List (no edit mode) so swipeActions remain functional.
         // Drag-to-reorder still works via long-press on the row; the
         // drag-handle glyph at the row's trailing edge is a visual cue.
+        // `.plain` style + per-row insets give the edge-to-edge layout
+        // other podcast apps use (Pocket Casts / Overcast).
         List {
             Section {
                 NavigationLink {
@@ -56,6 +58,7 @@ struct QueueView: View {
                 } label: {
                     Label("Latest episodes", systemImage: "clock.arrow.circlepath")
                 }
+                .listRowInsets(.init(top: 10, leading: 16, bottom: 10, trailing: 16))
             }
 
             if let episode = currentEpisode {
@@ -66,6 +69,7 @@ struct QueueView: View {
                             .foregroundStyle(.tint)
                             .font(.title3)
                     }
+                    .listRowInsets(.init(top: 8, leading: 16, bottom: 8, trailing: 16))
                 } header: {
                     Text("Now Playing")
                 }
@@ -78,6 +82,7 @@ struct QueueView: View {
                             EpisodeRow(episode: episode, style: .withPodcast) {
                                 QueueRowTrailing(episode: episode, onPlay: { play(item) })
                             }
+                            .listRowInsets(.init(top: 8, leading: 16, bottom: 8, trailing: 16))
                             .swipeActions(edge: .leading, allowsFullSwipe: true) {
                                 Button {
                                     moveToTop(item)
@@ -102,9 +107,11 @@ struct QueueView: View {
                     Text("Swipe an episode in Podcasts and tap Queue to add it.")
                         .font(.subheadline)
                         .foregroundStyle(.secondary)
+                        .listRowInsets(.init(top: 10, leading: 16, bottom: 10, trailing: 16))
                 }
             }
         }
+        .listStyle(.plain)
     }
 
     private var sortMenu: some View {

@@ -41,4 +41,38 @@ nonisolated enum AdDetectionProvider: String, Codable, CaseIterable, Sendable {
         default: false
         }
     }
+
+    /// Whether `CloudTranscriptionService` can route through this provider.
+    /// Today only the Gemini family is wired up — OpenAI's audio-input
+    /// pricing and file-handling differ enough that it's worth doing
+    /// separately, later.
+    var supportsCloudTranscription: Bool {
+        switch self {
+        case .geminiFlashLite, .geminiFlash: true
+        case .gpt54Nano, .gpt54Mini: false
+        }
+    }
+
+    /// USD per million input tokens (text or audio). Used for the rough
+    /// running-cost estimate in Settings. Audio is reported by the provider
+    /// in the same `promptTokenCount` field as text — Gemini converts 1
+    /// second of audio to 32 tokens internally.
+    var pricePerMTokensInput: Double {
+        switch self {
+        case .geminiFlashLite: 0.10
+        case .geminiFlash: 0.30
+        case .gpt54Nano: 0.05
+        case .gpt54Mini: 0.25
+        }
+    }
+
+    /// USD per million output tokens.
+    var pricePerMTokensOutput: Double {
+        switch self {
+        case .geminiFlashLite: 0.40
+        case .geminiFlash: 2.50
+        case .gpt54Nano: 0.40
+        case .gpt54Mini: 2.00
+        }
+    }
 }

@@ -4,6 +4,9 @@ enum EpisodeProcessingState: String, Codable, CaseIterable, Sendable {
     case new
     case downloading
     case downloaded
+    /// Cloud-transcription only: the audio file is being uploaded to the
+    /// LLM provider. Progress is reported in bytes.
+    case uploading
     case transcribing
     case detectingAds
     case ready

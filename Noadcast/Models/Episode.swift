@@ -35,7 +35,7 @@ final class Episode {
         set {
             processingStateRaw = newValue.rawValue
             switch newValue {
-            case .downloading, .transcribing, .detectingAds:
+            case .downloading, .uploading, .transcribing, .detectingAds:
                 isInProgress = true
             case .new, .downloaded, .ready, .failed:
                 isInProgress = false

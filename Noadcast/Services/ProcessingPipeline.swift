@@ -65,13 +65,23 @@ final class ProcessingPipeline {
 
             let aiEnabled = episode.podcast?.aiProcessingEnabled ?? true
             if aiEnabled {
-                if episode.transcript.isEmpty {
-                    try await transcribeStep(episode: episode, context: context)
+                let settings = AppSettings.current(in: context)
+                let useCloud = settings.useCloudTranscription
+                    && settings.adDetectionProvider.supportsCloudTranscription
+                if useCloud && episode.transcript.isEmpty {
+                    // Single-shot cloud path: upload the file, get back
+                    // transcript + segments together. Skips the local
+                    // transcribe step entirely.
+                    try await cloudTranscribeStep(episode: episode, context: context)
                 } else {
-                    Log.pipeline.info("Skipping transcription for \"\(title, privacy: .public)\" — \(episode.transcript.count) segments already cached; will only re-run ad detection")
+                    if episode.transcript.isEmpty {
+                        try await transcribeStep(episode: episode, context: context)
+                    } else {
+                        Log.pipeline.info("Skipping transcription for \"\(title, privacy: .public)\" — \(episode.transcript.count) segments already cached; will only re-run ad detection")
+                    }
+                    try Task.checkCancellation()
+                    try await detectAdsStep(episode: episode, context: context)
                 }
-                try Task.checkCancellation()
-                try await detectAdsStep(episode: episode, context: context)
             } else {
                 Log.pipeline.info("Skipping transcription + ad detection for \"\(title, privacy: .public)\" — disabled on its podcast")
             }
@@ -191,7 +201,7 @@ final class ProcessingPipeline {
         let openAIKey = settings.openAIAPIKey
         let episodeID = episode.persistentModelID
         let container = modelContainer
-        let ads = try await AdDetectionService.shared.detectAds(
+        let result = try await AdDetectionService.shared.detectAds(
             in: transcript,
             provider: provider,
             googleAPIKey: googleKey,
@@ -207,6 +217,10 @@ final class ProcessingPipeline {
                 }
             }
         )
+        let ads = result.ads
+        if let usage = result.usage {
+            Self.accumulateUsage(usage, provider: provider, into: settings)
+        }
 
         for old in episode.adMarkers where !old.manuallyEdited {
             context.delete(old)
@@ -223,5 +237,107 @@ final class ProcessingPipeline {
         }
         episode.processingProgress = 1.0
         try? context.save()
+    }
+
+    /// Cloud single-shot step: upload audio, get transcript + segments
+    /// back together. Replaces both `transcribeStep` and `detectAdsStep`
+    /// when `AppSettings.useCloudTranscription` is on and the chosen
+    /// provider supports it.
+    private func cloudTranscribeStep(episode: Episode, context: ModelContext) async throws {
+        guard let fileURL = episode.localFileURL else { return }
+        // Initial state: bytes about to go up. We set `.uploading` here
+        // rather than `.transcribing` so the UI's progress label and
+        // unit-aware formatter (`TimeFormatting.progressDetail`) render
+        // the byte counter (`12 MB / 50 MB`) as soon as the row appears.
+        episode.processingState = .uploading
+        episode.processingProgress = 0
+        episode.processingCurrent = 0
+        episode.processingTotal = (try? fileURL.resourceValues(forKeys: [.fileSizeKey]).fileSize)
+            .map { Double($0) }
+        try? context.save()
+
+        let settings = AppSettings.current(in: context)
+        let provider = settings.adDetectionProvider
+        let googleKey = settings.googleAPIKey
+        let mimeType = episode.audioMimeType ?? "audio/mpeg"
+        let episodeID = episode.persistentModelID
+        let container = modelContainer
+
+        let result = try await CloudTranscriptionService.shared.transcribeAndDetect(
+            fileURL: fileURL,
+            provider: provider,
+            googleAPIKey: googleKey,
+            mimeType: mimeType,
+            onStage: { stage in
+                Task { @MainActor in
+                    guard let container,
+                          let ep = container.mainContext.model(for: episodeID) as? Episode
+                    else { return }
+                    switch stage {
+                    case .uploading(let sent, let total):
+                        if ep.processingState != .uploading {
+                            ep.processingState = .uploading
+                        }
+                        ep.processingCurrent = Double(sent)
+                        ep.processingTotal = Double(total)
+                        ep.processingProgress = total > 0 ? Double(sent) / Double(total) : 0
+                    case .analyzing:
+                        ep.processingState = .detectingAds
+                        ep.processingCurrent = nil
+                        ep.processingTotal = nil
+                        // Indeterminate spinner-style — the LLM call has
+                        // no incremental progress to report.
+                        ep.processingProgress = 0
+                    }
+                }
+            }
+        )
+
+        if let usage = result.usage {
+            Self.accumulateUsage(usage, provider: provider, into: settings)
+        }
+
+        for old in episode.transcript { context.delete(old) }
+        for seg in result.transcript {
+            let t = TranscriptSegment(
+                startSeconds: seg.startSeconds,
+                endSeconds: seg.endSeconds,
+                text: seg.text,
+                episode: episode
+            )
+            context.insert(t)
+        }
+        for old in episode.adMarkers where !old.manuallyEdited {
+            context.delete(old)
+        }
+        for ad in result.ads {
+            let m = AdMarker(
+                startSeconds: ad.startSeconds,
+                endSeconds: ad.endSeconds,
+                summary: ad.summary,
+                kind: ad.kind,
+                episode: episode
+            )
+            context.insert(m)
+        }
+        episode.processingProgress = 1.0
+        try? context.save()
+    }
+
+    /// Bump `AppSettings`'s running lifetime token + cost counters using
+    /// the provider's posted-rate prices at the moment of the call. We
+    /// accumulate the cost as a stored historical figure rather than
+    /// recomputing on display, so changing the price constants only
+    /// affects future calls.
+    private static func accumulateUsage(
+        _ usage: TokenUsage,
+        provider: AdDetectionProvider,
+        into settings: AppSettings
+    ) {
+        settings.lifetimeAdDetectionInputTokens += usage.inputTokens
+        settings.lifetimeAdDetectionOutputTokens += usage.outputTokens
+        let inputCost = Double(usage.inputTokens) / 1_000_000 * provider.pricePerMTokensInput
+        let outputCost = Double(usage.outputTokens) / 1_000_000 * provider.pricePerMTokensOutput
+        settings.lifetimeAdDetectionCostUSD += inputCost + outputCost
     }
 }

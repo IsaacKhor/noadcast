@@ -28,6 +28,7 @@ struct LatestEpisodesView: View {
                 List {
                     ForEach(episodes) { episode in
                         EpisodeRow(episode: episode, style: .withPodcast)
+                            .listRowInsets(.init(top: 8, leading: 16, bottom: 8, trailing: 16))
                             .swipeActions(edge: .leading) {
                                 Button {
                                     SubscriptionService.shared.addToQueue(episode, in: context)
@@ -38,6 +39,7 @@ struct LatestEpisodesView: View {
                             }
                     }
                 }
+                .listStyle(.plain)
             }
         }
         .navigationTitle("Latest Episodes")

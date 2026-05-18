@@ -283,7 +283,7 @@ final class SubscriptionService {
         for item in queued {
             guard let episode = item.episode else { continue }
             switch episode.processingState {
-            case .ready, .downloading, .transcribing, .detectingAds:
+            case .ready, .downloading, .uploading, .transcribing, .detectingAds:
                 continue
             case .new, .downloaded, .failed:
                 ProcessingPipeline.shared.process(episode: episode)

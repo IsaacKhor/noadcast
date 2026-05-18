@@ -34,6 +34,29 @@ final class AppSettings {
     /// seconds for another segment to chain-skip. Set to 0 to disable.
     var chainSkipGapSeconds: Int = 5
 
+    /// Lifetime cumulative input + output tokens billed to the user's API
+    /// key(s) for ad-detection (and, when enabled, cloud transcription)
+    /// calls. Summed across providers — switching from Gemini to OpenAI
+    /// doesn't reset the counter. Updated by `ProcessingPipeline` after
+    /// each successful call.
+    var lifetimeAdDetectionInputTokens: Int = 0
+    var lifetimeAdDetectionOutputTokens: Int = 0
+
+    /// Running cost estimate in USD, accumulated as each call completes
+    /// using whatever per-token rate the provider was on at the time. A
+    /// historical record, not a re-computation — so changes to the pricing
+    /// constants in `AdDetectionProvider` only affect new calls.
+    var lifetimeAdDetectionCostUSD: Double = 0
+
+    /// Upload the audio file directly to a cloud model that returns both a
+    /// transcript and labelled ad/intro/outro segments in a single response,
+    /// bypassing the on-device `SpeechAnalyzer`. Off by default — flip in
+    /// Settings to A/B. Only the Gemini providers currently honor this;
+    /// OpenAI providers stay on the local-transcription path even when the
+    /// toggle is on, because their audio-input pricing/availability is
+    /// less favourable.
+    var useCloudTranscription: Bool = false
+
     /// Which cloud model performs ad detection. See `AdDetectionProvider`.
     var adDetectionProviderRaw: String = AdDetectionProvider.geminiFlashLite.rawValue
     /// API key for Google AI Studio (Gemini providers). Stored unencrypted in

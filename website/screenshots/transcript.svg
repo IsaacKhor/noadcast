@@ -1,0 +1,66 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 280 600" role="img" aria-label="Transcript view placeholder">
+  <defs>
+    <linearGradient id="bg-tx" x1="0" x2="0" y1="0" y2="1">
+      <stop offset="0" stop-color="#161a22"/>
+      <stop offset="1" stop-color="#0a0c12"/>
+    </linearGradient>
+  </defs>
+  <rect x="0" y="0" width="280" height="600" rx="34" fill="url(#bg-tx)"/>
+  <rect x="6" y="6" width="268" height="588" rx="30" fill="none" stroke="#2a313d" stroke-width="1"/>
+
+  <rect x="118" y="22" width="44" height="6" rx="3" fill="#2a313d"/>
+  <text x="140" y="62" text-anchor="middle" fill="#e8eaef" font-family="-apple-system,sans-serif" font-size="13" font-weight="600">Transcript</text>
+
+  <!-- Color key -->
+  <g font-family="-apple-system,sans-serif" font-size="9">
+    <rect x="22" y="84" width="10" height="10" rx="2" fill="#7d6cff"/>
+    <text x="36" y="93" fill="#9aa3b2">Intro</text>
+    <rect x="78" y="84" width="10" height="10" rx="2" fill="#ff8a3d"/>
+    <text x="92" y="93" fill="#9aa3b2">Ad</text>
+    <rect x="120" y="84" width="10" height="10" rx="2" fill="#7d6cff"/>
+    <text x="134" y="93" fill="#9aa3b2">Outro</text>
+  </g>
+
+  <!-- Line rows -->
+  <g font-family="-apple-system,sans-serif">
+    <g transform="translate(0, 110)">
+      <text x="22" y="12" fill="#9aa3b2" font-size="9">0:00</text>
+      <rect x="22" y="18" width="2" height="26" fill="#7d6cff"/>
+      <text x="32" y="28" fill="#e8eaef" font-size="10">Welcome back to the show, and</text>
+      <text x="32" y="42" fill="#e8eaef" font-size="10">today we're talking about…</text>
+    </g>
+    <g transform="translate(0, 162)">
+      <text x="22" y="12" fill="#9aa3b2" font-size="9">1:24</text>
+      <rect x="22" y="18" width="2" height="26" fill="#2a313d"/>
+      <text x="32" y="28" fill="#e8eaef" font-size="10">…the new hardware reveal, and</text>
+      <text x="32" y="42" fill="#e8eaef" font-size="10">what it means for developers.</text>
+    </g>
+    <g transform="translate(0, 214)">
+      <text x="22" y="12" fill="#9aa3b2" font-size="9">8:02</text>
+      <rect x="22" y="18" width="2" height="26" fill="#ff8a3d"/>
+      <text x="32" y="28" fill="#ff8a3d" font-size="10">This episode is sponsored by</text>
+      <text x="32" y="42" fill="#ff8a3d" font-size="10">Aperture — use code SHOW…</text>
+    </g>
+    <g transform="translate(0, 266)">
+      <text x="22" y="12" fill="#9aa3b2" font-size="9">8:54</text>
+      <rect x="22" y="18" width="2" height="26" fill="#ff8a3d"/>
+      <text x="32" y="28" fill="#ff8a3d" font-size="10">…and also a quick word from</text>
+      <text x="32" y="42" fill="#ff8a3d" font-size="10">our friends at Initech.</text>
+    </g>
+    <g transform="translate(0, 318)">
+      <text x="22" y="12" fill="#9aa3b2" font-size="9">10:11</text>
+      <rect x="22" y="18" width="2" height="26" fill="#2a313d"/>
+      <text x="32" y="28" fill="#e8eaef" font-size="10">Okay, where were we — right,</text>
+      <text x="32" y="42" fill="#e8eaef" font-size="10">the M-series GPU story…</text>
+    </g>
+    <g transform="translate(0, 370)">
+      <text x="22" y="12" fill="#9aa3b2" font-size="9">52:30</text>
+      <rect x="22" y="18" width="2" height="26" fill="#7d6cff"/>
+      <text x="32" y="28" fill="#7d6cff" font-size="10">Thanks for listening. Catch us</text>
+      <text x="32" y="42" fill="#7d6cff" font-size="10">next week on the same feed.</text>
+    </g>
+  </g>
+
+  <rect x="40" y="540" width="200" height="36" rx="10" fill="#181c24"/>
+  <text x="140" y="563" text-anchor="middle" fill="#e8eaef" font-family="-apple-system,sans-serif" font-size="11">Copy full transcript</text>
+</svg>

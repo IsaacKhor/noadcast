@@ -63,6 +63,7 @@ struct DownloadsView: View {
                                         }
                                         .buttonStyle(.plain)
                                     }
+                                    .listRowInsets(.init(top: 8, leading: 16, bottom: 8, trailing: 16))
                                 }
                             }
                         }
@@ -79,6 +80,7 @@ struct DownloadsView: View {
                                         }
                                         .buttonStyle(.plain)
                                     }
+                                    .listRowInsets(.init(top: 8, leading: 16, bottom: 8, trailing: 16))
                                 }
                             }
                         }
@@ -91,6 +93,7 @@ struct DownloadsView: View {
                                     .foregroundStyle(.secondary)
                                     .monospacedDigit()
                             }
+                            .listRowInsets(.init(top: 10, leading: 16, bottom: 10, trailing: 16))
                         }
 
                         if !downloaded.isEmpty {
@@ -101,11 +104,13 @@ struct DownloadsView: View {
                                             .font(.caption.monospacedDigit())
                                             .foregroundStyle(.secondary)
                                     }
+                                    .listRowInsets(.init(top: 8, leading: 16, bottom: 8, trailing: 16))
                                 }
                                 .onDelete(perform: deleteDownloaded)
                             }
                         }
                     }
+                    .listStyle(.plain)
                 }
             }
             .navigationTitle("Downloads")

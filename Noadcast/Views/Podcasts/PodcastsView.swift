@@ -56,6 +56,7 @@ struct PodcastsView: View {
                                         .font(.caption)
                                         .foregroundStyle(.secondary)
                                 }
+                                .listRowInsets(.init(top: 10, leading: 16, bottom: 10, trailing: 16))
                             }
                         }
                         Section {
@@ -65,10 +66,12 @@ struct PodcastsView: View {
                                 } label: {
                                     PodcastRow(podcast: podcast)
                                 }
+                                .listRowInsets(.init(top: 8, leading: 16, bottom: 8, trailing: 16))
                             }
                             .onDelete(perform: deletePodcasts)
                         }
                     }
+                    .listStyle(.plain)
                 }
             }
             .navigationTitle("Podcasts")
@@ -125,14 +128,9 @@ private struct PodcastRow: View {
 
     var body: some View {
         HStack(spacing: 12) {
-            AsyncImage(url: podcast.artworkDisplayURL) { phase in
-                switch phase {
-                case .success(let image): image.resizable()
-                default: Color.gray.opacity(0.2)
-                }
-            }
-            .frame(width: 56, height: 56)
-            .clipShape(RoundedRectangle(cornerRadius: 8))
+            CachedArtworkImage(url: podcast.artworkDisplayURL)
+                .frame(width: 56, height: 56)
+                .clipShape(RoundedRectangle(cornerRadius: 8))
 
             VStack(alignment: .leading, spacing: 2) {
                 Text(podcast.title).font(.headline).lineLimit(2)
