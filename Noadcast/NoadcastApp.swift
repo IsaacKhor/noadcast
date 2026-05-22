@@ -37,6 +37,10 @@ struct NoadcastApp: App {
                 _ = NetworkMonitor.shared
             }
         }
+        // Restart any cloud / download work that got interrupted by a
+        // previous app termination. Runs after wiring so the pipeline
+        // sees the model container.
+        Task { await ProcessingPipeline.shared.recoverPendingEpisodes() }
     }
 
     var body: some Scene {

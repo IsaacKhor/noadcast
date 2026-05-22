@@ -111,20 +111,11 @@ actor AdDetectionService {
         let raw: [DetectedAd]
         let usage: TokenUsage?
         switch provider {
-        case .geminiFlashLite, .geminiFlash:
+        case .gemini35Flash, .gemini31FlashLite, .gemini25Flash, .gemini25FlashLite:
             guard let key = googleAPIKey, !key.isEmpty else {
                 throw AdDetectionError.modelUnavailable("Google API key missing — add one in Settings → Detection model")
             }
             (raw, usage) = try await callGemini(
-                model: provider.apiModel,
-                prompt: prompt,
-                apiKey: key
-            )
-        case .gpt54Nano, .gpt54Mini:
-            guard let key = openAIAPIKey, !key.isEmpty else {
-                throw AdDetectionError.modelUnavailable("OpenAI API key missing — add one in Settings → Detection model")
-            }
-            (raw, usage) = try await callOpenAI(
                 model: provider.apiModel,
                 prompt: prompt,
                 apiKey: key

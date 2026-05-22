@@ -1,6 +1,29 @@
 import Foundation
 import SwiftData
 
+nonisolated enum AdDetectionMode: String, Codable, CaseIterable, Sendable {
+    case apiAdTimestampsOnly
+
+    var label: String {
+        switch self {
+        case .apiAdTimestampsOnly:
+            "API ad timestamps only"
+        }
+    }
+
+    var requiresAudioUpload: Bool {
+        true
+    }
+
+    var storesTranscript: Bool {
+        false
+    }
+
+    func isSupported(by provider: AdDetectionProvider) -> Bool {
+        !requiresAudioUpload || provider.supportsCloudTranscription
+    }
+}
+
 @Model
 final class AppSettings {
     var defaultPlaybackSpeed: Double
@@ -26,7 +49,7 @@ final class AppSettings {
 
     /// Skip detected mid-episode ads during playback. Defaults on (it's the
     /// whole point of the app). Off lets you hear ads if you want — markers
-    /// are still rendered on the timeline / transcript regardless.
+    /// are still rendered on the timeline and in the skip-segments sheet.
     var skipAds: Bool = true
     /// Skip detected intros and outros during playback. Defaults on.
     var skipIntrosAndOutros: Bool = true
@@ -48,17 +71,15 @@ final class AppSettings {
     /// constants in `AdDetectionProvider` only affect new calls.
     var lifetimeAdDetectionCostUSD: Double = 0
 
-    /// Upload the audio file directly to a cloud model that returns both a
-    /// transcript and labelled ad/intro/outro segments in a single response,
-    /// bypassing the on-device `SpeechAnalyzer`. Off by default — flip in
-    /// Settings to A/B. Only the Gemini providers currently honor this;
-    /// OpenAI providers stay on the local-transcription path even when the
-    /// toggle is on, because their audio-input pricing/availability is
-    /// less favourable.
+    /// Legacy setting retained for backwards compatibility with older local
+    /// stores. The app now always uses file upload plus segments-only output.
     var useCloudTranscription: Bool = false
+    /// Legacy setting retained for backwards compatibility with older local
+    /// stores. The app now always uses file upload plus segments-only output.
+    var adDetectionModeRaw: String = AdDetectionMode.apiAdTimestampsOnly.rawValue
 
     /// Which cloud model performs ad detection. See `AdDetectionProvider`.
-    var adDetectionProviderRaw: String = AdDetectionProvider.geminiFlashLite.rawValue
+    var adDetectionProviderRaw: String = AdDetectionProvider.gemini35Flash.rawValue
     /// API key for Google AI Studio (Gemini providers). Stored unencrypted in
     /// the app's SwiftData store — fine for a personal-use app; move to
     /// Keychain if this ever ships to multiple users.
@@ -67,8 +88,25 @@ final class AppSettings {
     var openAIAPIKey: String?
 
     var adDetectionProvider: AdDetectionProvider {
-        get { AdDetectionProvider(rawValue: adDetectionProviderRaw) ?? .geminiFlashLite }
+        get { AdDetectionProvider(rawValue: adDetectionProviderRaw) ?? .gemini35Flash }
         set { adDetectionProviderRaw = newValue.rawValue }
+    }
+
+    var adDetectionMode: AdDetectionMode {
+        get { .apiAdTimestampsOnly }
+        set {
+            adDetectionModeRaw = newValue.rawValue
+            useCloudTranscription = newValue.requiresAudioUpload
+        }
+    }
+
+    func resolvedAdDetectionMode(for provider: AdDetectionProvider? = nil) -> AdDetectionMode {
+        let provider = provider ?? adDetectionProvider
+        let selected = AdDetectionMode.apiAdTimestampsOnly
+        if selected.isSupported(by: provider) {
+            return selected
+        }
+        return .apiAdTimestampsOnly
     }
 
     init(

@@ -20,7 +20,6 @@ struct SettingsView: View {
                     skippingSection(settings: s)
                     downloadsSection(settings: s)
                     adProviderSection(settings: s)
-                    adDetectionSection(settings: s)
                     importSection
                 }
             }
@@ -95,7 +94,7 @@ struct SettingsView: View {
         } header: {
             Text("Skipping")
         } footer: {
-            Text("Detected segments are still marked on the timeline and transcript regardless. After skipping a segment, the player peeks ahead by the chain-skip gap for another nearby segment and jumps that too. Set to 0 to skip only the current segment.")
+            Text("Detected segments are still marked on the timeline. After skipping a segment, the player peeks ahead by the chain-skip gap for another nearby segment and jumps that too. Set to 0 to skip only the current segment.")
         }
     }
 
@@ -139,51 +138,18 @@ struct SettingsView: View {
                 .autocorrectionDisabled()
                 .textInputAutocapitalization(.never)
             }
-            if provider.requiresOpenAIKey {
-                SecureField(
-                    "OpenAI API key",
-                    text: Binding(
-                        get: { s.openAIAPIKey ?? "" },
-                        set: { s.openAIAPIKey = $0.isEmpty ? nil : $0 }
-                    )
-                )
-                .textContentType(.password)
-                .autocorrectionDisabled()
-                .textInputAutocapitalization(.never)
-            }
-            Toggle("Cloud transcription", isOn: $s.useCloudTranscription)
-                .disabled(!provider.supportsCloudTranscription)
         } header: {
             Text("Detection model")
         } footer: {
             VStack(alignment: .leading, spacing: 4) {
                 Text(providerFooter(for: provider))
-                Text(cloudTranscriptionFooter(provider: provider, enabled: s.useCloudTranscription))
                 Text(tokensFooter(settings: settings))
             }
         }
     }
 
-    private func providerFooter(for provider: AdDetectionProvider) -> String {
-        switch provider {
-        case .geminiFlashLite, .geminiFlash:
-            "Sends the full transcript to Google in a single request and parses a structured JSON response. Get an API key at aistudio.google.com."
-        case .gpt54Nano, .gpt54Mini:
-            "Sends the full transcript to OpenAI in a single request and parses a structured JSON response. Get an API key at platform.openai.com."
-        }
-    }
-
-    /// Explains what flipping the cloud-transcription toggle changes, and
-    /// disables itself when the picked provider doesn't support it (OpenAI
-    /// audio input is wired up separately later).
-    private func cloudTranscriptionFooter(provider: AdDetectionProvider, enabled: Bool) -> String {
-        guard provider.supportsCloudTranscription else {
-            return "Cloud transcription is only available on Gemini providers right now."
-        }
-        if enabled {
-            return "On: uploads the audio file directly and gets back transcript + segments in one call. Higher token cost, but bypasses on-device transcription entirely."
-        }
-        return "Off: transcribes locally with Apple's SpeechAnalyzer, then sends the transcript text for ad detection."
+    private func providerFooter(for _: AdDetectionProvider) -> String {
+        "Uploads the episode audio file to Google AI Studio and receives back only skip segments with timestamps and summaries for playback skipping."
     }
 
     /// Compact running totals shown under the provider footer so the user
@@ -221,18 +187,6 @@ struct SettingsView: View {
     }
 
     @ViewBuilder
-    private func adDetectionSection(settings: AppSettings) -> some View {
-        Section("Ad detection") {
-            NavigationLink {
-                AdPromptView()
-            } label: {
-                Label("Detection prompt", systemImage: "text.bubble")
-            }
-        }
-    }
-
-    @ViewBuilder
-
     private var importSection: some View {
         Section("Import") {
             Button {

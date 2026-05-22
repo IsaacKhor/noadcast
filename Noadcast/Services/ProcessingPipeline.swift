@@ -3,12 +3,12 @@ import SwiftData
 import Observation
 import os
 
-/// Drives a single episode through the download → transcribe → detect-ads
+/// Drives a single episode through the download → detect-ads
 /// pipeline. Keeps an in-memory set of in-flight episode IDs so the UI can
 /// show progress and so we don't double-enqueue.
 ///
 /// Orchestrated on MainActor because every step `await`s into an actor
-/// service (download, transcription, ad detection) where the CPU/IO work
+/// service (download, upload analysis) where the CPU/IO work
 /// actually happens. The orchestrator itself only touches SwiftData.
 @MainActor
 @Observable
@@ -45,6 +45,60 @@ final class ProcessingPipeline {
         activeEpisodes.contains(episodeID)
     }
 
+    /// Restart any episode left mid-processing by a previous app run. Called
+    /// once at launch from `NoadcastApp.init`.
+    ///
+    /// If the app was terminated while a cloud upload or `generateContent`
+    /// call was in flight, the background `URLSession` keeps running in
+    /// `nsurlsessiond`. When we relaunch, our delegate is recreated but the
+    /// in-memory continuation that was awaiting the response is gone, so
+    /// the response is dropped on the floor and the episode would stay
+    /// stuck in `.uploading` / `.detectingAds` forever.
+    ///
+    /// Recovery: for each in-progress episode, cancel any orphaned tasks
+    /// the OS reconstituted into the session (so we don't double-upload),
+    /// reset the episode to a step the pipeline can re-enter, and call
+    /// `process(episode:)`. The re-enqueue costs a re-upload if we were
+    /// interrupted mid-flight, but is correct.
+    func recoverPendingEpisodes() async {
+        guard let container = modelContainer else { return }
+        let context = container.mainContext
+
+        let descriptor = FetchDescriptor<Episode>(
+            predicate: #Predicate { $0.isInProgress }
+        )
+        guard let stuck = try? context.fetch(descriptor), !stuck.isEmpty else { return }
+        Log.pipeline.info("Recovering \(stuck.count) interrupted episode(s) after launch")
+
+        for episode in stuck {
+            if activeEpisodes.contains(episode.persistentModelID) { continue }
+
+            await CloudTranscriptionService.shared.cancelTasks(forEpisodeGUID: episode.guid)
+
+            switch episode.processingState {
+            case .uploading, .detectingAds, .transcribing:
+                // The cloud or local-transcription leg was interrupted.
+                // If the audio is still on disk, jump straight to the
+                // cloud/transcription step by claiming `.downloaded`;
+                // otherwise start over from scratch.
+                episode.processingState = episode.hasLocalFile ? .downloaded : .new
+            case .downloading:
+                // Download was interrupted; the partial file is in the
+                // background session's scratch dir but we don't know
+                // about it. Start over.
+                episode.processingState = .new
+            default:
+                continue
+            }
+            episode.processingProgress = 0
+            episode.processingCurrent = 0
+            episode.processingTotal = nil
+            episode.processingError = nil
+            try? context.save()
+            process(episode: episode)
+        }
+    }
+
     // MARK: - Pipeline
 
     private func run(episodeID: PersistentIdentifier) async {
@@ -65,25 +119,9 @@ final class ProcessingPipeline {
 
             let aiEnabled = episode.podcast?.aiProcessingEnabled ?? true
             if aiEnabled {
-                let settings = AppSettings.current(in: context)
-                let useCloud = settings.useCloudTranscription
-                    && settings.adDetectionProvider.supportsCloudTranscription
-                if useCloud && episode.transcript.isEmpty {
-                    // Single-shot cloud path: upload the file, get back
-                    // transcript + segments together. Skips the local
-                    // transcribe step entirely.
-                    try await cloudTranscribeStep(episode: episode, context: context)
-                } else {
-                    if episode.transcript.isEmpty {
-                        try await transcribeStep(episode: episode, context: context)
-                    } else {
-                        Log.pipeline.info("Skipping transcription for \"\(title, privacy: .public)\" — \(episode.transcript.count) segments already cached; will only re-run ad detection")
-                    }
-                    try Task.checkCancellation()
-                    try await detectAdsStep(episode: episode, context: context)
-                }
+                try await cloudAnalyzeStep(episode: episode, context: context)
             } else {
-                Log.pipeline.info("Skipping transcription + ad detection for \"\(title, privacy: .public)\" — disabled on its podcast")
+                Log.pipeline.info("Skipping ad detection for \"\(title, privacy: .public)\" — disabled on its podcast")
             }
 
             episode.processingState = .ready
@@ -140,110 +178,9 @@ final class ProcessingPipeline {
         }
     }
 
-    private func transcribeStep(episode: Episode, context: ModelContext) async throws {
-        guard let fileURL = episode.localFileURL else { return }
-        episode.processingState = .transcribing
-        episode.processingProgress = 0
-        episode.processingCurrent = 0
-        episode.processingTotal = episode.duration
-        try? context.save()
-
-        let episodeID = episode.persistentModelID
-        let container = modelContainer
-        let segments = try await TranscriptionService.shared.transcribe(
-            fileURL: fileURL,
-            progress: { current, total in
-                Task { @MainActor in
-                    guard let container,
-                          let ep = container.mainContext.model(for: episodeID) as? Episode
-                    else { return }
-                    ep.processingCurrent = current
-                    ep.processingTotal = total
-                    ep.processingProgress = total > 0 ? min(1.0, current / total) : 0
-                }
-            }
-        )
-
-        for old in episode.transcript { context.delete(old) }
-        for seg in segments {
-            let t = TranscriptSegment(
-                startSeconds: seg.startSeconds,
-                endSeconds: seg.endSeconds,
-                text: seg.text,
-                episode: episode
-            )
-            context.insert(t)
-        }
-        episode.processingProgress = 1.0
-        try? context.save()
-    }
-
-    private func detectAdsStep(episode: Episode, context: ModelContext) async throws {
-        episode.processingState = .detectingAds
-        episode.processingProgress = 0
-        episode.processingCurrent = 0
-        episode.processingTotal = nil
-        try? context.save()
-
-        let settings = AppSettings.current(in: context)
-        let transcript = episode.transcript
-            .sorted { $0.startSeconds < $1.startSeconds }
-            .map {
-                TranscribedSegment(
-                    startSeconds: $0.startSeconds,
-                    endSeconds: $0.endSeconds,
-                    text: $0.text
-                )
-            }
-
-        let provider = settings.adDetectionProvider
-        let googleKey = settings.googleAPIKey
-        let openAIKey = settings.openAIAPIKey
-        let episodeID = episode.persistentModelID
-        let container = modelContainer
-        let result = try await AdDetectionService.shared.detectAds(
-            in: transcript,
-            provider: provider,
-            googleAPIKey: googleKey,
-            openAIAPIKey: openAIKey,
-            progress: { current, total in
-                Task { @MainActor in
-                    guard let container,
-                          let ep = container.mainContext.model(for: episodeID) as? Episode
-                    else { return }
-                    ep.processingCurrent = Double(current)
-                    ep.processingTotal = Double(total)
-                    ep.processingProgress = total > 0 ? Double(current) / Double(total) : 0
-                }
-            }
-        )
-        let ads = result.ads
-        if let usage = result.usage {
-            Self.accumulateUsage(usage, provider: provider, into: settings)
-        }
-
-        for old in episode.adMarkers where !old.manuallyEdited {
-            context.delete(old)
-        }
-        for ad in ads {
-            let m = AdMarker(
-                startSeconds: ad.startSeconds,
-                endSeconds: ad.endSeconds,
-                summary: ad.summary,
-                kind: ad.kind,
-                episode: episode
-            )
-            context.insert(m)
-        }
-        episode.processingProgress = 1.0
-        try? context.save()
-    }
-
-    /// Cloud single-shot step: upload audio, get transcript + segments
-    /// back together. Replaces both `transcribeStep` and `detectAdsStep`
-    /// when `AppSettings.useCloudTranscription` is on and the chosen
-    /// provider supports it.
-    private func cloudTranscribeStep(episode: Episode, context: ModelContext) async throws {
+    /// File-upload step: upload audio and ask the API to return only skip
+    /// segments, without storing any transcript text locally.
+    private func cloudAnalyzeStep(episode: Episode, context: ModelContext) async throws {
         guard let fileURL = episode.localFileURL else { return }
         // Initial state: bytes about to go up. We set `.uploading` here
         // rather than `.transcribing` so the UI's progress label and
@@ -263,11 +200,12 @@ final class ProcessingPipeline {
         let episodeID = episode.persistentModelID
         let container = modelContainer
 
-        let result = try await CloudTranscriptionService.shared.transcribeAndDetect(
+        let result = try await CloudTranscriptionService.shared.analyzeFile(
             fileURL: fileURL,
             provider: provider,
             googleAPIKey: googleKey,
             mimeType: mimeType,
+            episodeGUID: episode.guid,
             onStage: { stage in
                 Task { @MainActor in
                     guard let container,
@@ -294,19 +232,14 @@ final class ProcessingPipeline {
         )
 
         if let usage = result.usage {
-            Self.accumulateUsage(usage, provider: provider, into: settings)
+            Self.accumulateUsage(
+                usage,
+                provider: provider,
+                into: settings
+            )
         }
 
         for old in episode.transcript { context.delete(old) }
-        for seg in result.transcript {
-            let t = TranscriptSegment(
-                startSeconds: seg.startSeconds,
-                endSeconds: seg.endSeconds,
-                text: seg.text,
-                episode: episode
-            )
-            context.insert(t)
-        }
         for old in episode.adMarkers where !old.manuallyEdited {
             context.delete(old)
         }
@@ -336,7 +269,7 @@ final class ProcessingPipeline {
     ) {
         settings.lifetimeAdDetectionInputTokens += usage.inputTokens
         settings.lifetimeAdDetectionOutputTokens += usage.outputTokens
-        let inputCost = Double(usage.inputTokens) / 1_000_000 * provider.pricePerMTokensInput
+        let inputCost = Double(usage.inputTokens) / 1_000_000 * provider.pricePerMTokensAudioInput
         let outputCost = Double(usage.outputTokens) / 1_000_000 * provider.pricePerMTokensOutput
         settings.lifetimeAdDetectionCostUSD += inputCost + outputCost
     }

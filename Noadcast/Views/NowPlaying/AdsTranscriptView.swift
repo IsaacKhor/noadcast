@@ -1,21 +1,13 @@
 import SwiftUI
 
-/// Sheet showing the transcript lines that fall inside each detected
-/// skippable segment (ad, intro, or outro), grouped by segment. Reached
-/// by tapping the segments summary in `NowPlayingView`.
+/// Sheet showing each detected skippable segment (ad, intro, or outro).
+/// Reached by tapping the segments summary in `NowPlayingView`.
 struct AdsTranscriptView: View {
-    let segments: [TranscriptSegment]
     let ads: [AdMarker]
     let onSeek: (Double) -> Void
 
     private var sortedAds: [AdMarker] {
         ads.filter { !$0.isDeleted }.sorted { $0.startSeconds < $1.startSeconds }
-    }
-
-    private func segments(for ad: AdMarker) -> [TranscriptSegment] {
-        segments
-            .filter { $0.startSeconds < ad.endSeconds && $0.endSeconds > ad.startSeconds }
-            .sorted { $0.startSeconds < $1.startSeconds }
     }
 
     var body: some View {
@@ -31,22 +23,9 @@ struct AdsTranscriptView: View {
                     List {
                         ForEach(sortedAds) { ad in
                             Section {
-                                ForEach(segments(for: ad)) { seg in
-                                    Button {
-                                        onSeek(seg.startSeconds)
-                                    } label: {
-                                        HStack(alignment: .top, spacing: 8) {
-                                            Text(TimeFormatting.timestamp(seg.startSeconds))
-                                                .font(.caption.monospacedDigit())
-                                                .foregroundStyle(.secondary)
-                                                .frame(width: 56, alignment: .leading)
-                                            Text(seg.text)
-                                                .foregroundStyle(.primary)
-                                            Spacer()
-                                        }
-                                    }
-                                    .buttonStyle(.plain)
-                                }
+                                Text("Tap to jump to the start of this segment.")
+                                    .font(.subheadline)
+                                    .foregroundStyle(.secondary)
                             } header: {
                                 AdHeader(ad: ad, onSeek: onSeek)
                             }

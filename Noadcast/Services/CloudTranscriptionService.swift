@@ -1,17 +1,16 @@
 import Foundation
 import os
 
-/// One-shot cloud pipeline replacement: uploads the entire audio file to a
-/// Gemini model and gets back both a timestamped transcript and labelled
-/// ad/intro/outro segments in a single structured-JSON response.
+/// One-shot file-analysis helper: uploads the entire audio file to a Gemini
+/// model and gets back skip segments in one structured-JSON response.
 ///
-/// Replaces the `SpeechAnalyzer` + `AdDetectionService` two-step when
-/// `AppSettings.useCloudTranscription` is on. Wins:
+/// Replaces the `SpeechAnalyzer` + `AdDetectionService` two-step for the
+/// file-upload detection modes. Wins:
 /// * No on-device transcription — no CPU spike, no 79-min `SpeechAnalyzer`
 ///   crash, no chunking.
-/// * Just an HTTP upload + response, so the whole pipeline fits inside
-///   `URLSessionConfiguration.background` semantics if we wire it up there
-///   later.
+/// * Just an HTTP upload + response, so the whole pipeline rides on a
+///   **background** `URLSession` and keeps moving while the app is
+///   suspended.
 /// * The model has access to actual audio cues (music stings, voice
 ///   changes), which makes intros / outros / ad reads more obvious than
 ///   from text alone.
@@ -20,7 +19,6 @@ import os
 /// input tokens), and ~2× bandwidth (we download the MP3 for local
 /// playback, then upload it).
 nonisolated struct CloudTranscriptionResult: Sendable {
-    let transcript: [TranscribedSegment]
     let ads: [DetectedAd]
     let usage: TokenUsage?
 }
@@ -29,11 +27,10 @@ nonisolated struct CloudTranscriptionResult: Sendable {
 /// `Episode.processingState` and surface upload byte counts in the UI.
 nonisolated enum CloudTranscriptionStage: Sendable {
     /// Bytes have started moving. `totalBytes` is the request body size as
-    /// reported by `URLSession` (matches the audio file's size in the
-    /// Files-API path, or the base64-padded JSON body inline).
+    /// reported by `URLSession` during the Gemini Files upload.
     case uploading(bytesSent: Int64, totalBytes: Int64)
     /// Upload finished; we're now waiting on the LLM to produce the
-    /// transcript + segments response.
+    /// structured response.
     case analyzing
 }
 
@@ -46,7 +43,7 @@ enum CloudTranscriptionError: LocalizedError {
     var errorDescription: String? {
         switch self {
         case .providerUnsupported(let provider):
-            "\(provider) doesn't support cloud transcription. Pick a Gemini model in Settings → Detection model, or turn off cloud transcription."
+            "\(provider) doesn't support file-based analysis. Pick a different Gemini model in Settings → Detection model."
         case .missingAPIKey(let provider):
             "\(provider) API key missing — add one in Settings → Detection model."
         case .uploadFailed(let err):
@@ -57,37 +54,65 @@ enum CloudTranscriptionError: LocalizedError {
     }
 }
 
-actor CloudTranscriptionService {
+/// Runs the Gemini Files upload + `generateContent` call on a **background**
+/// `URLSession`. Both legs use `uploadTask(with:fromFile:)` — the only
+/// task flavor a background config supports for outbound requests — so the
+/// transfers keep running while the app is suspended. Delegate callbacks
+/// land on the session's serial delegate queue and are bridged to the
+/// caller's `async` continuation through a per-task entry in `pending`,
+/// guarded by `lock`.
+nonisolated final class CloudTranscriptionService: NSObject, @unchecked Sendable {
     static let shared = CloudTranscriptionService()
 
-    /// Gemini's `generateContent` request payload caps at 20 MB total.
-    /// Inline `inlineData` is base64-encoded, which inflates raw bytes by
-    /// ~33%, plus there's the JSON envelope and `responseSchema`. Use a
-    /// conservative 15 MB raw-audio threshold below which we send inline
-    /// and skip the Files API upload roundtrip; above it, two-step
-    /// resumable upload.
-    private static let inlineThresholdBytes: Int64 = 15 * 1024 * 1024
+    static let backgroundSessionIdentifier = "com.isaackhor.Noadcast.background-cloud"
 
-    private let urlSession: URLSession = .shared
+    private struct PendingUpload {
+        var receivedData = Data()
+        /// Temp file holding a request body we built; deleted on completion.
+        /// `nil` when the upload body is the user's actual audio file.
+        var bodyFileURL: URL?
+        var progressHandler: (@Sendable (Int64, Int64) -> Void)?
+        var completion: @Sendable (Result<(Data, HTTPURLResponse), Error>) -> Void
+    }
+
+    private let lock = NSLock()
+    private var pending: [Int: PendingUpload] = [:]
+    private var pendingBackgroundCompletion: BackgroundCompletion?
+
+    private var sessionStorage: URLSession!
+    var session: URLSession { sessionStorage }
     private let decoder = JSONDecoder()
 
-    /// System prompt for the combined transcribe + label call. Reuses the
-    /// segment-classification rules from `AdDetectionService` and adds a
-    /// transcript-shape requirement.
-    nonisolated static let combinedPrompt: String = """
-    You are analyzing a podcast episode audio file. Produce two outputs in \
-    a single JSON object:
+    override private init() {
+        super.init()
+        let config = URLSessionConfiguration.background(withIdentifier: Self.backgroundSessionIdentifier)
+        config.sessionSendsLaunchEvents = true
+        config.isDiscretionary = false
+        config.allowsCellularAccess = true
+        // LLM calls can sit for a while; resource-timeout governs the whole
+        // task (upload + response wait), so we give it room.
+        config.timeoutIntervalForRequest = 60 * 5
+        config.timeoutIntervalForResource = 60 * 30
+        sessionStorage = URLSession(configuration: config, delegate: self, delegateQueue: nil)
+    }
 
-    1) `transcript`: a verbatim, timestamped transcript of the audio. Each \
-    entry covers one sentence (or a short clause if the speaker pauses), \
-    with `startSeconds` and `endSeconds` matching the actual time in the \
-    audio and `text` containing exactly what was said. Use punctuation and \
-    capitalization. Do not paraphrase.
+    /// Stores the completion handler iOS hands us when relaunching the app
+    /// to deliver background events for this session. Called from
+    /// `AppDelegate`.
+    func storePendingBackgroundCompletion(_ handler: @escaping () -> Void) {
+        lock.lock()
+        pendingBackgroundCompletion = BackgroundCompletion(handler)
+        lock.unlock()
+    }
 
-    2) `segments`: every contiguous portion of the audio the listener would \
-    want to skip. Each segment has a `kind`:
+    nonisolated static let segmentsOnlyPrompt: String = """
+    You are analyzing a podcast episode audio file. Return a single JSON \
+    object with one field, `segments`, containing every contiguous portion \
+    of the audio the listener would want to skip.
 
-    - "intro": one contiguous segment at the very BEGINNING of the episode \
+    Each segment has a `kind`:
+
+    - "intro": one contiguous segment near the BEGINNING of the episode \
     covering theme music, branding, and any preroll ads. At most one per episode. Spans from the start of \
     the episode through to where the substantive content begins. Do NOT \
     include introductory content that may be substantive, like host banter,
@@ -110,20 +135,26 @@ actor CloudTranscriptionService {
 
     Use only timestamps that match the audio. Be conservative — flag segments \
     only when you're confident. Return an empty `segments` array if \
-    nothing should be skipped.
+    nothing should be skipped. Do not include transcript text or any fields \
+    other than `segments`.
     """
 
-    /// Top-level entry point. For files under the inline threshold, embeds
-    /// the audio directly in the `generateContent` request (single round-
-    /// trip). For larger files, runs a resumable Files API upload first
-    /// and references the resulting URI. `onStage` fires with
+    /// Top-level entry point. Always uploads the audio through Gemini's
+    /// resumable Files API, then references the resulting file URI in the
+    /// follow-up `generateContent` call. `onStage` fires with
     /// `.uploading(sent, total)` continuously as bytes go up, then once
     /// with `.analyzing` while we wait on the LLM.
-    func transcribeAndDetect(
+    ///
+    /// `episodeGUID`, when supplied, is set as each task's
+    /// `taskDescription` so that `cancelTasks(forEpisodeGUID:)` can find
+    /// and cancel orphaned tasks belonging to a given episode after an
+    /// app termination + relaunch.
+    func analyzeFile(
         fileURL: URL,
         provider: AdDetectionProvider,
         googleAPIKey: String?,
         mimeType: String,
+        episodeGUID: String? = nil,
         onStage: (@Sendable (CloudTranscriptionStage) -> Void)? = nil
     ) async throws -> CloudTranscriptionResult {
         guard provider.supportsCloudTranscription else {
@@ -134,86 +165,94 @@ actor CloudTranscriptionService {
         }
 
         let fileSize = (try? fileURL.resourceValues(forKeys: [.fileSizeKey]).fileSize).map(Int64.init) ?? 0
-        let useInline = fileSize > 0 && fileSize <= Self.inlineThresholdBytes
-        Log.adDetection.info("Cloud transcription begin — provider=\(provider.label, privacy: .public) file=\(fileURL.lastPathComponent, privacy: .public) bytes=\(fileSize) path=\(useInline ? "inline" : "files-api", privacy: .public)")
+        Log.adDetection.info("Cloud analysis begin — provider=\(provider.label, privacy: .public) file=\(fileURL.lastPathComponent, privacy: .public) bytes=\(fileSize) path=files-api")
 
-        let transcript: [TranscribedSegment]
-        let ads: [DetectedAd]
-        let usage: TokenUsage?
-
-        if useInline {
-            (transcript, ads, usage) = try await callGeminiInline(
-                model: provider.apiModel,
-                fileURL: fileURL,
-                mimeType: mimeType,
-                apiKey: key,
-                onStage: onStage
-            )
-        } else {
-            let fileURI = try await uploadToGeminiFiles(
-                fileURL: fileURL,
-                mimeType: mimeType,
-                apiKey: key,
-                onStage: onStage
-            )
-            onStage?(.analyzing)
-            (transcript, ads, usage) = try await callGeminiCombined(
-                model: provider.apiModel,
-                fileURI: fileURI,
-                mimeType: mimeType,
-                apiKey: key
-            )
-        }
-
-        Log.adDetection.info("Cloud transcription complete — transcript=\(transcript.count) ads=\(ads.count) input_tokens=\(usage?.inputTokens ?? 0) output_tokens=\(usage?.outputTokens ?? 0)")
-        return CloudTranscriptionResult(transcript: transcript, ads: ads, usage: usage)
-    }
-
-    // MARK: - Inline path (file ≤ 15 MB)
-
-    /// Single-call inline variant. Reads the file, base64-encodes it as an
-    /// `inlineData` part, writes the whole JSON body to a temp file so
-    /// `URLSession.upload(for:fromFile:delegate:)` can report MB progress
-    /// during the send, then parses the structured response. Saves a
-    /// network roundtrip vs the Files-API path for small episodes.
-    private func callGeminiInline(
-        model: String,
-        fileURL: URL,
-        mimeType: String,
-        apiKey: String,
-        onStage: (@Sendable (CloudTranscriptionStage) -> Void)?
-    ) async throws -> ([TranscribedSegment], [DetectedAd], TokenUsage?) {
-        let fileData: Data
-        do {
-            fileData = try Data(contentsOf: fileURL)
-        } catch {
-            throw CloudTranscriptionError.uploadFailed(error)
-        }
-        let base64 = fileData.base64EncodedString()
-        let parts: [[String: Any]] = [
-            ["inlineData": ["mimeType": mimeType, "data": base64]],
-            ["text": "Produce the JSON object as specified."]
-        ]
-        return try await postCombined(
-            model: model,
-            parts: parts,
-            apiKey: apiKey,
+        let fileURI = try await uploadToGeminiFiles(
+            fileURL: fileURL,
+            mimeType: mimeType,
+            apiKey: key,
+            taskDescription: episodeGUID,
             onStage: onStage
         )
+        onStage?(.analyzing)
+        let (ads, usage) = try await callGeminiCombined(
+            model: provider.apiModel,
+            fileURI: fileURI,
+            mimeType: mimeType,
+            apiKey: key,
+            taskDescription: episodeGUID
+        )
+
+        Log.adDetection.info("Cloud analysis complete — ads=\(ads.count) input_tokens=\(usage?.inputTokens ?? 0) output_tokens=\(usage?.outputTokens ?? 0)")
+        return CloudTranscriptionResult(ads: ads, usage: usage)
+    }
+
+    /// Cancels any background tasks tagged with `taskDescription == guid`.
+    /// Used by the pipeline's launch-time recovery to clean up tasks left
+    /// behind by a previous process before re-enqueueing the episode.
+    func cancelTasks(forEpisodeGUID guid: String) async {
+        let tasks = await session.allTasks
+        for task in tasks where task.taskDescription == guid {
+            task.cancel()
+        }
+    }
+
+    // MARK: - Background-friendly upload helper
+
+    /// Single-task helper: kick off an `uploadTask(with:fromFile:)` on the
+    /// background session, accumulate the response body via the data
+    /// delegate, and resume the awaiting caller when the task finishes.
+    /// Set `tempBodyURL` when the body file is a temp file we built (it
+    /// gets deleted after the task settles); leave it `nil` for uploads
+    /// whose body is the user's audio file.
+    private func upload(
+        request: URLRequest,
+        fromFile fileURL: URL,
+        tempBodyURL: URL? = nil,
+        taskDescription: String? = nil,
+        onProgress: (@Sendable (Int64, Int64) -> Void)? = nil
+    ) async throws -> (Data, HTTPURLResponse) {
+        try await withCheckedThrowingContinuation { (cont: CheckedContinuation<(Data, HTTPURLResponse), Error>) in
+            let task = session.uploadTask(with: request, fromFile: fileURL)
+            task.taskDescription = taskDescription
+            lock.lock()
+            pending[task.taskIdentifier] = PendingUpload(
+                bodyFileURL: tempBodyURL,
+                progressHandler: onProgress,
+                completion: { result in
+                    switch result {
+                    case .success(let v): cont.resume(returning: v)
+                    case .failure(let e): cont.resume(throwing: e)
+                    }
+                }
+            )
+            lock.unlock()
+            task.resume()
+        }
+    }
+
+    /// Writes an in-memory request body to a temp file so it can be passed
+    /// to `uploadTask(with:fromFile:)` — background sessions can't accept
+    /// `Data` bodies.
+    private func writeTempBody(_ data: Data, ext: String = "json") throws -> URL {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("noadcast-cloud-\(UUID().uuidString).\(ext)")
+        try data.write(to: url, options: [.atomic])
+        return url
     }
 
     // MARK: - Gemini Files API (resumable upload)
 
-    /// Two-step resumable upload to the Gemini Files API. The inline-data
-    /// path caps at 20 MB and most podcasts blow past that, so larger
-    /// files come here. Returned URI is valid for 48 hours which is
-    /// plenty for the immediate follow-up `generateContent` call. Reports
-    /// byte progress through `onStage(.uploading(...))` so the row's
-    /// progress bar can show MB / MB.
+    /// Two-step resumable upload to the Gemini Files API. Returned URI is
+    /// valid for 48 hours which is plenty for the immediate follow-up
+    /// `generateContent` call. Both legs run through the background
+    /// `URLSession` so the upload keeps moving when the app is suspended,
+    /// and byte progress is reported through `onStage(.uploading(...))`.
     private func uploadToGeminiFiles(
         fileURL: URL,
         mimeType: String,
         apiKey: String,
+        taskDescription: String?,
         onStage: (@Sendable (CloudTranscriptionStage) -> Void)?
     ) async throws -> String {
         let byteCount = (try? fileURL.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0
@@ -231,45 +270,50 @@ actor CloudTranscriptionService {
         startRequest.setValue(mimeType, forHTTPHeaderField: "X-Goog-Upload-Header-Content-Type")
         startRequest.setValue("application/json", forHTTPHeaderField: "Content-Type")
         let displayName = fileURL.lastPathComponent
-        startRequest.httpBody = try JSONSerialization.data(withJSONObject: [
+        let startBodyData = try JSONSerialization.data(withJSONObject: [
             "file": ["display_name": displayName]
         ])
+        let startBodyURL = try writeTempBody(startBodyData)
 
-        let (_, startResponse) = try await urlSession.data(for: startRequest)
-        guard let http = startResponse as? HTTPURLResponse,
-              (200..<300).contains(http.statusCode),
-              let uploadURLString = http.value(forHTTPHeaderField: "X-Goog-Upload-URL"),
+        let (_, startResponse) = try await upload(
+            request: startRequest,
+            fromFile: startBodyURL,
+            tempBodyURL: startBodyURL,
+            taskDescription: taskDescription
+        )
+        guard (200..<300).contains(startResponse.statusCode),
+              let uploadURLString = startResponse.value(forHTTPHeaderField: "X-Goog-Upload-URL"),
               let uploadURL = URL(string: uploadURLString)
         else {
-            let status = (startResponse as? HTTPURLResponse)?.statusCode ?? -1
             throw CloudTranscriptionError.uploadFailed(
-                NSError(domain: "GeminiFiles", code: status,
-                        userInfo: [NSLocalizedDescriptionKey: "Failed to start upload — HTTP \(status)"])
+                NSError(domain: "GeminiFiles", code: startResponse.statusCode,
+                        userInfo: [NSLocalizedDescriptionKey: "Failed to start upload — HTTP \(startResponse.statusCode)"])
             )
         }
 
         // Step 2 — finalize: stream the audio file as the body. Going
-        // through `fromFile:` (not `from: Data`) keeps the whole MP3 off
-        // the heap, and pairing it with `UploadProgressDelegate` gives
-        // us `didSendBodyData` events that the UI surfaces as MB / MB.
+        // through `fromFile:` keeps the whole MP3 off the heap, and the
+        // session's `didSendBodyData` events get bridged to `onStage` so
+        // the row's progress bar can show MB / MB.
         var uploadRequest = URLRequest(url: uploadURL)
         uploadRequest.httpMethod = "POST"
         uploadRequest.setValue(String(byteCount), forHTTPHeaderField: "Content-Length")
         uploadRequest.setValue("0", forHTTPHeaderField: "X-Goog-Upload-Offset")
         uploadRequest.setValue("upload, finalize", forHTTPHeaderField: "X-Goog-Upload-Command")
-        let progressDelegate = UploadProgressDelegate(onStage: onStage)
-        let (data, uploadResponse) = try await urlSession.upload(
-            for: uploadRequest,
+        let (data, uploadResponse) = try await upload(
+            request: uploadRequest,
             fromFile: fileURL,
-            delegate: progressDelegate
+            taskDescription: taskDescription,
+            onProgress: { sent, total in
+                onStage?(.uploading(bytesSent: sent, totalBytes: total))
+            }
         )
-        guard let httpUp = uploadResponse as? HTTPURLResponse, (200..<300).contains(httpUp.statusCode) else {
-            let status = (uploadResponse as? HTTPURLResponse)?.statusCode ?? -1
+        guard (200..<300).contains(uploadResponse.statusCode) else {
             let body = String(data: data, encoding: .utf8) ?? ""
-            Log.adDetection.error("Gemini Files upload failed — HTTP \(status): \(body, privacy: .public)")
+            Log.adDetection.error("Gemini Files upload failed — HTTP \(uploadResponse.statusCode): \(body, privacy: .public)")
             throw CloudTranscriptionError.uploadFailed(
-                NSError(domain: "GeminiFiles", code: status,
-                        userInfo: [NSLocalizedDescriptionKey: "Upload failed — HTTP \(status)"])
+                NSError(domain: "GeminiFiles", code: uploadResponse.statusCode,
+                        userInfo: [NSLocalizedDescriptionKey: "Upload failed — HTTP \(uploadResponse.statusCode)"])
             )
         }
         let decoded = try decoder.decode(GeminiFileUploadResponse.self, from: data)
@@ -282,8 +326,9 @@ actor CloudTranscriptionService {
         model: String,
         fileURI: String,
         mimeType: String,
-        apiKey: String
-    ) async throws -> ([TranscribedSegment], [DetectedAd], TokenUsage?) {
+        apiKey: String,
+        taskDescription: String?
+    ) async throws -> ([DetectedAd], TokenUsage?) {
         let parts: [[String: Any]] = [
             ["file_data": ["mime_type": mimeType, "file_uri": fileURI]],
             ["text": "Produce the JSON object as specified."]
@@ -291,24 +336,24 @@ actor CloudTranscriptionService {
         // Body is tiny (just the URI reference), so we don't bother
         // reporting upload byte progress here. The outer pipeline has
         // already flipped to `.analyzing` before this call.
-        return try await postCombined(model: model, parts: parts, apiKey: apiKey, onStage: nil)
+        return try await postCombined(
+            model: model,
+            parts: parts,
+            apiKey: apiKey,
+            taskDescription: taskDescription
+        )
     }
 
     // MARK: - Shared request body + parsing
 
     /// Posts a `generateContent` request whose user content is `parts`
-    /// (file_data reference, inline data, or whatever the caller assembled)
-    /// and parses the structured-JSON response. If `onStage` is non-nil,
-    /// the JSON body is written to a temp file and the upload is streamed
-    /// through `URLSession.upload(for:fromFile:delegate:)` so the delegate
-    /// can emit byte-progress events; for tiny bodies (file_uri only) we
-    /// just send the bytes inline.
+    /// and parses the structured-JSON response.
     private func postCombined(
         model: String,
         parts: [[String: Any]],
         apiKey: String,
-        onStage: (@Sendable (CloudTranscriptionStage) -> Void)?
-    ) async throws -> ([TranscribedSegment], [DetectedAd], TokenUsage?) {
+        taskDescription: String?
+    ) async throws -> ([DetectedAd], TokenUsage?) {
         guard let url = URL(string: "https://generativelanguage.googleapis.com/v1beta/models/\(model):generateContent?key=\(apiKey)") else {
             throw CloudTranscriptionError.uploadFailed(URLError(.badURL))
         }
@@ -317,97 +362,77 @@ actor CloudTranscriptionService {
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
 
         let body: [String: Any] = [
-            "systemInstruction": ["parts": [["text": Self.combinedPrompt]]],
+            "systemInstruction": ["parts": [["text": Self.segmentsOnlyPrompt]]],
             "contents": [
                 ["role": "user", "parts": parts]
             ],
             "generationConfig": [
                 "responseMimeType": "application/json",
-                "responseSchema": [
-                    "type": "OBJECT",
-                    "properties": [
-                        "transcript": [
-                            "type": "ARRAY",
-                            "items": [
-                                "type": "OBJECT",
-                                "properties": [
-                                    "startSeconds": ["type": "NUMBER"],
-                                    "endSeconds": ["type": "NUMBER"],
-                                    "text": ["type": "STRING"]
-                                ],
-                                "required": ["startSeconds", "endSeconds", "text"]
-                            ]
-                        ],
-                        "segments": [
-                            "type": "ARRAY",
-                            "items": [
-                                "type": "OBJECT",
-                                "properties": [
-                                    "startSeconds": ["type": "NUMBER"],
-                                    "endSeconds": ["type": "NUMBER"],
-                                    "summary": ["type": "STRING"],
-                                    "kind": [
-                                        "type": "STRING",
-                                        "enum": ["ad", "intro", "outro"]
-                                    ]
-                                ],
-                                "required": ["startSeconds", "endSeconds", "summary", "kind"]
-                            ]
-                        ]
-                    ],
-                    "required": ["transcript", "segments"]
-                ]
+                "responseSchema": Self.responseSchema
             ]
         ]
         let bodyData = try JSONSerialization.data(withJSONObject: body)
+        let bodyURL = try writeTempBody(bodyData)
 
-        let data: Data
-        let response: URLResponse
-        if onStage != nil {
-            // Stream the body from disk so `didSendBodyData` events on the
-            // task delegate can fire; otherwise `URLSession.data(for:)`
-            // wouldn't surface upload progress.
-            let tempURL = FileManager.default.temporaryDirectory
-                .appendingPathComponent("cloud-tx-\(UUID().uuidString).json")
-            try bodyData.write(to: tempURL, options: .atomic)
-            defer { try? FileManager.default.removeItem(at: tempURL) }
-            let progressDelegate = UploadProgressDelegate(onStage: onStage)
-            (data, response) = try await urlSession.upload(
-                for: request,
-                fromFile: tempURL,
-                delegate: progressDelegate
-            )
-        } else {
-            request.httpBody = bodyData
-            (data, response) = try await urlSession.data(for: request)
-        }
-        if let http = response as? HTTPURLResponse, !(200..<300).contains(http.statusCode) {
+        let (data, response) = try await upload(
+            request: request,
+            fromFile: bodyURL,
+            tempBodyURL: bodyURL,
+            taskDescription: taskDescription
+        )
+        if !(200..<300).contains(response.statusCode) {
             let bodyText = String(data: data, encoding: .utf8) ?? ""
-            Log.adDetection.error("Gemini combined call HTTP \(http.statusCode): \(bodyText, privacy: .public)")
+            Log.adDetection.error("Gemini combined call HTTP \(response.statusCode): \(bodyText, privacy: .public)")
             throw CloudTranscriptionError.uploadFailed(
-                NSError(domain: "Gemini", code: http.statusCode,
-                        userInfo: [NSLocalizedDescriptionKey: "HTTP \(http.statusCode): \(bodyText.prefix(500))"])
+                NSError(domain: "Gemini", code: response.statusCode,
+                        userInfo: [NSLocalizedDescriptionKey: "HTTP \(response.statusCode): \(bodyText.prefix(500))"])
             )
         }
         let decoded = try decoder.decode(GeminiResponse.self, from: data)
         guard let text = decoded.candidates.first?.content.parts.first?.text else {
             throw CloudTranscriptionError.parseFailure("Missing response text")
         }
-        let parsed: CombinedResponse
+        let ads: [DetectedAd]
         do {
-            parsed = try JSONDecoder().decode(CombinedResponse.self, from: Data(text.utf8))
+            let parsed = try JSONDecoder().decode(SegmentsOnlyResponse.self, from: Data(text.utf8))
+            ads = Self.detectedAds(from: parsed.segments)
         } catch {
             throw CloudTranscriptionError.parseFailure(error.localizedDescription)
         }
-        let transcript = parsed.transcript.compactMap { row -> TranscribedSegment? in
-            guard row.endSeconds > row.startSeconds else { return nil }
-            return TranscribedSegment(
-                startSeconds: row.startSeconds,
-                endSeconds: row.endSeconds,
-                text: row.text
-            )
+        let usage = decoded.usageMetadata.map {
+            TokenUsage(inputTokens: $0.promptTokenCount ?? 0, outputTokens: $0.candidatesTokenCount ?? 0)
         }
-        let ads = parsed.segments.compactMap { row -> DetectedAd? in
+        return (ads.sorted { $0.startSeconds < $1.startSeconds }, usage)
+    }
+
+    private static let responseSchema: [String: Any] = {
+        let segmentSchema: [String: Any] = [
+            "type": "OBJECT",
+            "properties": [
+                "startSeconds": ["type": "NUMBER"],
+                "endSeconds": ["type": "NUMBER"],
+                "summary": ["type": "STRING"],
+                "kind": [
+                    "type": "STRING",
+                    "enum": ["ad", "intro", "outro"]
+                ]
+            ],
+            "required": ["startSeconds", "endSeconds", "summary", "kind"]
+        ]
+        return [
+            "type": "OBJECT",
+            "properties": [
+                "segments": [
+                    "type": "ARRAY",
+                    "items": segmentSchema
+                ]
+            ],
+            "required": ["segments"]
+        ]
+    }()
+
+    private static func detectedAds(from rows: [CombinedResponse.SegmentRow]) -> [DetectedAd] {
+        rows.compactMap { row -> DetectedAd? in
             guard row.endSeconds > row.startSeconds else { return nil }
             let kind = SegmentKind(rawValue: row.kind) ?? .ad
             return DetectedAd(
@@ -417,25 +442,81 @@ actor CloudTranscriptionService {
                 kind: kind
             )
         }
-        let usage = decoded.usageMetadata.map {
-            TokenUsage(inputTokens: $0.promptTokenCount ?? 0, outputTokens: $0.candidatesTokenCount ?? 0)
-        }
-        return (transcript.sorted { $0.startSeconds < $1.startSeconds },
-                ads.sorted { $0.startSeconds < $1.startSeconds },
-                usage)
     }
+}
+
+// MARK: - URLSession delegate
+
+extension CloudTranscriptionService: @preconcurrency URLSessionDataDelegate {
+    func urlSession(
+        _ session: URLSession,
+        dataTask: URLSessionDataTask,
+        didReceive data: Data
+    ) {
+        lock.lock()
+        pending[dataTask.taskIdentifier]?.receivedData.append(data)
+        lock.unlock()
+    }
+
+    func urlSession(
+        _ session: URLSession,
+        task: URLSessionTask,
+        didSendBodyData _: Int64,
+        totalBytesSent: Int64,
+        totalBytesExpectedToSend: Int64
+    ) {
+        guard totalBytesExpectedToSend > 0 else { return }
+        lock.lock()
+        let handler = pending[task.taskIdentifier]?.progressHandler
+        lock.unlock()
+        handler?(totalBytesSent, totalBytesExpectedToSend)
+    }
+
+    func urlSession(
+        _ session: URLSession,
+        task: URLSessionTask,
+        didCompleteWithError error: Error?
+    ) {
+        lock.lock()
+        let entry = pending.removeValue(forKey: task.taskIdentifier)
+        lock.unlock()
+        if let tempBody = entry?.bodyFileURL {
+            try? FileManager.default.removeItem(at: tempBody)
+        }
+        if let error {
+            let urlStr = task.originalRequest?.url?.absoluteString ?? "?"
+            Log.adDetection.error("Cloud task failed url=\(urlStr, privacy: .public) \(Log.describe(error), privacy: .public)")
+            entry?.completion(.failure(error))
+            return
+        }
+        guard let http = task.response as? HTTPURLResponse else {
+            entry?.completion(.failure(URLError(.badServerResponse)))
+            return
+        }
+        entry?.completion(.success((entry?.receivedData ?? Data(), http)))
+    }
+
+    func urlSessionDidFinishEvents(forBackgroundURLSession session: URLSession) {
+        lock.lock()
+        let pending = pendingBackgroundCompletion
+        pendingBackgroundCompletion = nil
+        lock.unlock()
+        DispatchQueue.main.async { pending?.handler() }
+    }
+}
+
+/// Holds a non-`Sendable` UIKit completion handler so it can be stored on
+/// the service (which is `@unchecked Sendable`) and invoked later on the
+/// main queue. The handler is set once at construction (`let`), so reading
+/// it from any thread is safe.
+nonisolated private final class BackgroundCompletion: @unchecked Sendable {
+    let handler: () -> Void
+    init(_ handler: @escaping () -> Void) { self.handler = handler }
 }
 
 // MARK: - Decodable shapes
 
-nonisolated private struct CombinedResponse: Decodable {
-    let transcript: [TranscriptRow]
-    let segments: [SegmentRow]
-    struct TranscriptRow: Decodable {
-        let startSeconds: Double
-        let endSeconds: Double
-        let text: String
-    }
+nonisolated private struct CombinedResponse {
     struct SegmentRow: Decodable {
         let startSeconds: Double
         let endSeconds: Double
@@ -444,34 +525,8 @@ nonisolated private struct CombinedResponse: Decodable {
     }
 }
 
-/// Per-task delegate the service hands to
-/// `URLSession.upload(for:fromFile:delegate:)` so it can translate
-/// `didSendBodyData` events into `CloudTranscriptionStage.uploading`
-/// callbacks. When the upload reaches 100% of the expected bytes, the
-/// delegate also fires one `.analyzing` event so the row's UI label
-/// flips from "Uploading…" to "Analyzing…" while the LLM crunches.
-nonisolated private final class UploadProgressDelegate: NSObject, URLSessionTaskDelegate, @unchecked Sendable {
-    private let onStage: (@Sendable (CloudTranscriptionStage) -> Void)?
-    private var flippedToAnalyzing = false
-
-    init(onStage: (@Sendable (CloudTranscriptionStage) -> Void)?) {
-        self.onStage = onStage
-    }
-
-    func urlSession(
-        _ session: URLSession,
-        task: URLSessionTask,
-        didSendBodyData bytesSent: Int64,
-        totalBytesSent: Int64,
-        totalBytesExpectedToSend: Int64
-    ) {
-        guard let onStage, totalBytesExpectedToSend > 0 else { return }
-        onStage(.uploading(bytesSent: totalBytesSent, totalBytes: totalBytesExpectedToSend))
-        if !flippedToAnalyzing && totalBytesSent >= totalBytesExpectedToSend {
-            flippedToAnalyzing = true
-            onStage(.analyzing)
-        }
-    }
+nonisolated private struct SegmentsOnlyResponse: Decodable {
+    let segments: [CombinedResponse.SegmentRow]
 }
 
 nonisolated private struct GeminiFileUploadResponse: Decodable {

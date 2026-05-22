@@ -6,7 +6,6 @@ struct NowPlayingView: View {
 
     private var player = PlayerService.shared
 
-    @State private var showTranscript = false
     @State private var showNotes = false
     @State private var showAds = false
 
@@ -32,18 +31,6 @@ struct NowPlayingView: View {
             .navigationTitle("Now Playing")
             .navigationBarTitleDisplayMode(.inline)
         }
-        .sheet(isPresented: $showTranscript) {
-            if let ep = currentEpisode {
-                TranscriptView(
-                    segments: ep.transcript,
-                    adRegions: player.adRegions,
-                    onSeek: { time in
-                        player.seek(to: time)
-                        showTranscript = false
-                    }
-                )
-            }
-        }
         .sheet(isPresented: $showNotes) {
             if let ep = currentEpisode {
                 ShowNotesView(episode: ep)
@@ -52,7 +39,6 @@ struct NowPlayingView: View {
         .sheet(isPresented: $showAds) {
             if let ep = currentEpisode {
                 AdsTranscriptView(
-                    segments: ep.transcript,
                     ads: ep.adMarkers,
                     onSeek: { time in
                         player.seek(to: time)
@@ -96,11 +82,6 @@ struct NowPlayingView: View {
                         showNotes = true
                     } label: {
                         Label("Show Notes", systemImage: "doc.text")
-                    }
-                    Button {
-                        showTranscript = true
-                    } label: {
-                        Label("Transcript", systemImage: "text.alignleft")
                     }
                 }
                 .buttonStyle(.bordered)

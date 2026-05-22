@@ -8,13 +8,10 @@ struct ShowNotesView: View {
     let episode: Episode
 
     @State private var toast: String?
-    @State private var showTranscript = false
     /// Rendered show-notes HTML. Parsed lazily in `.task` so the sheet's
     /// appearance animation isn't blocked by NSAttributedString's HTML
     /// parser (which uses WebKit and must run on the main thread).
     @State private var renderedNotes: AttributedString?
-
-    private let player = PlayerService.shared
 
     var body: some View {
         NavigationStack {
@@ -34,15 +31,6 @@ struct ShowNotesView: View {
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
                     metadataBlock
-                    if !episode.transcript.isEmpty {
-                        Button {
-                            showTranscript = true
-                        } label: {
-                            Label("Show Transcript", systemImage: "text.alignleft")
-                        }
-                        .buttonStyle(.bordered)
-                        .padding(.top, 4)
-                    }
                     Divider()
                     if let renderedNotes {
                         Text(renderedNotes).textSelection(.enabled)
@@ -95,16 +83,6 @@ struct ShowNotesView: View {
                     .disabled(!episode.hasLocalFile)
                 }
             }
-            .sheet(isPresented: $showTranscript) {
-                TranscriptView(
-                    segments: episode.transcript,
-                    adRegions: adRegionsForEpisode,
-                    onSeek: { time in
-                        seek(to: time)
-                        showTranscript = false
-                    }
-                )
-            }
             .overlay(alignment: .bottom) {
                 if let toast {
                     Text(toast)
@@ -148,65 +126,32 @@ struct ShowNotesView: View {
         if let bytes = episode.fileSizeBytes, bytes > 0 {
             rows.append(("File size", TimeFormatting.fileSize(bytes)))
         }
-        if !episode.transcript.isEmpty {
-            var words = 0
-            var chars = 0
-            for seg in episode.transcript {
-                words += seg.text.split(whereSeparator: \.isWhitespace).count
-                chars += seg.text.count
+        let total = metadataDurationForAds
+        if total > 0 {
+            let activeAds = episode.adMarkers.filter { !$0.isDeleted }
+            let adSeconds = activeAds.reduce(0.0) { $0 + ($1.endSeconds - $1.startSeconds) }
+            let pct = adSeconds / total * 100
+            let pctString = String(format: "%.1f%%", pct)
+            let adsValue: String
+            if adSeconds > 0 {
+                adsValue = "\(pctString) (\(TimeFormatting.longDuration(adSeconds)))"
+            } else {
+                adsValue = "0%"
             }
-            // Locale-aware number formatting (e.g. "5,234" in en, "5 234" in fr).
-            let value = "\(words.formatted()) words (\(chars.formatted()) chars)"
-            rows.append(("Transcript", value))
-
-            // Ad-percentage row — total prefers `episode.duration` (from the
-            // RSS feed) and falls back to the last transcript segment's end
-            // time. Only shown when the transcript exists (i.e. analysis has
-            // run); 0 % is meaningful info too.
-            let total = (episode.duration ?? 0) > 0
-                ? episode.duration!
-                : (episode.transcript.map(\.endSeconds).max() ?? 0)
-            if total > 0 {
-                let activeAds = episode.adMarkers.filter { !$0.isDeleted }
-                let adSeconds = activeAds.reduce(0.0) { $0 + ($1.endSeconds - $1.startSeconds) }
-                let pct = adSeconds / total * 100
-                let pctString = String(format: "%.1f%%", pct)
-                let adsValue: String
-                if adSeconds > 0 {
-                    adsValue = "\(pctString) (\(TimeFormatting.longDuration(adSeconds)))"
-                } else {
-                    adsValue = "0%"
-                }
-                rows.append(("Ads", adsValue))
-            }
+            rows.append(("Ads", adsValue))
         }
         return rows
     }
 
-    // MARK: - Transcript helpers
-
-    /// Ad regions belonging to *this* episode — used to highlight ad lines
-    /// in the transcript view. Always built from the episode's own markers
-    /// (not the player's `adRegions`) so we render them correctly even when
-    /// the episode isn't currently loaded in the player.
-    private var adRegionsForEpisode: [AdRegion] {
-        episode.adMarkers
-            .filter { !$0.isDeleted }
-            .map { AdRegion(startSeconds: $0.startSeconds, endSeconds: $0.endSeconds, kind: $0.kind) }
-            .sorted { $0.startSeconds < $1.startSeconds }
-    }
-
-    /// Tap on a transcript line seeks to that time. If this episode is the
-    /// one currently loaded, we just seek. Otherwise we load it first
-    /// (which sets it as the new "Now Playing") and seek there.
-    private func seek(to time: Double) {
-        if player.currentEpisodeID == episode.persistentModelID {
-            player.seek(to: time)
-        } else if episode.hasLocalFile {
-            let settings = AppSettings.current(in: context)
-            player.load(episode: episode, settings: settings)
-            player.seek(to: time)
+    private var metadataDurationForAds: Double {
+        if let duration = episode.duration, duration > 0 {
+            return duration
         }
+        let markerEnd = episode.adMarkers
+            .filter { !$0.isDeleted }
+            .map(\.endSeconds)
+            .max() ?? 0
+        return markerEnd
     }
 
     // MARK: - Toolbar actions

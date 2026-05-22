@@ -124,8 +124,8 @@ final class SubscriptionService {
         }
     }
 
-    /// Re-runs the entire AI pipeline (download + transcribe + ad detection)
-    /// for one episode. Wipes the local audio file, cached transcript, and
+    /// Re-runs the entire AI pipeline (download + ad detection) for one
+    /// episode. Wipes the local audio file, cached transcript, and
     /// existing ad markers, then enqueues processing. Preserves any
     /// `QueueItem`s pointing at the episode so the user's queue placement
     /// isn't lost when they ask the system to redo the analysis. Best for
@@ -155,12 +155,12 @@ final class SubscriptionService {
         ProcessingPipeline.shared.process(episode: episode)
     }
 
-    /// Re-runs only transcription + ad detection on the **existing** local
-    /// file (does not re-download). Useful when the user has tweaked the
-    /// detection prompt or filter policy and wants fresh markers without
-    /// re-fetching audio. Falls back to a full re-download if the file is
-    /// no longer on disk. Doesn't unload the player — playback can keep
-    /// going against the same audio while AI re-runs in the background.
+    /// Re-runs ad detection on the **existing** local file (does not
+    /// re-download). Useful when the user has changed models and wants
+    /// fresh markers without re-fetching audio. Falls back to a full
+    /// re-download if the file is no longer on disk. Doesn't unload the
+    /// player — playback can keep going against the same audio while AI
+    /// re-runs in the background.
     func reanalyzeEpisode(_ episode: Episode, in context: ModelContext) {
         guard episode.hasLocalFile else {
             redownloadAndReprocess(episode, in: context)

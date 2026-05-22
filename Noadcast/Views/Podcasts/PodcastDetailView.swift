@@ -78,7 +78,7 @@ struct PodcastDetailView: View {
             } header: {
                 Text("Settings")
             } footer: {
-                Text("When ad detection is off, this podcast's new episodes are downloaded but not transcribed, and no ads will be marked or skipped during playback.")
+                Text("When ad detection is off, this podcast's new episodes are downloaded but not analyzed, and no ads will be marked or skipped during playback.")
             }
 
             Section("Episodes") {
@@ -111,4 +111,3 @@ struct PodcastDetailView: View {
         )
     }
 }
-

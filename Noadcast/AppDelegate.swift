@@ -2,8 +2,9 @@ import UIKit
 
 /// Minimal `UIApplicationDelegate` whose only job is to receive the system's
 /// background-URLSession completion handler. iOS hands this to us when it
-/// relaunches the app to deliver download events; `DownloadService` invokes it
-/// inside `urlSessionDidFinishEvents(forBackgroundURLSession:)` so the system
+/// relaunches the app to deliver download or cloud-upload events; the
+/// matching service invokes it inside
+/// `urlSessionDidFinishEvents(forBackgroundURLSession:)` so the system
 /// knows we're done processing.
 final class AppDelegate: NSObject, UIApplicationDelegate {
     func application(
@@ -11,10 +12,13 @@ final class AppDelegate: NSObject, UIApplicationDelegate {
         handleEventsForBackgroundURLSession identifier: String,
         completionHandler: @escaping () -> Void
     ) {
-        guard identifier == DownloadService.backgroundSessionIdentifier else {
+        switch identifier {
+        case DownloadService.backgroundSessionIdentifier:
+            DownloadService.shared.storePendingBackgroundCompletion(completionHandler)
+        case CloudTranscriptionService.backgroundSessionIdentifier:
+            CloudTranscriptionService.shared.storePendingBackgroundCompletion(completionHandler)
+        default:
             completionHandler()
-            return
         }
-        DownloadService.shared.storePendingBackgroundCompletion(completionHandler)
     }
 }

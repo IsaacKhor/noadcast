@@ -1,78 +1,75 @@
 import Foundation
 
-/// Cloud LLM that handles ad detection. All providers receive the entire
-/// transcript in a single call and return a structured-JSON response
-/// (`AdSegmentsJSON`) constrained by the provider's response-schema feature.
+/// Cloud model that handles ad detection by analyzing the uploaded audio
+/// file and returning a structured JSON list of skip segments.
 nonisolated enum AdDetectionProvider: String, Codable, CaseIterable, Sendable {
-    case geminiFlashLite
-    case geminiFlash
-    case gpt54Nano
-    case gpt54Mini
+    case gemini35Flash
+    case gemini31FlashLite
+    case gemini25Flash
+    case gemini25FlashLite
 
     var label: String {
         switch self {
-        case .geminiFlashLite: "Gemini Flash-Lite (latest)"
-        case .geminiFlash: "Gemini Flash (latest)"
-        case .gpt54Nano: "GPT-5.4 nano"
-        case .gpt54Mini: "GPT-5.4 mini"
+        case .gemini35Flash: "Gemini 3.5 Flash"
+        case .gemini31FlashLite: "Gemini 3.1 Flash Lite"
+        case .gemini25Flash: "Gemini 2.5 Flash"
+        case .gemini25FlashLite: "Gemini 2.5 Flash Lite"
         }
     }
 
     /// Exact model identifier passed to the provider's REST API.
     var apiModel: String {
         switch self {
-        case .geminiFlashLite: "gemini-flash-lite-latest"
-        case .geminiFlash: "gemini-flash-latest"
-        case .gpt54Nano: "gpt-5.4-nano"
-        case .gpt54Mini: "gpt-5.4-mini"
+        case .gemini35Flash: "gemini-3.5-flash"
+        case .gemini31FlashLite: "gemini-3.1-flash-lite"
+        case .gemini25Flash: "gemini-2.5-flash"
+        case .gemini25FlashLite: "gemini-2.5-flash-lite"
         }
     }
 
     var requiresGoogleKey: Bool {
-        switch self {
-        case .geminiFlashLite, .geminiFlash: true
-        default: false
-        }
+        true
     }
 
     var requiresOpenAIKey: Bool {
-        switch self {
-        case .gpt54Nano, .gpt54Mini: true
-        default: false
-        }
+        false
     }
 
-    /// Whether `CloudTranscriptionService` can route through this provider.
-    /// Today only the Gemini family is wired up — OpenAI's audio-input
-    /// pricing and file-handling differ enough that it's worth doing
-    /// separately, later.
+    /// All currently-exposed detection providers are Gemini models and can
+    /// accept file-based multimodal input through `CloudTranscriptionService`.
     var supportsCloudTranscription: Bool {
+        true
+    }
+
+    /// USD per million text/image/video input tokens, based on the
+    /// provider's published standard paid-tier rates.
+    var pricePerMTokensTextInput: Double {
         switch self {
-        case .geminiFlashLite, .geminiFlash: true
-        case .gpt54Nano, .gpt54Mini: false
+        case .gemini35Flash: 1.50
+        case .gemini31FlashLite: 0.25
+        case .gemini25Flash: 0.30
+        case .gemini25FlashLite: 0.10
         }
     }
 
-    /// USD per million input tokens (text or audio). Used for the rough
-    /// running-cost estimate in Settings. Audio is reported by the provider
-    /// in the same `promptTokenCount` field as text — Gemini converts 1
-    /// second of audio to 32 tokens internally.
-    var pricePerMTokensInput: Double {
+    /// USD per million audio input tokens, based on the provider's
+    /// published standard paid-tier rates.
+    var pricePerMTokensAudioInput: Double {
         switch self {
-        case .geminiFlashLite: 0.10
-        case .geminiFlash: 0.30
-        case .gpt54Nano: 0.05
-        case .gpt54Mini: 0.25
+        case .gemini35Flash: 1.50
+        case .gemini31FlashLite: 0.50
+        case .gemini25Flash: 1.00
+        case .gemini25FlashLite: 0.30
         }
     }
 
     /// USD per million output tokens.
     var pricePerMTokensOutput: Double {
         switch self {
-        case .geminiFlashLite: 0.40
-        case .geminiFlash: 2.50
-        case .gpt54Nano: 0.40
-        case .gpt54Mini: 2.00
+        case .gemini35Flash: 9.00
+        case .gemini31FlashLite: 1.50
+        case .gemini25Flash: 2.50
+        case .gemini25FlashLite: 0.40
         }
     }
 }
