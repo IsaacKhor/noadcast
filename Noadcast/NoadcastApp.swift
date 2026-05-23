@@ -37,10 +37,16 @@ struct NoadcastApp: App {
                 _ = NetworkMonitor.shared
             }
         }
-        // Restart any cloud / download work that got interrupted by a
-        // previous app termination. Runs after wiring so the pipeline
-        // sees the model container.
-        Task { await ProcessingPipeline.shared.recoverPendingEpisodes() }
+        // Repair duplicate rows before restart recovery. Older builds could
+        // leave duplicate episodes / queue items behind after an interrupted
+        // refresh or pipeline run, and recovery should only restart the
+        // canonical rows.
+        let container = sharedModelContainer
+        Task {
+            let maintenance = DatabaseMaintenanceActor(modelContainer: container)
+            _ = await maintenance.cleanupDuplicates()
+            await ProcessingPipeline.shared.recoverPendingEpisodes()
+        }
     }
 
     var body: some Scene {

@@ -59,7 +59,7 @@ struct NowPlayingView: View {
                     Text(episode.title)
                         .font(.headline)
                         .multilineTextAlignment(.center)
-                    Text(episode.podcast?.title ?? "")
+                    Text(episode.podcastTitle ?? episode.podcast?.title ?? "")
                         .font(.subheadline)
                         .foregroundStyle(.secondary)
                 }
@@ -91,7 +91,7 @@ struct NowPlayingView: View {
     }
 
     private func artwork(for episode: Episode) -> some View {
-        let url = episode.podcast?.artworkDisplayURL
+        let url = episode.podcastArtworkDisplayURL ?? episode.podcast?.artworkDisplayURL
         return AsyncImage(url: url) { phase in
             switch phase {
             case .success(let image):

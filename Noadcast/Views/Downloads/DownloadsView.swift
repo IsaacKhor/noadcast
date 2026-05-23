@@ -7,42 +7,29 @@ import SwiftData
 struct DownloadsView: View {
     @Environment(\.modelContext) private var context
     @State private var showCancelAllConfirm = false
+    @State private var inProgressEpisodes: [Episode] = []
+    @State private var failedEpisodes: [Episode] = []
+    @State private var downloadedEpisodes: [Episode] = []
+    @State private var totalBytes: Int64 = 0
 
-    // Three separate predicate-filtered queries instead of one fetch-all +
-    // in-memory filter. Each predicate runs in SQLite so the rows that
-    // never appear on screen (the typical case: thousands of un-downloaded
-    // episodes across many podcasts) aren't faulted into memory.
+    // One SwiftData query covers the whole tab. The previous three live
+    // `Episode` queries all invalidated on processing updates, which made
+    // download progress noisier than it needed to be while scrolling.
     @Query(
-        filter: #Predicate<Episode> { $0.isInProgress },
+        filter: #Predicate<Episode> {
+            $0.isInProgress || $0.processingStateRaw == "failed" || $0.localFilename != nil
+        },
         sort: \.publishedAt,
         order: .reverse
     )
-    private var inProgress: [Episode]
-
-    @Query(
-        filter: #Predicate<Episode> { $0.processingStateRaw == "failed" },
-        sort: \.publishedAt,
-        order: .reverse
-    )
-    private var failed: [Episode]
-
-    @Query(
-        filter: #Predicate<Episode> { $0.localFilename != nil },
-        sort: \.fileSizeBytes,
-        order: .reverse
-    )
-    private var downloaded: [Episode]
+    private var visibleEpisodes: [Episode]
 
     private var pipeline = ProcessingPipeline.shared
-
-    private var totalBytes: Int64 {
-        downloaded.reduce(0) { $0 + ($1.fileSizeBytes ?? 0) }
-    }
 
     var body: some View {
         NavigationStack {
             Group {
-                if inProgress.isEmpty && downloaded.isEmpty && failed.isEmpty {
+                if visibleEpisodes.isEmpty {
                     ContentUnavailableView {
                         Label("Nothing downloaded", systemImage: "arrow.down.circle")
                     } description: {
@@ -50,10 +37,10 @@ struct DownloadsView: View {
                     }
                 } else {
                     List {
-                        if !inProgress.isEmpty {
+                        if !inProgressEpisodes.isEmpty {
                             Section("In progress") {
-                                ForEach(inProgress) { episode in
-                                    EpisodeRow(episode: episode, style: .withPodcast) {
+                                ForEach(inProgressEpisodes) { episode in
+                                    EpisodeRow(episode: episode, style: .withPodcast, showProgress: true) {
                                         Button {
                                             pipeline.cancel(episodeID: episode.persistentModelID)
                                         } label: {
@@ -68,10 +55,10 @@ struct DownloadsView: View {
                             }
                         }
 
-                        if !failed.isEmpty {
+                        if !failedEpisodes.isEmpty {
                             Section("Failed") {
-                                ForEach(failed) { episode in
-                                    EpisodeRow(episode: episode, style: .withPodcast) {
+                                ForEach(failedEpisodes) { episode in
+                                    EpisodeRow(episode: episode, style: .withPodcast, showProgress: true) {
                                         Button {
                                             pipeline.process(episode: episode)
                                         } label: {
@@ -96,10 +83,10 @@ struct DownloadsView: View {
                             .listRowInsets(.init(top: 10, leading: 16, bottom: 10, trailing: 16))
                         }
 
-                        if !downloaded.isEmpty {
+                        if !downloadedEpisodes.isEmpty {
                             Section("Downloaded") {
-                                ForEach(downloaded) { episode in
-                                    EpisodeRow(episode: episode, style: .withPodcast) {
+                                ForEach(downloadedEpisodes) { episode in
+                                    EpisodeRow(episode: episode, style: .withPodcast, showProgress: true) {
                                         Text(TimeFormatting.fileSize(episode.fileSizeBytes ?? 0))
                                             .font(.caption.monospacedDigit())
                                             .foregroundStyle(.secondary)
@@ -115,8 +102,10 @@ struct DownloadsView: View {
             }
             .navigationTitle("Downloads")
             .navigationBarTitleDisplayMode(.inline)
+            .onAppear { refreshSections() }
+            .onChange(of: visibleEpisodes) { _, _ in refreshSections() }
             .toolbar {
-                if !inProgress.isEmpty {
+                if !inProgressEpisodes.isEmpty {
                     ToolbarItem(placement: .topBarTrailing) {
                         Button("Cancel All", role: .destructive) {
                             showCancelAllConfirm = true
@@ -125,7 +114,7 @@ struct DownloadsView: View {
                 }
             }
             .confirmationDialog(
-                "Cancel \(inProgress.count) in-progress download\(inProgress.count == 1 ? "" : "s")?",
+                "Cancel \(inProgressEpisodes.count) in-progress download\(inProgressEpisodes.count == 1 ? "" : "s")?",
                 isPresented: $showCancelAllConfirm,
                 titleVisibility: .visible
             ) {
@@ -135,14 +124,23 @@ struct DownloadsView: View {
         }
     }
 
+    private func refreshSections() {
+        inProgressEpisodes = visibleEpisodes.filter(\.isInProgress)
+        failedEpisodes = visibleEpisodes.filter { $0.processingState == .failed }
+        downloadedEpisodes = visibleEpisodes
+            .filter(\.isMarkedDownloaded)
+            .sorted { ($0.fileSizeBytes ?? 0) > ($1.fileSizeBytes ?? 0) }
+        totalBytes = downloadedEpisodes.reduce(0) { $0 + ($1.fileSizeBytes ?? 0) }
+    }
+
     private func cancelAllInProgress() {
-        for episode in inProgress {
+        for episode in inProgressEpisodes {
             pipeline.cancel(episodeID: episode.persistentModelID)
         }
     }
 
     private func deleteDownloaded(at offsets: IndexSet) {
-        let toDelete = offsets.map { downloaded[$0] }
+        let toDelete = offsets.map { downloadedEpisodes[$0] }
         for episode in toDelete {
             // Unified delete: removes the file *and* any QueueItem pointing
             // at this episode, and unloads the player if it's currently

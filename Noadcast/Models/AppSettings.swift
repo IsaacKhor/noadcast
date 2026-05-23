@@ -59,9 +59,8 @@ final class AppSettings {
 
     /// Lifetime cumulative input + output tokens billed to the user's API
     /// key(s) for ad-detection (and, when enabled, cloud transcription)
-    /// calls. Summed across providers — switching from Gemini to OpenAI
-    /// doesn't reset the counter. Updated by `ProcessingPipeline` after
-    /// each successful call.
+    /// calls. Summed across models so changing providers doesn't reset the
+    /// counter. Updated by `ProcessingPipeline` after each successful call.
     var lifetimeAdDetectionInputTokens: Int = 0
     var lifetimeAdDetectionOutputTokens: Int = 0
 
@@ -80,12 +79,13 @@ final class AppSettings {
 
     /// Which cloud model performs ad detection. See `AdDetectionProvider`.
     var adDetectionProviderRaw: String = AdDetectionProvider.gemini35Flash.rawValue
+    /// If enabled, uploads a temporary low-bitrate copy to Gemini instead of
+    /// the local playback file.
+    var downsampleAudioBeforeUpload: Bool = false
     /// API key for Google AI Studio (Gemini providers). Stored unencrypted in
     /// the app's SwiftData store — fine for a personal-use app; move to
     /// Keychain if this ever ships to multiple users.
     var googleAPIKey: String?
-    /// API key for OpenAI. Same caveat re: storage as `googleAPIKey`.
-    var openAIAPIKey: String?
 
     var adDetectionProvider: AdDetectionProvider {
         get { AdDetectionProvider(rawValue: adDetectionProviderRaw) ?? .gemini35Flash }

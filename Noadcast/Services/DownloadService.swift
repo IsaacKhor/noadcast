@@ -44,11 +44,22 @@ nonisolated final class DownloadService: NSObject, @unchecked Sendable {
     static let backgroundSessionIdentifier = "com.isaackhor.Noadcast.background-downloads"
 
     private var continuations: [Int: AsyncThrowingStream<DownloadEvent, Error>.Continuation] = [:]
+    private var progressSnapshots: [Int: ProgressSnapshot] = [:]
     private var pendingBackgroundCompletion: BackgroundCompletion?
     private let lock = NSLock()
 
     private var sessionStorage: URLSession!
     var session: URLSession { sessionStorage }
+
+    private struct ProgressSnapshot {
+        var lastYieldUptime: TimeInterval
+        var lastBytesWritten: Int64
+        var lastTotalBytes: Int64?
+    }
+
+    private static let progressThrottleInterval: TimeInterval = 0.5
+    private static let progressThrottleBytes: Int64 = 512 * 1024
+    private static let progressThrottleFraction: Double = 0.01
 
     override private init() {
         super.init()
@@ -87,6 +98,7 @@ nonisolated final class DownloadService: NSObject, @unchecked Sendable {
                 }
                 self.lock.lock()
                 self.continuations.removeValue(forKey: taskID)
+                self.progressSnapshots.removeValue(forKey: taskID)
                 self.lock.unlock()
             }
 
@@ -117,6 +129,7 @@ nonisolated final class DownloadService: NSObject, @unchecked Sendable {
     ) -> AsyncThrowingStream<DownloadEvent, Error>.Continuation? {
         lock.lock()
         defer { lock.unlock() }
+        progressSnapshots.removeValue(forKey: taskID)
         return continuations.removeValue(forKey: taskID)
     }
 
@@ -126,6 +139,45 @@ nonisolated final class DownloadService: NSObject, @unchecked Sendable {
         lock.lock()
         defer { lock.unlock() }
         return continuations[taskID]
+    }
+
+    private func shouldYieldProgress(taskID: Int, progress: DownloadProgress) -> Bool {
+        let now = ProcessInfo.processInfo.systemUptime
+        lock.lock()
+        defer { lock.unlock() }
+
+        guard let previous = progressSnapshots[taskID] else {
+            progressSnapshots[taskID] = ProgressSnapshot(
+                lastYieldUptime: now,
+                lastBytesWritten: progress.bytesWritten,
+                lastTotalBytes: progress.totalBytes
+            )
+            return true
+        }
+
+        let isComplete = progress.totalBytes.map { progress.bytesWritten >= $0 } ?? false
+        let totalBecameKnown = previous.lastTotalBytes == nil && progress.totalBytes != nil
+        let elapsed = now - previous.lastYieldUptime
+        let byteDelta = progress.bytesWritten - previous.lastBytesWritten
+        let fractionDelta: Double = {
+            guard let total = progress.totalBytes, total > 0 else { return 0 }
+            return Double(byteDelta) / Double(total)
+        }()
+
+        let shouldYield = isComplete
+            || totalBecameKnown
+            || (elapsed >= Self.progressThrottleInterval
+                && (byteDelta >= Self.progressThrottleBytes
+                    || fractionDelta >= Self.progressThrottleFraction))
+
+        if shouldYield {
+            progressSnapshots[taskID] = ProgressSnapshot(
+                lastYieldUptime: now,
+                lastBytesWritten: progress.bytesWritten,
+                lastTotalBytes: progress.totalBytes
+            )
+        }
+        return shouldYield
     }
 }
 
@@ -149,8 +201,12 @@ extension DownloadService: @preconcurrency URLSessionDownloadDelegate {
         totalBytesExpectedToWrite: Int64
     ) {
         let total: Int64? = totalBytesExpectedToWrite > 0 ? totalBytesExpectedToWrite : nil
+        let progress = DownloadProgress(bytesWritten: totalBytesWritten, totalBytes: total)
+        guard shouldYieldProgress(taskID: downloadTask.taskIdentifier, progress: progress) else {
+            return
+        }
         peekContinuation(for: downloadTask.taskIdentifier)?.yield(.progress(
-            DownloadProgress(bytesWritten: totalBytesWritten, totalBytes: total)
+            progress
         ))
     }
 

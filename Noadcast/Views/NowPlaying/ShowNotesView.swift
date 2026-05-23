@@ -20,7 +20,7 @@ struct ShowNotesView: View {
                     Text(episode.title)
                         .font(.title2.bold())
                     HStack(spacing: 6) {
-                        if let podcastTitle = episode.podcast?.title {
+                        if let podcastTitle = episode.podcastTitle ?? episode.podcast?.title {
                             Text(podcastTitle)
                         }
                         if let date = episode.publishedAt {

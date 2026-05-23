@@ -40,6 +40,11 @@ final class Podcast {
     /// just to sort the podcast list. `nil` means "not yet computed".
     var latestEpisodeAt: Date?
 
+    /// Denormalized episode count for podcast rows. Reading
+    /// `episodes.count` in a row body faults the relationship while
+    /// scrolling, so services keep this scalar fresh instead.
+    var episodeCount: Int = 0
+
     @Relationship(deleteRule: .cascade, inverse: \Episode.podcast)
     var episodes: [Episode] = []
 
@@ -77,5 +82,21 @@ final class Podcast {
             }
         }
         return artworkURL
+    }
+
+    /// UI-only artwork URL. Avoids filesystem checks from row bodies; service
+    /// code is responsible for keeping cached artwork filenames valid.
+    var cachedArtworkDisplayURL: URL? {
+        if let filename = cachedArtworkFilename {
+            return ArtworkService.localURL(filename: filename)
+        }
+        return artworkURL
+    }
+
+    func syncEpisodeSnapshots() {
+        episodeCount = episodes.count
+        for episode in episodes {
+            episode.syncPodcastSnapshot(from: self)
+        }
     }
 }

@@ -3,6 +3,7 @@ import Foundation
 /// Cloud model that handles ad detection by analyzing the uploaded audio
 /// file and returning a structured JSON list of skip segments.
 nonisolated enum AdDetectionProvider: String, Codable, CaseIterable, Sendable {
+    case gemini3Flash
     case gemini35Flash
     case gemini31FlashLite
     case gemini25Flash
@@ -10,6 +11,7 @@ nonisolated enum AdDetectionProvider: String, Codable, CaseIterable, Sendable {
 
     var label: String {
         switch self {
+        case .gemini3Flash: "Gemini 3 Flash Preview"
         case .gemini35Flash: "Gemini 3.5 Flash"
         case .gemini31FlashLite: "Gemini 3.1 Flash Lite"
         case .gemini25Flash: "Gemini 2.5 Flash"
@@ -20,6 +22,7 @@ nonisolated enum AdDetectionProvider: String, Codable, CaseIterable, Sendable {
     /// Exact model identifier passed to the provider's REST API.
     var apiModel: String {
         switch self {
+        case .gemini3Flash: "gemini-3-flash-preview"
         case .gemini35Flash: "gemini-3.5-flash"
         case .gemini31FlashLite: "gemini-3.1-flash-lite"
         case .gemini25Flash: "gemini-2.5-flash"
@@ -29,10 +32,6 @@ nonisolated enum AdDetectionProvider: String, Codable, CaseIterable, Sendable {
 
     var requiresGoogleKey: Bool {
         true
-    }
-
-    var requiresOpenAIKey: Bool {
-        false
     }
 
     /// All currently-exposed detection providers are Gemini models and can
@@ -45,6 +44,7 @@ nonisolated enum AdDetectionProvider: String, Codable, CaseIterable, Sendable {
     /// provider's published standard paid-tier rates.
     var pricePerMTokensTextInput: Double {
         switch self {
+        case .gemini3Flash: 0.50
         case .gemini35Flash: 1.50
         case .gemini31FlashLite: 0.25
         case .gemini25Flash: 0.30
@@ -56,6 +56,7 @@ nonisolated enum AdDetectionProvider: String, Codable, CaseIterable, Sendable {
     /// published standard paid-tier rates.
     var pricePerMTokensAudioInput: Double {
         switch self {
+        case .gemini3Flash: 1.00
         case .gemini35Flash: 1.50
         case .gemini31FlashLite: 0.50
         case .gemini25Flash: 1.00
@@ -66,6 +67,7 @@ nonisolated enum AdDetectionProvider: String, Codable, CaseIterable, Sendable {
     /// USD per million output tokens.
     var pricePerMTokensOutput: Double {
         switch self {
+        case .gemini3Flash: 3.00
         case .gemini35Flash: 9.00
         case .gemini31FlashLite: 1.50
         case .gemini25Flash: 2.50

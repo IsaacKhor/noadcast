@@ -3,33 +3,36 @@ import SwiftData
 
 struct PodcastsView: View {
     @Environment(\.modelContext) private var context
-    @Query private var podcasts: [Podcast]
-    @Query private var settingsList: [AppSettings]
+    /// Sorted at the SwiftData layer — body never calls `.sorted(by:)`.
+    /// The alphabetical mode is handled by maintaining a `@State` cache
+    /// refreshed only when the data or the mode actually changes
+    /// (`refreshSort()`); a body re-eval has no per-frame sort cost.
+    @Query(sort: \Podcast.latestEpisodeAt, order: .reverse) private var podcasts: [Podcast]
     @State private var showAdd = false
     @State private var searchText = ""
+    @State private var sortedPodcasts: [Podcast] = []
+    @State private var sortMode: PodcastSortMode = .latestEpisode
+    @State private var lastGlobalRefreshAt: Date?
 
-    private var settings: AppSettings? { settingsList.first }
-    private var sortMode: PodcastSortMode { settings?.podcastSortMode ?? .latestEpisode }
-
-    private var sortedPodcasts: [Podcast] {
-        switch sortMode {
-        case .alphabetical:
-            return podcasts.sorted {
-                $0.title.localizedCaseInsensitiveCompare($1.title) == .orderedAscending
-            }
-        case .latestEpisode:
-            return podcasts.sorted {
-                $0.latestEpisodeSortDate > $1.latestEpisodeSortDate
-            }
+    private var visiblePodcasts: [Podcast] {
+        let source = sortedPodcasts.isEmpty && !podcasts.isEmpty ? podcasts : sortedPodcasts
+        let trimmed = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return source }
+        return source.filter { podcast in
+            podcast.title.localizedCaseInsensitiveContains(trimmed) ||
+            (podcast.author?.localizedCaseInsensitiveContains(trimmed) ?? false)
         }
     }
 
-    private var visiblePodcasts: [Podcast] {
-        let trimmed = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return sortedPodcasts }
-        return sortedPodcasts.filter { podcast in
-            podcast.title.localizedCaseInsensitiveContains(trimmed) ||
-            (podcast.author?.localizedCaseInsensitiveContains(trimmed) ?? false)
+    private func refreshSort() {
+        switch sortMode {
+        case .latestEpisode:
+            // `@Query` already returns the rows in this order.
+            sortedPodcasts = podcasts
+        case .alphabetical:
+            sortedPodcasts = podcasts.sorted {
+                $0.title.localizedCaseInsensitiveCompare($1.title) == .orderedAscending
+            }
         }
     }
 
@@ -46,7 +49,7 @@ struct PodcastsView: View {
                     ContentUnavailableView.search(text: searchText)
                 } else {
                     List {
-                        if let lastRefresh = settings?.lastGlobalRefreshAt, searchText.isEmpty {
+                        if let lastRefresh = lastGlobalRefreshAt, searchText.isEmpty {
                             Section {
                                 HStack {
                                     Label("Last refresh", systemImage: "arrow.clockwise")
@@ -92,15 +95,28 @@ struct PodcastsView: View {
             }
             .refreshable {
                 await SubscriptionService.shared.refreshAll(context: context)
+                refreshSettingsSnapshot()
             }
+            .onAppear { refreshSettingsSnapshot() }
+            .onChange(of: podcasts) { _, _ in refreshSort() }
+            .onChange(of: sortMode) { _, _ in refreshSort() }
         }
+    }
+
+    private func refreshSettingsSnapshot() {
+        let settings = AppSettings.current(in: context)
+        sortMode = settings.podcastSortMode
+        lastGlobalRefreshAt = settings.lastGlobalRefreshAt
+        refreshSort()
     }
 
     private var sortMenu: some View {
         Menu {
             ForEach(PodcastSortMode.allCases, id: \.self) { mode in
                 Button {
-                    settings?.podcastSortMode = mode
+                    let settings = AppSettings.current(in: context)
+                    settings.podcastSortMode = mode
+                    sortMode = mode
                     try? context.save()
                 } label: {
                     if mode == sortMode {
@@ -128,7 +144,7 @@ private struct PodcastRow: View {
 
     var body: some View {
         HStack(spacing: 12) {
-            CachedArtworkImage(url: podcast.artworkDisplayURL)
+            CachedArtworkImage(url: podcast.cachedArtworkDisplayURL, size: 56)
                 .frame(width: 56, height: 56)
                 .clipShape(RoundedRectangle(cornerRadius: 8))
 
@@ -138,7 +154,7 @@ private struct PodcastRow: View {
                     Text(author).font(.caption).foregroundStyle(.secondary).lineLimit(1)
                 }
                 HStack(spacing: 6) {
-                    Text("\(podcast.episodes.count) episodes")
+                    Text("\(podcast.episodeCount) episodes")
                     if let latest = podcast.latestEpisodePublishedAt {
                         Text("·")
                         Text(latest, format: .relative(presentation: .named))

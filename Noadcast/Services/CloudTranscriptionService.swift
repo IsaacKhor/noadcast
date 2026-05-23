@@ -1,4 +1,5 @@
 import Foundation
+import AVFoundation
 import os
 
 /// One-shot file-analysis helper: uploads the entire audio file to a Gemini
@@ -16,8 +17,8 @@ import os
 ///   from text alone.
 ///
 /// Costs: token spend goes up ~10–30× per episode (audio frames count as
-/// input tokens), and ~2× bandwidth (we download the MP3 for local
-/// playback, then upload it).
+/// input tokens), and bandwidth depends on whether Settings uses the
+/// original playback file or a temporary downsampled upload copy.
 nonisolated struct CloudTranscriptionResult: Sendable {
     let ads: [DetectedAd]
     let usage: TokenUsage?
@@ -37,6 +38,7 @@ nonisolated enum CloudTranscriptionStage: Sendable {
 enum CloudTranscriptionError: LocalizedError {
     case providerUnsupported(String)
     case missingAPIKey(String)
+    case downsampleFailed(Error)
     case uploadFailed(Error)
     case parseFailure(String)
 
@@ -46,6 +48,8 @@ enum CloudTranscriptionError: LocalizedError {
             "\(provider) doesn't support file-based analysis. Pick a different Gemini model in Settings → Detection model."
         case .missingAPIKey(let provider):
             "\(provider) API key missing — add one in Settings → Detection model."
+        case .downsampleFailed(let err):
+            "Couldn't downsample the audio file: \(err.localizedDescription)"
         case .uploadFailed(let err):
             "Couldn't upload the audio file: \(err.localizedDescription)"
         case .parseFailure(let msg):
@@ -77,11 +81,103 @@ nonisolated final class CloudTranscriptionService: NSObject, @unchecked Sendable
 
     private let lock = NSLock()
     private var pending: [Int: PendingUpload] = [:]
+    private var uploadProgressSnapshots: [Int: TransferProgressSnapshot] = [:]
     private var pendingBackgroundCompletion: BackgroundCompletion?
 
     private var sessionStorage: URLSession!
     var session: URLSession { sessionStorage }
     private let decoder = JSONDecoder()
+
+    private struct UploadAudio {
+        let fileURL: URL
+        let mimeType: String
+        let cleanupURL: URL?
+    }
+
+    private struct TransferProgressSnapshot {
+        var lastYieldUptime: TimeInterval
+        var lastBytesSent: Int64
+        var lastTotalBytes: Int64
+    }
+
+    private static let progressThrottleInterval: TimeInterval = 0.5
+    private static let progressThrottleBytes: Int64 = 512 * 1024
+    private static let progressThrottleFraction: Double = 0.01
+
+    private final class DownsamplePump: @unchecked Sendable {
+        private let reader: AVAssetReader
+        private let readerOutput: AVAssetReaderTrackOutput
+        private let writer: AVAssetWriter
+        private let writerInput: AVAssetWriterInput
+        private let lock = NSLock()
+        private var hasCompleted = false
+
+        init(
+            reader: AVAssetReader,
+            readerOutput: AVAssetReaderTrackOutput,
+            writer: AVAssetWriter,
+            writerInput: AVAssetWriterInput
+        ) {
+            self.reader = reader
+            self.readerOutput = readerOutput
+            self.writer = writer
+            self.writerInput = writerInput
+        }
+
+        func start(
+            on queue: DispatchQueue,
+            completion: @escaping @Sendable (Result<Void, Error>) -> Void
+        ) {
+            writerInput.requestMediaDataWhenReady(on: queue) { [self] in
+                while writerInput.isReadyForMoreMediaData {
+                    if reader.status == .reading, let sample = readerOutput.copyNextSampleBuffer() {
+                        guard writerInput.append(sample) else {
+                            reader.cancelReading()
+                            writer.cancelWriting()
+                            complete(
+                                .failure(writer.error ?? CloudTranscriptionService.downsampleError("Couldn't append audio sample.")),
+                                completion
+                            )
+                            return
+                        }
+                    } else {
+                        writerInput.markAsFinished()
+                        writer.finishWriting { [self] in
+                            complete(finalResult(), completion)
+                        }
+                        return
+                    }
+                }
+            }
+        }
+
+        private func finalResult() -> Result<Void, Error> {
+            if reader.status == .failed {
+                return .failure(reader.error ?? CloudTranscriptionService.downsampleError("Audio reader failed."))
+            }
+            if writer.status == .failed || writer.status == .cancelled {
+                return .failure(writer.error ?? CloudTranscriptionService.downsampleError("Audio writer failed."))
+            }
+            guard writer.status == .completed else {
+                return .failure(CloudTranscriptionService.downsampleError("Audio writer ended in state \(writer.status.rawValue)."))
+            }
+            return .success(())
+        }
+
+        private func complete(
+            _ result: Result<Void, Error>,
+            _ completion: @Sendable (Result<Void, Error>) -> Void
+        ) {
+            lock.lock()
+            guard !hasCompleted else {
+                lock.unlock()
+                return
+            }
+            hasCompleted = true
+            lock.unlock()
+            completion(result)
+        }
+    }
 
     override private init() {
         super.init()
@@ -154,6 +250,7 @@ nonisolated final class CloudTranscriptionService: NSObject, @unchecked Sendable
         provider: AdDetectionProvider,
         googleAPIKey: String?,
         mimeType: String,
+        downsampleBeforeUpload: Bool = false,
         episodeGUID: String? = nil,
         onStage: (@Sendable (CloudTranscriptionStage) -> Void)? = nil
     ) async throws -> CloudTranscriptionResult {
@@ -164,12 +261,23 @@ nonisolated final class CloudTranscriptionService: NSObject, @unchecked Sendable
             throw CloudTranscriptionError.missingAPIKey(provider.label)
         }
 
-        let fileSize = (try? fileURL.resourceValues(forKeys: [.fileSizeKey]).fileSize).map(Int64.init) ?? 0
-        Log.adDetection.info("Cloud analysis begin — provider=\(provider.label, privacy: .public) file=\(fileURL.lastPathComponent, privacy: .public) bytes=\(fileSize) path=files-api")
-
-        let fileURI = try await uploadToGeminiFiles(
+        let uploadAudio = try await prepareUploadAudio(
             fileURL: fileURL,
             mimeType: mimeType,
+            downsampleBeforeUpload: downsampleBeforeUpload
+        )
+        defer {
+            if let cleanupURL = uploadAudio.cleanupURL {
+                try? FileManager.default.removeItem(at: cleanupURL)
+            }
+        }
+
+        let fileSize = (try? uploadAudio.fileURL.resourceValues(forKeys: [.fileSizeKey]).fileSize).map(Int64.init) ?? 0
+        Log.adDetection.info("Cloud analysis begin — provider=\(provider.label, privacy: .public) file=\(uploadAudio.fileURL.lastPathComponent, privacy: .public) bytes=\(fileSize) downsampled=\(downsampleBeforeUpload) path=files-api")
+
+        let fileURI = try await uploadToGeminiFiles(
+            fileURL: uploadAudio.fileURL,
+            mimeType: uploadAudio.mimeType,
             apiKey: key,
             taskDescription: episodeGUID,
             onStage: onStage
@@ -178,7 +286,7 @@ nonisolated final class CloudTranscriptionService: NSObject, @unchecked Sendable
         let (ads, usage) = try await callGeminiCombined(
             model: provider.apiModel,
             fileURI: fileURI,
-            mimeType: mimeType,
+            mimeType: uploadAudio.mimeType,
             apiKey: key,
             taskDescription: episodeGUID
         )
@@ -239,6 +347,143 @@ nonisolated final class CloudTranscriptionService: NSObject, @unchecked Sendable
             .appendingPathComponent("noadcast-cloud-\(UUID().uuidString).\(ext)")
         try data.write(to: url, options: [.atomic])
         return url
+    }
+
+    // MARK: - Optional upload downsampling
+
+    private func prepareUploadAudio(
+        fileURL: URL,
+        mimeType: String,
+        downsampleBeforeUpload: Bool
+    ) async throws -> UploadAudio {
+        guard downsampleBeforeUpload else {
+            return UploadAudio(fileURL: fileURL, mimeType: mimeType, cleanupURL: nil)
+        }
+        do {
+            let outputURL = try await Self.downsampleForUpload(fileURL)
+            return UploadAudio(fileURL: outputURL, mimeType: "audio/mp4", cleanupURL: outputURL)
+        } catch {
+            throw CloudTranscriptionError.downsampleFailed(error)
+        }
+    }
+
+    private static func downsampleForUpload(_ sourceURL: URL) async throws -> URL {
+        try await Task.detached(priority: .utility) {
+            let outputURL = FileManager.default.temporaryDirectory
+                .appendingPathComponent("noadcast-upload-\(UUID().uuidString).m4a")
+            try? FileManager.default.removeItem(at: outputURL)
+
+            do {
+                let asset = AVURLAsset(url: sourceURL)
+                guard let track = try await asset.loadTracks(withMediaType: .audio).first else {
+                    throw downsampleError("No audio track found.")
+                }
+
+                let reader = try AVAssetReader(asset: asset)
+                let readerSettings: [String: Any] = [
+                    AVFormatIDKey: kAudioFormatLinearPCM,
+                    AVSampleRateKey: 16_000,
+                    AVNumberOfChannelsKey: 1,
+                    AVLinearPCMBitDepthKey: 16,
+                    AVLinearPCMIsFloatKey: false,
+                    AVLinearPCMIsBigEndianKey: false,
+                    AVLinearPCMIsNonInterleaved: false,
+                ]
+                let readerOutput = AVAssetReaderTrackOutput(track: track, outputSettings: readerSettings)
+                readerOutput.alwaysCopiesSampleData = false
+                guard reader.canAdd(readerOutput) else {
+                    throw downsampleError("Couldn't add audio reader output.")
+                }
+                reader.add(readerOutput)
+
+                let writer = try AVAssetWriter(outputURL: outputURL, fileType: .m4a)
+                let writerSettings: [String: Any] = [
+                    AVFormatIDKey: kAudioFormatMPEG4AAC,
+                    AVSampleRateKey: 16_000,
+                    AVNumberOfChannelsKey: 1,
+                    AVEncoderBitRateKey: 32_000,
+                ]
+                let writerInput = AVAssetWriterInput(mediaType: .audio, outputSettings: writerSettings)
+                writerInput.expectsMediaDataInRealTime = false
+                guard writer.canAdd(writerInput) else {
+                    throw downsampleError("Couldn't add audio writer input.")
+                }
+                writer.add(writerInput)
+
+                guard reader.startReading() else {
+                    throw reader.error ?? downsampleError("Couldn't start audio reader.")
+                }
+                guard writer.startWriting() else {
+                    reader.cancelReading()
+                    throw writer.error ?? downsampleError("Couldn't start audio writer.")
+                }
+                writer.startSession(atSourceTime: .zero)
+
+                let queue = DispatchQueue(label: "Noadcast.upload-downsample")
+                let pump = DownsamplePump(
+                    reader: reader,
+                    readerOutput: readerOutput,
+                    writer: writer,
+                    writerInput: writerInput
+                )
+                try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+                    pump.start(on: queue) { result in
+                        continuation.resume(with: result)
+                    }
+                }
+                return outputURL
+            } catch {
+                try? FileManager.default.removeItem(at: outputURL)
+                throw error
+            }
+        }.value
+    }
+
+    private static func downsampleError(_ description: String) -> NSError {
+        NSError(
+            domain: "NoadcastAudioDownsample",
+            code: 1,
+            userInfo: [NSLocalizedDescriptionKey: description]
+        )
+    }
+
+    private func shouldYieldUploadProgress(
+        taskID: Int,
+        bytesSent: Int64,
+        totalBytes: Int64
+    ) -> Bool {
+        let now = ProcessInfo.processInfo.systemUptime
+        lock.lock()
+        defer { lock.unlock() }
+
+        guard let previous = uploadProgressSnapshots[taskID] else {
+            uploadProgressSnapshots[taskID] = TransferProgressSnapshot(
+                lastYieldUptime: now,
+                lastBytesSent: bytesSent,
+                lastTotalBytes: totalBytes
+            )
+            return true
+        }
+
+        let isComplete = bytesSent >= totalBytes
+        let totalChanged = previous.lastTotalBytes != totalBytes
+        let elapsed = now - previous.lastYieldUptime
+        let byteDelta = bytesSent - previous.lastBytesSent
+        let fractionDelta = totalBytes > 0 ? Double(byteDelta) / Double(totalBytes) : 0
+        let shouldYield = isComplete
+            || totalChanged
+            || (elapsed >= Self.progressThrottleInterval
+                && (byteDelta >= Self.progressThrottleBytes
+                    || fractionDelta >= Self.progressThrottleFraction))
+
+        if shouldYield {
+            uploadProgressSnapshots[taskID] = TransferProgressSnapshot(
+                lastYieldUptime: now,
+                lastBytesSent: bytesSent,
+                lastTotalBytes: totalBytes
+            )
+        }
+        return shouldYield
     }
 
     // MARK: - Gemini Files API (resumable upload)
@@ -466,6 +711,13 @@ extension CloudTranscriptionService: @preconcurrency URLSessionDataDelegate {
         totalBytesExpectedToSend: Int64
     ) {
         guard totalBytesExpectedToSend > 0 else { return }
+        guard shouldYieldUploadProgress(
+            taskID: task.taskIdentifier,
+            bytesSent: totalBytesSent,
+            totalBytes: totalBytesExpectedToSend
+        ) else {
+            return
+        }
         lock.lock()
         let handler = pending[task.taskIdentifier]?.progressHandler
         lock.unlock()
@@ -479,6 +731,7 @@ extension CloudTranscriptionService: @preconcurrency URLSessionDataDelegate {
     ) {
         lock.lock()
         let entry = pending.removeValue(forKey: task.taskIdentifier)
+        uploadProgressSnapshots.removeValue(forKey: task.taskIdentifier)
         lock.unlock()
         if let tempBody = entry?.bodyFileURL {
             try? FileManager.default.removeItem(at: tempBody)

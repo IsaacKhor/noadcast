@@ -2,31 +2,33 @@ import Foundation
 import SwiftData
 import os
 
-/// Off-main-thread backfill for cached `Podcast.latestEpisodeAt` values.
+/// Off-main-thread backfill for cached podcast/episode metadata.
 ///
-/// New podcasts get the cache populated synchronously inside
-/// `SubscriptionService.importEpisodes`. This actor handles the legacy case:
-/// rows that were inserted before the cache field existed (i.e. on first
-/// launch after the schema migration). Walking the episode relationship to
-/// find the max `publishedAt` faults every `Episode` row, which is exactly
-/// the work that used to hang the main thread for ~800 ms — `@ModelActor`
-/// lets us do it on a dedicated context off main.
+/// New podcasts get the caches populated synchronously inside services. This
+/// actor handles legacy rows after schema migrations. Walking relationships
+/// faults rows, which is exactly the work we do not want on the scrolling
+/// path, so `@ModelActor` does it on a dedicated context off main.
 @ModelActor
 actor MetadataBackfillActor {
     func backfillLatestEpisodeDates() {
-        let state = Log.signposter.beginInterval("MetadataBackfill.latestEpisodeAt")
-        defer { Log.signposter.endInterval("MetadataBackfill.latestEpisodeAt", state) }
+        let state = Log.signposter.beginInterval("MetadataBackfill.derivedMetadata")
+        defer { Log.signposter.endInterval("MetadataBackfill.derivedMetadata", state) }
 
-        let descriptor = FetchDescriptor<Podcast>(
-            predicate: #Predicate { $0.latestEpisodeAt == nil }
-        )
+        let descriptor = FetchDescriptor<Podcast>()
         guard let candidates = try? modelContext.fetch(descriptor), !candidates.isEmpty else {
             return
         }
-        Log.startup.info("Backfilling latestEpisodeAt for \(candidates.count) podcast(s)")
+        Log.startup.info("Backfilling derived metadata for \(candidates.count) podcast(s)")
         for podcast in candidates {
-            let max = podcast.episodes.compactMap(\.publishedAt).max()
-            podcast.latestEpisodeAt = max
+            let episodes = podcast.episodes
+            if podcast.latestEpisodeAt == nil {
+                podcast.latestEpisodeAt = episodes.compactMap(\.publishedAt).max()
+            }
+            podcast.episodeCount = episodes.count
+            for episode in episodes {
+                episode.syncPodcastSnapshot(from: podcast)
+                episode.activeAdMarkerCount = episode.adMarkers.filter { !$0.isDeleted }.count
+            }
         }
         try? modelContext.save()
     }

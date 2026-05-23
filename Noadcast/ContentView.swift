@@ -41,9 +41,9 @@ struct ContentView: View {
             }
             PlayerService.shared.restoreLastPlayedEpisode(context: context)
 
-            // Backfill cached Podcast.latestEpisodeAt for any rows that
-            // pre-date the field. Runs on a background `@ModelActor` so the
-            // expensive episode-relationship walk doesn't block the UI.
+            // Backfill denormalized podcast/episode metadata for rows that
+            // pre-date those fields. Runs on a background `@ModelActor` so
+            // relationship walks don't land on the scrolling path.
             let container = context.container
             Task.detached(priority: .background) {
                 let backfiller = MetadataBackfillActor(modelContainer: container)

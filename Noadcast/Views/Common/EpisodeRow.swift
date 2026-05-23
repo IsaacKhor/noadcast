@@ -23,6 +23,14 @@ struct EpisodeRow<Trailing: View>: View {
     @Environment(\.modelContext) private var context
     @Bindable var episode: Episode
     let style: EpisodeRowStyle
+    /// When `false` (the default), neither the in-progress processing bar
+    /// nor the partial-playback bar is rendered. Crucially, the row also
+    /// won't *read* `processingProgress`, `processingCurrent`,
+    /// `processingTotal`, or `playbackPosition`, so SwiftData's
+    /// Observation doesn't track them — per-byte upload progress and
+    /// 0.5s playback ticks no longer re-render the row. Only
+    /// `DownloadsView` opts in; that's the one place those bars belong.
+    var showProgress: Bool = false
     @ViewBuilder var trailing: () -> Trailing
 
     @State private var showNotes = false
@@ -34,12 +42,12 @@ struct EpisodeRow<Trailing: View>: View {
             } label: {
                 HStack(spacing: 12) {
                     if style == .withPodcast {
-                        CachedArtworkImage(url: episode.podcast?.artworkDisplayURL)
+                        CachedArtworkImage(url: episode.podcastArtworkDisplayURL, size: 44)
                             .frame(width: 44, height: 44)
                             .clipShape(RoundedRectangle(cornerRadius: 6))
                     }
                     VStack(alignment: .leading, spacing: 3) {
-                        if style == .withPodcast, let podcastTitle = episode.podcast?.title {
+                        if style == .withPodcast, let podcastTitle = episode.podcastTitle {
                             Text(podcastTitle)
                                 .font(.caption2)
                                 .foregroundStyle(.secondary)
@@ -88,7 +96,7 @@ struct EpisodeRow<Trailing: View>: View {
     private var statusBadge: some View {
         switch episode.processingState {
         case .ready:
-            if episode.hasLocalFile {
+            if episode.isMarkedDownloaded {
                 Image(systemName: "checkmark.circle.fill").foregroundStyle(.green)
             }
         case .downloaded:
@@ -106,10 +114,9 @@ struct EpisodeRow<Trailing: View>: View {
 
     @ViewBuilder
     private var adBadge: some View {
-        let count = episode.adMarkers.filter { !$0.isDeleted }.count
-        if episode.processingState == .ready, count > 0 {
+        if episode.processingState == .ready, episode.activeAdMarkerCount > 0 {
             Text("·")
-            Text("\(count) ad\(count == 1 ? "" : "s")")
+            Text("\(episode.activeAdMarkerCount) ad\(episode.activeAdMarkerCount == 1 ? "" : "s")")
                 .foregroundStyle(.orange)
         }
     }
@@ -125,7 +132,11 @@ struct EpisodeRow<Trailing: View>: View {
     ///   * failed — show the error message.
     @ViewBuilder
     private var progressLine: some View {
-        if episode.isInProgress {
+        // Guard each progress branch on `showProgress` *before* it reads
+        // any ticking property — short-circuiting keeps SwiftData
+        // Observation from subscribing the row to those writes outside
+        // the Downloads tab.
+        if showProgress, episode.isInProgress {
             VStack(alignment: .leading, spacing: 2) {
                 ProgressView(value: max(0, min(1, episode.processingProgress)))
                     .progressViewStyle(.linear)
@@ -140,11 +151,14 @@ struct EpisodeRow<Trailing: View>: View {
                 .foregroundStyle(.secondary)
             }
         } else if episode.processingState == .failed, let err = episode.processingError {
+            // Static error footer — safe to show in all tabs; it doesn't
+            // re-render at frame rate the way the progress bars do.
             Text(err)
                 .font(.caption2)
                 .foregroundStyle(.red)
                 .lineLimit(3)
-        } else if let duration = episode.duration,
+        } else if showProgress,
+                  let duration = episode.duration,
                   duration > 0,
                   episode.playbackPosition > 0,
                   !episode.isPlayed,
@@ -169,9 +183,10 @@ struct EpisodeRow<Trailing: View>: View {
 /// Convenience initializer for callers that want the default play/download
 /// trailing button.
 extension EpisodeRow where Trailing == StandardEpisodeAction {
-    init(episode: Episode, style: EpisodeRowStyle) {
+    init(episode: Episode, style: EpisodeRowStyle, showProgress: Bool = false) {
         self.episode = episode
         self.style = style
+        self.showProgress = showProgress
         self.trailing = { StandardEpisodeAction(episode: episode) }
     }
 }
@@ -186,7 +201,7 @@ struct StandardEpisodeAction: View {
     private let pipeline = ProcessingPipeline.shared
 
     var body: some View {
-        if episode.processingState == .ready, episode.hasLocalFile {
+        if episode.processingState == .ready, episode.isMarkedDownloaded {
             Button(action: play) {
                 Image(systemName: "play.circle.fill").font(.title2)
             }

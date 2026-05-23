@@ -41,6 +41,12 @@ final class PlayerService {
     /// Last time `persistPosition(force:)` actually wrote, in
     /// `ProcessInfo.systemUptime` seconds. Used to throttle saves.
     private var lastPersistTime: TimeInterval = 0
+    /// Lifetime stats are accumulated in memory and flushed occasionally.
+    /// Writing `AppSettings` on every 0.25s playback tick invalidates every
+    /// live `@Query<AppSettings>` and makes list scrolling stutter.
+    private var pendingLifetimePlayedSeconds: Double = 0
+    private var pendingLifetimeAdSkipSeconds: Double = 0
+    private var lastLifetimeStatsFlushTime: TimeInterval = 0
     private var willResignObserver: NSObjectProtocol?
 
     /// Cached artwork keyed by URL so we don't re-fetch every load.
@@ -82,6 +88,7 @@ final class PlayerService {
                 queue: .main
             ) { _ in
                 Task { @MainActor [weak self] in
+                    self?.flushLifetimeStats(force: true)
                     self?.persistPosition(force: true)
                 }
             }
@@ -99,6 +106,7 @@ final class PlayerService {
         let loadState = Log.signposter.beginInterval("PlayerService.load")
         defer { Log.signposter.endInterval("PlayerService.load", loadState) }
 
+        flushLifetimeStats(force: true)
         teardownObservers()
 
         let itemState = Log.signposter.beginInterval("AVPlayerItem.init")
@@ -106,11 +114,13 @@ final class PlayerService {
         Log.signposter.endInterval("AVPlayerItem.init", itemState)
         player.replaceCurrentItem(with: item)
 
+        let podcast = episode.podcast
+        let displayArtworkURL = episode.podcastArtworkDisplayURL ?? podcast?.artworkDisplayURL
         currentEpisodeID = episode.persistentModelID
         currentEpisodeTitle = episode.title
-        currentPodcastTitle = episode.podcast?.title ?? ""
-        artworkURL = episode.podcast?.artworkDisplayURL
-        let analysisEnabled = episode.podcast?.aiProcessingEnabled ?? true
+        currentPodcastTitle = episode.podcastTitle ?? podcast?.title ?? ""
+        artworkURL = displayArtworkURL
+        let analysisEnabled = podcast?.aiProcessingEnabled ?? true
         adRegions = analysisEnabled
             ? episode.adMarkers
                 .filter { !$0.isDeleted }
@@ -133,12 +143,12 @@ final class PlayerService {
         lastPersistTime = 0  // allow the first throttled persist to write immediately
         if let dur = episode.duration { duration = dur }
 
-        let speed = episode.podcast?.customPlaybackSpeed ?? settings.defaultPlaybackSpeed
+        let speed = podcast?.customPlaybackSpeed ?? settings.defaultPlaybackSpeed
         playbackRate = speed
         installPeriodicObserver()
         installEndObserver()
         updateNowPlayingInfo()
-        loadArtworkForNowPlaying(url: episode.podcast?.artworkDisplayURL)
+        loadArtworkForNowPlaying(url: displayArtworkURL)
 
         settings.lastPlayedEpisodeGUID = episode.guid
         if let container = modelContainer {
@@ -151,6 +161,7 @@ final class PlayerService {
     /// playing episode from Queue or Downloads.
     func unloadIfCurrent(episodeID: PersistentIdentifier) {
         guard currentEpisodeID == episodeID else { return }
+        flushLifetimeStats(force: true)
         teardownObservers()
         player.pause()
         player.replaceCurrentItem(with: nil)
@@ -197,6 +208,7 @@ final class PlayerService {
         player.pause()
         isPlaying = false
         updateNowPlayingInfo()
+        flushLifetimeStats(force: true)
         persistPosition(force: true)
     }
 
@@ -260,7 +272,7 @@ final class PlayerService {
         // A single observer tick advances by ~rate × interval, capped at ~2s
         // even at 3.6×. Anything outside (0, 5] is a seek or a glitch.
         guard delta > 0, delta <= 5 else { return }
-        bumpLifetime(\.lifetimePlayedSeconds, by: delta)
+        addPendingLifetimePlayedSeconds(delta)
     }
 
     private func installEndObserver() {
@@ -310,7 +322,7 @@ final class PlayerService {
 
         skippedAds += skipped
         let saved = max(0, targetEnd - currentTime)
-        bumpLifetime(\.lifetimeAdSkipSeconds, by: saved)
+        addPendingLifetimeAdSkipSeconds(saved)
         seek(to: targetEnd + 0.05)
     }
 
@@ -321,10 +333,35 @@ final class PlayerService {
         }
     }
 
-    private func bumpLifetime(_ keyPath: ReferenceWritableKeyPath<AppSettings, Double>, by amount: Double) {
-        guard amount > 0, let container = modelContainer else { return }
+    private func addPendingLifetimePlayedSeconds(_ amount: Double) {
+        guard amount > 0 else { return }
+        pendingLifetimePlayedSeconds += amount
+        flushLifetimeStats(force: false)
+    }
+
+    private func addPendingLifetimeAdSkipSeconds(_ amount: Double) {
+        guard amount > 0 else { return }
+        pendingLifetimeAdSkipSeconds += amount
+        flushLifetimeStats(force: false)
+    }
+
+    private static let lifetimeStatsFlushInterval: TimeInterval = 60.0
+
+    private func flushLifetimeStats(force: Bool) {
+        guard let container = modelContainer else { return }
+        guard pendingLifetimePlayedSeconds > 0 || pendingLifetimeAdSkipSeconds > 0 else { return }
+        let now = ProcessInfo.processInfo.systemUptime
+        if !force, now - lastLifetimeStatsFlushTime < Self.lifetimeStatsFlushInterval {
+            return
+        }
+
         let settings = AppSettings.current(in: container.mainContext)
-        settings[keyPath: keyPath] += amount
+        settings.lifetimePlayedSeconds += pendingLifetimePlayedSeconds
+        settings.lifetimeAdSkipSeconds += pendingLifetimeAdSkipSeconds
+        pendingLifetimePlayedSeconds = 0
+        pendingLifetimeAdSkipSeconds = 0
+        lastLifetimeStatsFlushTime = now
+        try? container.mainContext.save()
     }
 
     // MARK: - Persistence
@@ -356,6 +393,7 @@ final class PlayerService {
         guard let id = currentEpisodeID, let container = modelContainer else { return }
         let context = container.mainContext
         guard let episode = context.model(for: id) as? Episode else { return }
+        flushLifetimeStats(force: true)
         episode.isPlayed = true
         episode.datePlayed = .now
         episode.playbackPosition = episode.duration ?? 0
@@ -471,24 +509,21 @@ final class PlayerService {
             applyNowPlayingArtwork(cached)
             return
         }
-        // Locally-cached artwork (from `ArtworkService`) is a file:// URL —
-        // skip the URLSession round-trip and load it synchronously.
-        if url.isFileURL {
-            if let image = UIImage(contentsOfFile: url.path) {
-                artworkCache[url] = image
-                applyNowPlayingArtwork(image)
-            }
-            return
-        }
         // Drop the previous episode's artwork while we fetch the new one,
         // otherwise the lock screen briefly shows mismatched art + title.
         clearNowPlayingArtwork()
-        artworkFetchTask = Task { [weak self] in
+        artworkFetchTask = Task.detached(priority: .utility) { [weak self] in
             do {
-                let (data, _) = try await URLSession.shared.data(from: url)
+                let image: UIImage?
+                if url.isFileURL {
+                    image = UIImage(contentsOfFile: url.path)
+                } else {
+                    let (data, _) = try await URLSession.shared.data(from: url)
+                    image = UIImage(data: data)
+                }
                 if Task.isCancelled { return }
-                guard let image = UIImage(data: data) else { return }
-                await MainActor.run {
+                guard let image else { return }
+                await MainActor.run { [weak self] in
                     guard let self else { return }
                     self.artworkCache[url] = image
                     // Only apply if we're still on the same episode.

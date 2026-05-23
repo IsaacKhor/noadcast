@@ -65,6 +65,18 @@ final class Episode {
 
     var podcast: Podcast?
 
+    /// Denormalized podcast fields used by episode rows in cross-podcast
+    /// lists. SwiftUI creates/destroys rows while scrolling; reading these
+    /// scalars avoids faulting the `podcast` relationship just to draw title
+    /// text or artwork.
+    var podcastTitle: String?
+    var podcastArtworkURL: URL?
+    var podcastCachedArtworkFilename: String?
+
+    /// Denormalized count of active ad/intro/outro markers. Rows can show
+    /// the badge without faulting the `adMarkers` relationship.
+    var activeAdMarkerCount: Int = 0
+
     @Relationship(deleteRule: .cascade, inverse: \TranscriptSegment.episode)
     var transcript: [TranscriptSegment] = []
 
@@ -89,6 +101,9 @@ final class Episode {
         self.audioURL = audioURL
         self.audioMimeType = audioMimeType
         self.podcast = podcast
+        self.podcastTitle = podcast?.title
+        self.podcastArtworkURL = podcast?.artworkURL
+        self.podcastCachedArtworkFilename = podcast?.cachedArtworkFilename
         // `processingStateRaw` already defaults to `.new`'s raw value.
         self.processingProgress = 0
         self.playbackPosition = 0
@@ -103,6 +118,25 @@ final class Episode {
     var hasLocalFile: Bool {
         guard let url = localFileURL else { return false }
         return FileManager.default.fileExists(atPath: url.path)
+    }
+
+    /// UI-only download flag. Unlike `hasLocalFile`, this does not touch the
+    /// filesystem from a row body.
+    var isMarkedDownloaded: Bool {
+        localFilename != nil
+    }
+
+    var podcastArtworkDisplayURL: URL? {
+        if let filename = podcastCachedArtworkFilename {
+            return ArtworkService.localURL(filename: filename)
+        }
+        return podcastArtworkURL
+    }
+
+    func syncPodcastSnapshot(from podcast: Podcast) {
+        podcastTitle = podcast.title
+        podcastArtworkURL = podcast.artworkURL
+        podcastCachedArtworkFilename = podcast.cachedArtworkFilename
     }
 
     static var episodesDirectory: URL = {

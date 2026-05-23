@@ -41,6 +41,7 @@ final class ArtworkService {
             }
             podcast.cachedArtworkFilename = nil
             podcast.cachedArtworkSourceURL = nil
+            podcast.syncEpisodeSnapshots()
             return
         }
         // Skip when the cache is up to date and the file still exists.
@@ -53,9 +54,10 @@ final class ArtworkService {
             let (data, _) = try await URLSession.shared.data(from: url)
             let filename = Self.filename(for: podcast, sourceURL: url)
             let destination = Self.localURL(filename: filename)
-            try data.write(to: destination, options: .atomic)
+            try await Self.writeArtworkData(data, to: destination)
             podcast.cachedArtworkFilename = filename
             podcast.cachedArtworkSourceURL = url
+            podcast.syncEpisodeSnapshots()
         } catch {
             Log.feed.notice("Artwork cache failed for \"\(podcast.title, privacy: .public)\": \(error.localizedDescription, privacy: .public)")
         }
@@ -89,6 +91,7 @@ final class ArtworkService {
         }
         podcast.cachedArtworkFilename = nil
         podcast.cachedArtworkSourceURL = nil
+        podcast.syncEpisodeSnapshots()
     }
 
     /// Stable filename keyed on the podcast's `feedURL` so a re-cache simply
@@ -99,5 +102,11 @@ final class ArtworkService {
         let hex = hash.prefix(8).map { String(format: "%02x", $0) }.joined()
         let ext = sourceURL.pathExtension.isEmpty ? "jpg" : sourceURL.pathExtension
         return "\(hex).\(ext)"
+    }
+
+    private nonisolated static func writeArtworkData(_ data: Data, to destination: URL) async throws {
+        try await Task.detached(priority: .utility) {
+            try data.write(to: destination, options: .atomic)
+        }.value
     }
 }

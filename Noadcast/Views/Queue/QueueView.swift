@@ -4,12 +4,15 @@ import SwiftData
 struct QueueView: View {
     @Environment(\.modelContext) private var context
     @Query(sort: \QueueItem.position) private var items: [QueueItem]
-    @Query private var settingsList: [AppSettings]
 
     private var player = PlayerService.shared
     private var pipeline = ProcessingPipeline.shared
 
-    private var settings: AppSettings? { settingsList.first }
+    /// Queue minus whichever item (if any) is currently loaded in the
+    /// player — rendered in its own header section instead. Cached in
+    /// `@State` and refreshed via `refreshPending()` only when the inputs
+    /// change, so a body re-eval doesn't re-filter the array.
+    @State private var pendingItems: [QueueItem] = []
 
     /// The episode the player is currently loaded on, if any. Looked up by
     /// `PersistentIdentifier` so we don't fault every Episode just to render
@@ -19,11 +22,13 @@ struct QueueView: View {
         return context.model(for: id) as? Episode
     }
 
-    /// Queue items minus whichever one (if any) is currently loaded in the
-    /// player — it's rendered in its own header section instead.
-    private var pendingItems: [QueueItem] {
-        guard let id = player.currentEpisodeID else { return items }
-        return items.filter { $0.episode?.persistentModelID != id }
+    private func refreshPending() {
+        let playingID = player.currentEpisodeID
+        guard let id = playingID else {
+            pendingItems = items
+            return
+        }
+        pendingItems = items.filter { $0.episode?.persistentModelID != id }
     }
 
     var body: some View {
@@ -42,6 +47,9 @@ struct QueueView: View {
             .task {
                 SubscriptionService.shared.processQueuedEpisodes(context: context)
             }
+            .onAppear { refreshPending() }
+            .onChange(of: items) { _, _ in refreshPending() }
+            .onChange(of: player.currentEpisodeID) { _, _ in refreshPending() }
         }
     }
 
@@ -144,11 +152,11 @@ struct QueueView: View {
 
     private func play(_ item: QueueItem) {
         guard let episode = item.episode else { return }
-        guard let s = settings else { return }
-        if episode.processingState != .ready || !episode.hasLocalFile {
+        if episode.processingState != .ready || !episode.isMarkedDownloaded {
             pipeline.process(episode: episode)
             return
         }
+        let s = AppSettings.current(in: context)
         player.load(episode: episode, settings: s)
         player.play()
     }
@@ -185,34 +193,43 @@ struct QueueView: View {
     private func moveToTop(_ item: QueueItem) {
         // Renumber so this item lands just after the currently-playing one
         // (if there is one) — i.e. it becomes the next to play.
-        let playingID = player.currentEpisodeID
-        let playing = items.first { $0.episode?.persistentModelID == playingID }
-        let rest = items.filter { $0 !== item && $0 !== playing }
-        var pos = 0
-        if let playing { playing.position = pos; pos += 1 }
-        item.position = pos
-        pos += 1
-        for other in rest {
-            other.position = pos
+        //
+        // `withAnimation` so the position writes and the @Query-driven row
+        // reorder ride the same transaction; without it the swipe action's
+        // spring-back animation finishes before the row moves, leaving a
+        // visible gap where the row used to be.
+        withAnimation {
+            let playingID = player.currentEpisodeID
+            let playing = items.first { $0.episode?.persistentModelID == playingID }
+            let rest = items.filter { $0 !== item && $0 !== playing }
+            var pos = 0
+            if let playing { playing.position = pos; pos += 1 }
+            item.position = pos
             pos += 1
+            for other in rest {
+                other.position = pos
+                pos += 1
+            }
+            try? context.save()
         }
-        try? context.save()
     }
 
     private func applySort(by areInIncreasingOrder: (QueueItem, QueueItem) -> Bool) {
         // Keep the currently-playing item pinned at position 0 so it remains
         // "next to be auto-advanced past". Sort everything else.
-        let playingID = player.currentEpisodeID
-        let playing = items.first { $0.episode?.persistentModelID == playingID }
-        let rest = items.filter { $0 !== playing }
-        let sorted = rest.sorted(by: areInIncreasingOrder)
-        var pos = 0
-        if let playing { playing.position = pos; pos += 1 }
-        for item in sorted {
-            item.position = pos
-            pos += 1
+        withAnimation {
+            let playingID = player.currentEpisodeID
+            let playing = items.first { $0.episode?.persistentModelID == playingID }
+            let rest = items.filter { $0 !== playing }
+            let sorted = rest.sorted(by: areInIncreasingOrder)
+            var pos = 0
+            if let playing { playing.position = pos; pos += 1 }
+            for item in sorted {
+                item.position = pos
+                pos += 1
+            }
+            try? context.save()
         }
-        try? context.save()
     }
 
     /// Group by podcast, with **groups** sorted by their *earliest*
@@ -220,30 +237,32 @@ struct QueueView: View {
     /// sorted by `publishedAt` ascending. Result reads like
     /// `AAAABBCC` where A's oldest queued episode is the oldest overall.
     private func applyGroupByPodcastSort() {
-        let playingID = player.currentEpisodeID
-        let playing = items.first { $0.episode?.persistentModelID == playingID }
-        let rest = items.filter { $0 !== playing }
+        withAnimation {
+            let playingID = player.currentEpisodeID
+            let playing = items.first { $0.episode?.persistentModelID == playingID }
+            let rest = items.filter { $0 !== playing }
 
-        let groups = Dictionary(grouping: rest) { item -> URL? in
-            item.episode?.podcast?.feedURL
-        }
-        let keysInOrder = groups.keys.sorted { lk, rk in
-            let lMin = groups[lk]!.compactMap { $0.episode?.publishedAt }.min() ?? .distantPast
-            let rMin = groups[rk]!.compactMap { $0.episode?.publishedAt }.min() ?? .distantPast
-            return lMin < rMin
-        }
-        var pos = 0
-        if let playing { playing.position = pos; pos += 1 }
-        for key in keysInOrder {
-            let group = groups[key]!.sorted {
-                ($0.episode?.publishedAt ?? .distantPast) < ($1.episode?.publishedAt ?? .distantPast)
+            let groups = Dictionary(grouping: rest) { item -> URL? in
+                item.episode?.podcast?.feedURL
             }
-            for item in group {
-                item.position = pos
-                pos += 1
+            let keysInOrder = groups.keys.sorted { lk, rk in
+                let lMin = groups[lk]!.compactMap { $0.episode?.publishedAt }.min() ?? .distantPast
+                let rMin = groups[rk]!.compactMap { $0.episode?.publishedAt }.min() ?? .distantPast
+                return lMin < rMin
             }
+            var pos = 0
+            if let playing { playing.position = pos; pos += 1 }
+            for key in keysInOrder {
+                let group = groups[key]!.sorted {
+                    ($0.episode?.publishedAt ?? .distantPast) < ($1.episode?.publishedAt ?? .distantPast)
+                }
+                for item in group {
+                    item.position = pos
+                    pos += 1
+                }
+            }
+            try? context.save()
         }
-        try? context.save()
     }
 }
 
@@ -256,7 +275,7 @@ private struct QueueRowTrailing: View {
     var body: some View {
         HStack(spacing: 8) {
             Button(action: onPlay) {
-                Image(systemName: episode.processingState == .ready ? "play.circle.fill" : "arrow.down.circle")
+                Image(systemName: episode.processingState == .ready && episode.isMarkedDownloaded ? "play.circle.fill" : "arrow.down.circle")
                     .font(.title2)
             }
             .buttonStyle(.plain)

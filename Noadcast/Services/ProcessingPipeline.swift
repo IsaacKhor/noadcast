@@ -14,11 +14,16 @@ import os
 @Observable
 final class ProcessingPipeline {
     static let shared = ProcessingPipeline()
+    static let maxQueuedPipelineStarts = 3
 
     private(set) var activeEpisodes: Set<PersistentIdentifier> = []
 
     private var modelContainer: ModelContainer?
     private var tasks: [PersistentIdentifier: Task<Void, Never>] = [:]
+
+    var queuedStartCapacity: Int {
+        max(0, Self.maxQueuedPipelineStarts - activeEpisodes.count)
+    }
 
     func setModelContainer(_ container: ModelContainer) {
         self.modelContainer = container
@@ -33,6 +38,7 @@ final class ProcessingPipeline {
             await self?.run(episodeID: id)
             self?.activeEpisodes.remove(id)
             self?.tasks.removeValue(forKey: id)
+            self?.startNextQueuedEpisodesIfPossible()
         }
         tasks[id] = task
     }
@@ -107,7 +113,7 @@ final class ProcessingPipeline {
         guard let episode = context.model(for: episodeID) as? Episode else { return }
 
         let title = episode.title
-        Log.pipeline.info("Pipeline start — episode=\"\(title, privacy: .public)\" state=\(episode.processingState.rawValue, privacy: .public) hasFile=\(episode.hasLocalFile) transcript=\(episode.transcript.count)")
+        Log.pipeline.info("Pipeline start — episode=\"\(title, privacy: .public)\" state=\(episode.processingState.rawValue, privacy: .public) hasFile=\(episode.hasLocalFile) markers=\(episode.activeAdMarkerCount)")
 
         do {
             if !episode.hasLocalFile {
@@ -140,6 +146,11 @@ final class ProcessingPipeline {
             try? context.save()
             Log.pipeline.error("Pipeline failed — episode=\"\(title, privacy: .public)\" \(Log.describe(error), privacy: .public)")
         }
+    }
+
+    private func startNextQueuedEpisodesIfPossible() {
+        guard queuedStartCapacity > 0, let container = modelContainer else { return }
+        SubscriptionService.shared.processQueuedEpisodes(context: container.mainContext)
     }
 
     // MARK: - Steps
@@ -196,6 +207,7 @@ final class ProcessingPipeline {
         let settings = AppSettings.current(in: context)
         let provider = settings.adDetectionProvider
         let googleKey = settings.googleAPIKey
+        let downsampleBeforeUpload = settings.downsampleAudioBeforeUpload
         let mimeType = episode.audioMimeType ?? "audio/mpeg"
         let episodeID = episode.persistentModelID
         let container = modelContainer
@@ -205,6 +217,7 @@ final class ProcessingPipeline {
             provider: provider,
             googleAPIKey: googleKey,
             mimeType: mimeType,
+            downsampleBeforeUpload: downsampleBeforeUpload,
             episodeGUID: episode.guid,
             onStage: { stage in
                 Task { @MainActor in
@@ -240,6 +253,9 @@ final class ProcessingPipeline {
         }
 
         for old in episode.transcript { context.delete(old) }
+        let preservedActiveMarkerCount = episode.adMarkers.filter {
+            $0.manuallyEdited && !$0.isDeleted
+        }.count
         for old in episode.adMarkers where !old.manuallyEdited {
             context.delete(old)
         }
@@ -253,6 +269,7 @@ final class ProcessingPipeline {
             )
             context.insert(m)
         }
+        episode.activeAdMarkerCount = preservedActiveMarkerCount + result.ads.count
         episode.processingProgress = 1.0
         try? context.save()
     }

@@ -138,6 +138,7 @@ struct SettingsView: View {
                 .autocorrectionDisabled()
                 .textInputAutocapitalization(.never)
             }
+            Toggle("Downsample audio before upload", isOn: $s.downsampleAudioBeforeUpload)
         } header: {
             Text("Detection model")
         } footer: {
@@ -149,7 +150,7 @@ struct SettingsView: View {
     }
 
     private func providerFooter(for _: AdDetectionProvider) -> String {
-        "Uploads the episode audio file to Google AI Studio and receives back only skip segments with timestamps and summaries for playback skipping."
+        "Uploads episode audio to Google AI Studio and receives back only skip segments with timestamps and summaries. Downsampling uses a temporary 32 kbps, 16 kHz mono copy."
     }
 
     /// Compact running totals shown under the provider footer so the user

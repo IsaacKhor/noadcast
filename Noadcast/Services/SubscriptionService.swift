@@ -1,5 +1,6 @@
 import Foundation
 import SwiftData
+import os
 
 /// Wires `FeedService` to SwiftData: adds podcasts, refreshes feeds, inserts
 /// new episodes, and triggers auto-download via `ProcessingPipeline` when the
@@ -106,6 +107,7 @@ final class SubscriptionService {
         episode.processingState = .new
         episode.processingProgress = 0
         episode.processingError = nil
+        episode.activeAdMarkerCount = 0
 
         for segment in episode.transcript {
             context.delete(segment)
@@ -148,6 +150,7 @@ final class SubscriptionService {
         episode.processingCurrent = nil
         episode.processingTotal = nil
         episode.processingError = nil
+        episode.activeAdMarkerCount = 0
         for segment in episode.transcript { context.delete(segment) }
         for marker in episode.adMarkers { context.delete(marker) }
         try? context.save()
@@ -175,6 +178,7 @@ final class SubscriptionService {
         episode.processingCurrent = nil
         episode.processingTotal = nil
         episode.processingError = nil
+        episode.activeAdMarkerCount = 0
         try? context.save()
 
         ProcessingPipeline.shared.process(episode: episode)
@@ -221,7 +225,15 @@ final class SubscriptionService {
         into podcast: Podcast,
         context: ModelContext
     ) {
-        let existingGUIDs = Set(podcast.episodes.map(\.guid))
+        var podcastEpisodesByGUID = Dictionary(grouping: podcast.episodes, by: \.guid)
+            .mapValues { episodes in
+                episodes.max(by: { importPreferenceScore($0) < importPreferenceScore($1) })!
+            }
+        let allEpisodes = (try? context.fetch(FetchDescriptor<Episode>())) ?? []
+        var globalEpisodesByGUID = Dictionary(grouping: allEpisodes, by: \.guid)
+            .mapValues { episodes in
+                episodes.max(by: { importPreferenceScore($0) < importPreferenceScore($1) })!
+            }
         var newestSeen: Date? = podcast.latestEpisodeAt
 
         // `lastFetched == nil` is the first import for this podcast — i.e.,
@@ -235,14 +247,52 @@ final class SubscriptionService {
 
         // Pre-compute the next queue position once so we can append
         // multiple new episodes in order without re-querying.
+        let existingQueueItems: [QueueItem] = {
+            guard autoEnqueue else { return [] }
+            let descriptor = FetchDescriptor<QueueItem>(sortBy: [SortDescriptor(\.position)])
+            return (try? context.fetch(descriptor)) ?? []
+        }()
+        var queuedEpisodeIDs = Set(existingQueueItems.compactMap { $0.episode?.persistentModelID })
         var nextQueuePosition: Int = {
             guard autoEnqueue else { return 0 }
-            let descriptor = FetchDescriptor<QueueItem>(sortBy: [SortDescriptor(\QueueItem.position)])
-            let existing = (try? context.fetch(descriptor)) ?? []
-            return (existing.last?.position ?? -1) + 1
+            return (existingQueueItems.last?.position ?? -1) + 1
         }()
 
-        for entry in parsed where !existingGUIDs.contains(entry.guid) {
+        func enqueueIfNeeded(_ episode: Episode) {
+            guard autoEnqueue else { return }
+            let episodeID = episode.persistentModelID
+            guard queuedEpisodeIDs.insert(episodeID).inserted else { return }
+            let item = QueueItem(position: nextQueuePosition, episode: episode)
+            context.insert(item)
+            nextQueuePosition += 1
+        }
+
+        for entry in parsed {
+            if let existing = podcastEpisodesByGUID[entry.guid] {
+                update(existing, from: entry, podcast: podcast)
+                if let pub = entry.publishedAt,
+                   newestSeen == nil || pub > newestSeen! {
+                    newestSeen = pub
+                }
+                continue
+            }
+
+            if let existing = globalEpisodesByGUID[entry.guid] {
+                if existing.podcast == nil || existing.podcast?.feedURL == podcast.feedURL {
+                    existing.podcast = podcast
+                    update(existing, from: entry, podcast: podcast)
+                    podcastEpisodesByGUID[entry.guid] = existing
+                    enqueueIfNeeded(existing)
+                    if let pub = entry.publishedAt,
+                       newestSeen == nil || pub > newestSeen! {
+                        newestSeen = pub
+                    }
+                } else {
+                    Log.feed.notice("Skipping duplicate episode GUID \"\(entry.guid, privacy: .public)\" from \"\(podcast.title, privacy: .public)\" because another podcast already owns it")
+                }
+                continue
+            }
+
             let ep = Episode(
                 guid: entry.guid,
                 title: entry.title,
@@ -254,20 +304,39 @@ final class SubscriptionService {
                 podcast: podcast
             )
             context.insert(ep)
+            podcastEpisodesByGUID[entry.guid] = ep
+            globalEpisodesByGUID[entry.guid] = ep
             if let pub = entry.publishedAt,
                newestSeen == nil || pub > newestSeen! {
                 newestSeen = pub
             }
-            if autoEnqueue {
-                let item = QueueItem(position: nextQueuePosition, episode: ep)
-                context.insert(item)
-                nextQueuePosition += 1
-            }
+            enqueueIfNeeded(ep)
         }
         if let newestSeen { podcast.latestEpisodeAt = newestSeen }
+        podcast.syncEpisodeSnapshots()
         // Caller is responsible for saving and then invoking
         // `processQueuedEpisodes` (idempotent + cheap) so the pipeline only
         // ever looks up *persisted* `PersistentIdentifier`s.
+    }
+
+    private func update(_ episode: Episode, from entry: ParsedEpisode, podcast: Podcast) {
+        episode.title = entry.title
+        episode.episodeDescription = entry.description
+        episode.publishedAt = entry.publishedAt
+        episode.duration = entry.duration
+        episode.audioURL = entry.audioURL
+        episode.audioMimeType = entry.audioMimeType
+        episode.syncPodcastSnapshot(from: podcast)
+    }
+
+    private func importPreferenceScore(_ episode: Episode) -> Int {
+        var score = 0
+        if episode.processingState == .ready { score += 1_000 }
+        if episode.hasLocalFile { score += 500 }
+        if episode.localFilename != nil { score += 250 }
+        score += min(episode.activeAdMarkerCount, 100)
+        if episode.publishedAt != nil { score += 1 }
+        return score
     }
 
     /// Triggers `ProcessingPipeline` for every queued episode that isn't yet
@@ -275,18 +344,27 @@ final class SubscriptionService {
     /// queue changes or the network becomes more permissive (e.g. the Queue
     /// tab appears, or the user just added an item).
     func processQueuedEpisodes(context: ModelContext) {
+        let pipeline = ProcessingPipeline.shared
+        var remainingStarts = pipeline.queuedStartCapacity
+        guard remainingStarts > 0 else { return }
+
         let settings = AppSettings.current(in: context)
         guard NetworkMonitor.shared.canAutoDownload(under: settings.autoDownloadPolicy) else {
             return
         }
-        let queued = (try? context.fetch(FetchDescriptor<QueueItem>())) ?? []
+        let descriptor = FetchDescriptor<QueueItem>(
+            sortBy: [SortDescriptor(\QueueItem.position)]
+        )
+        let queued = (try? context.fetch(descriptor)) ?? []
         for item in queued {
+            guard remainingStarts > 0 else { break }
             guard let episode = item.episode else { continue }
             switch episode.processingState {
             case .ready, .downloading, .uploading, .transcribing, .detectingAds:
                 continue
             case .new, .downloaded, .failed:
-                ProcessingPipeline.shared.process(episode: episode)
+                pipeline.process(episode: episode)
+                remainingStarts -= 1
             }
         }
     }
