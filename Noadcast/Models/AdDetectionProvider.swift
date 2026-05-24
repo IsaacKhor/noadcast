@@ -74,4 +74,10 @@ nonisolated enum AdDetectionProvider: String, Codable, CaseIterable, Sendable {
         case .gemini25FlashLite: 0.40
         }
     }
+
+    /// Gemini bills thinking tokens as output tokens; keep this separate so
+    /// Settings can show the estimate as its own line.
+    var pricePerMTokensThoughtOutput: Double {
+        pricePerMTokensOutput
+    }
 }

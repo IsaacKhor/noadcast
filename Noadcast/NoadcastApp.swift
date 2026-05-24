@@ -14,7 +14,9 @@ struct NoadcastApp: App {
                 TranscriptSegment.self,
                 AdMarker.self,
                 QueueItem.self,
-                AppSettings.self
+                AppSettings.self,
+                UsageHistoryDay.self,
+                TokenUsageRecord.self
             ])
             let configuration = ModelConfiguration(schema: schema, isStoredInMemoryOnly: false)
             do {

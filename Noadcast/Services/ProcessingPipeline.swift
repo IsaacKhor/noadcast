@@ -248,7 +248,9 @@ final class ProcessingPipeline {
             Self.accumulateUsage(
                 usage,
                 provider: provider,
-                into: settings
+                episode: episode,
+                into: settings,
+                context: context
             )
         }
 
@@ -282,12 +284,31 @@ final class ProcessingPipeline {
     private static func accumulateUsage(
         _ usage: TokenUsage,
         provider: AdDetectionProvider,
-        into settings: AppSettings
+        episode: Episode,
+        into settings: AppSettings,
+        context: ModelContext
     ) {
         settings.lifetimeAdDetectionInputTokens += usage.inputTokens
+        settings.lifetimeAdDetectionThoughtTokens += usage.thoughtTokens
         settings.lifetimeAdDetectionOutputTokens += usage.outputTokens
         let inputCost = Double(usage.inputTokens) / 1_000_000 * provider.pricePerMTokensAudioInput
+        let thoughtCost = Double(usage.thoughtTokens) / 1_000_000 * provider.pricePerMTokensThoughtOutput
         let outputCost = Double(usage.outputTokens) / 1_000_000 * provider.pricePerMTokensOutput
-        settings.lifetimeAdDetectionCostUSD += inputCost + outputCost
+        settings.lifetimeAdDetectionInputCostUSD += inputCost
+        settings.lifetimeAdDetectionThoughtCostUSD += thoughtCost
+        settings.lifetimeAdDetectionOutputCostUSD += outputCost
+        settings.lifetimeAdDetectionCostUSD += inputCost + thoughtCost + outputCost
+        let record = TokenUsageRecord(
+            provider: provider,
+            episodeGUID: episode.guid,
+            episodeTitle: episode.title,
+            inputTokens: usage.inputTokens,
+            thoughtTokens: usage.thoughtTokens,
+            outputTokens: usage.outputTokens,
+            inputCostUSD: inputCost,
+            thoughtCostUSD: thoughtCost,
+            outputCostUSD: outputCost
+        )
+        context.insert(record)
     }
 }

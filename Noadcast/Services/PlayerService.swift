@@ -32,6 +32,7 @@ final class PlayerService {
     private(set) var volume: Float = 1.0
     private(set) var skippedAds: Int = 0
     private(set) var adRegions: [AdRegion] = []
+    private(set) var playAdsForCurrentEpisode: Bool = false
 
     private let player: AVPlayer = AVPlayer()
     private var timeObserverToken: Any?
@@ -59,9 +60,8 @@ final class PlayerService {
     /// ignore deltas that look like seeks rather than natural progress.
     private var lastObservedTime: Double = 0
 
-    /// Skip-policy snapshot captured at `load(episode:settings:)` time. Each
-    /// kind has its own toggle; changes the user makes mid-playback take
-    /// effect on the next load.
+    /// Skip-policy snapshot captured at `load(episode:settings:)` time. The
+    /// ad toggle can also be updated live from Settings / Now Playing.
     private var skipAdsEnabled: Bool = true
     private var skipIntrosAndOutrosEnabled: Bool = true
     /// Gap in seconds: when the player skips a segment it then peeks ahead
@@ -130,6 +130,7 @@ final class PlayerService {
         skipAdsEnabled = settings.skipAds
         skipIntrosAndOutrosEnabled = settings.skipIntrosAndOutros
         chainSkipGapSeconds = Double(settings.chainSkipGapSeconds)
+        playAdsForCurrentEpisode = false
         skippedAds = 0
 
         let resume = episode.playbackPosition
@@ -173,6 +174,7 @@ final class PlayerService {
         currentTime = 0
         duration = 0
         adRegions = []
+        playAdsForCurrentEpisode = false
         skippedAds = 0
         MPNowPlayingInfoCenter.default().nowPlayingInfo = nil
 
@@ -238,6 +240,17 @@ final class PlayerService {
     func setVolume(_ v: Float) {
         volume = max(0, min(1, v))
         player.volume = volume
+    }
+
+    func setSkipAdsEnabled(_ enabled: Bool) {
+        skipAdsEnabled = enabled
+        if !enabled {
+            playAdsForCurrentEpisode = false
+        }
+    }
+
+    func setPlayAdsForCurrentEpisode(_ enabled: Bool) {
+        playAdsForCurrentEpisode = enabled && skipAdsEnabled
     }
 
     // MARK: - Observers
@@ -328,7 +341,7 @@ final class PlayerService {
 
     private func shouldSkip(kind: SegmentKind) -> Bool {
         switch kind {
-        case .ad: skipAdsEnabled
+        case .ad: skipAdsEnabled && !playAdsForCurrentEpisode
         case .intro, .outro: skipIntrosAndOutrosEnabled
         }
     }
@@ -355,13 +368,21 @@ final class PlayerService {
             return
         }
 
-        let settings = AppSettings.current(in: container.mainContext)
+        let playedSeconds = pendingLifetimePlayedSeconds
+        let adSkipSeconds = pendingLifetimeAdSkipSeconds
+        let context = container.mainContext
+        let settings = AppSettings.current(in: context)
         settings.lifetimePlayedSeconds += pendingLifetimePlayedSeconds
         settings.lifetimeAdSkipSeconds += pendingLifetimeAdSkipSeconds
+        UsageHistoryDay.recordPlayback(
+            playedSeconds: playedSeconds,
+            adSkippedSeconds: adSkipSeconds,
+            in: context
+        )
         pendingLifetimePlayedSeconds = 0
         pendingLifetimeAdSkipSeconds = 0
         lastLifetimeStatsFlushTime = now
-        try? container.mainContext.save()
+        try? context.save()
     }
 
     // MARK: - Persistence
@@ -390,6 +411,7 @@ final class PlayerService {
 
     private func handlePlaybackFinished() {
         isPlaying = false
+        playAdsForCurrentEpisode = false
         guard let id = currentEpisodeID, let container = modelContainer else { return }
         let context = container.mainContext
         guard let episode = context.model(for: id) as? Episode else { return }

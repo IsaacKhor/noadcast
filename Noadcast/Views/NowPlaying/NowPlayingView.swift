@@ -1,13 +1,18 @@
 import SwiftUI
 import SwiftData
+import AVKit
 
 struct NowPlayingView: View {
     @Environment(\.modelContext) private var context
+    @Query private var settingsList: [AppSettings]
 
     private var player = PlayerService.shared
 
     @State private var showNotes = false
     @State private var showAds = false
+
+    private var settings: AppSettings? { settingsList.first }
+    private var globalAdSkippingEnabled: Bool { settings?.skipAds == true }
 
     /// Direct lookup by the player's `PersistentIdentifier`. Avoids the
     /// previous fetch-all-Episodes-and-`.first` pattern which faulted every
@@ -30,6 +35,12 @@ struct NowPlayingView: View {
             }
             .navigationTitle("Now Playing")
             .navigationBarTitleDisplayMode(.inline)
+        }
+        .onAppear {
+            syncAdSkipSetting()
+        }
+        .onChange(of: settings?.skipAds) { _, _ in
+            syncAdSkipSetting()
         }
         .sheet(isPresented: $showNotes) {
             if let ep = currentEpisode {
@@ -77,12 +88,17 @@ struct NowPlayingView: View {
 
                 playbackOptions
 
-                HStack(spacing: 24) {
+                HStack(spacing: 16) {
                     Button {
                         showNotes = true
                     } label: {
                         Label("Show Notes", systemImage: "doc.text")
                     }
+
+                    AudioOutputRoutePickerButton()
+                        .frame(width: 44, height: 36)
+                        .background(.quaternary, in: RoundedRectangle(cornerRadius: 8))
+                        .accessibilityLabel("Audio Output")
                 }
                 .buttonStyle(.bordered)
             }
@@ -168,21 +184,35 @@ struct NowPlayingView: View {
     }
 
     private var playbackOptions: some View {
-        HStack {
-            Text("Speed")
-                .font(.subheadline)
-            Spacer()
-            Picker("Speed", selection: Binding(
-                get: { player.playbackRate },
-                set: { player.setPlaybackRate($0) }
-            )) {
-                ForEach(PlaybackSpeed.options, id: \.self) { rate in
-                    Text(PlaybackSpeed.label(for: rate)).tag(rate)
+        VStack(spacing: 12) {
+            HStack {
+                Text("Speed")
+                    .font(.subheadline)
+                Spacer()
+                Picker("Speed", selection: Binding(
+                    get: { player.playbackRate },
+                    set: { player.setPlaybackRate($0) }
+                )) {
+                    ForEach(PlaybackSpeed.options, id: \.self) { rate in
+                        Text(PlaybackSpeed.label(for: rate)).tag(rate)
+                    }
                 }
+                .pickerStyle(.menu)
             }
-            .pickerStyle(.menu)
+
+            if globalAdSkippingEnabled, player.adRegions.contains(where: { $0.kind == .ad }) {
+                Toggle("Play ads this episode", isOn: Binding(
+                    get: { player.playAdsForCurrentEpisode },
+                    set: { player.setPlayAdsForCurrentEpisode($0) }
+                ))
+            }
         }
         .padding(.horizontal)
+    }
+
+    private func syncAdSkipSetting() {
+        guard let settings else { return }
+        player.setSkipAdsEnabled(settings.skipAds)
     }
 
     private var emptyState: some View {
@@ -199,5 +229,25 @@ struct NowPlayingView: View {
                 .padding(.horizontal, 40)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+}
+
+private struct AudioOutputRoutePickerButton: UIViewRepresentable {
+    func makeUIView(context: Context) -> AVRoutePickerView {
+        let view = AVRoutePickerView()
+        configure(view)
+        return view
+    }
+
+    func updateUIView(_ uiView: AVRoutePickerView, context: Context) {
+        configure(uiView)
+    }
+
+    private func configure(_ view: AVRoutePickerView) {
+        view.prioritizesVideoDevices = false
+        view.tintColor = .label
+        view.activeTintColor = .systemBlue
+        view.backgroundColor = .clear
+        view.accessibilityLabel = "Audio Output"
     }
 }

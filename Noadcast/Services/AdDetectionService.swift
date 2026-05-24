@@ -13,7 +13,14 @@ nonisolated struct DetectedAd: Sendable {
 /// fields mean that provider's response didn't include the breakdown.
 nonisolated struct TokenUsage: Sendable {
     var inputTokens: Int
+    var thoughtTokens: Int
     var outputTokens: Int
+
+    init(inputTokens: Int, thoughtTokens: Int = 0, outputTokens: Int) {
+        self.inputTokens = inputTokens
+        self.thoughtTokens = thoughtTokens
+        self.outputTokens = outputTokens
+    }
 }
 
 nonisolated struct DetectionResult: Sendable {
@@ -127,7 +134,7 @@ actor AdDetectionService {
         progress?(1, 1)
 
         let sorted = raw.sorted { $0.startSeconds < $1.startSeconds }
-        Log.adDetection.info("Ad detection complete — provider=\(provider.label, privacy: .public) ads=\(sorted.count) input_tokens=\(usage?.inputTokens ?? 0) output_tokens=\(usage?.outputTokens ?? 0)")
+        Log.adDetection.info("Ad detection complete — provider=\(provider.label, privacy: .public) ads=\(sorted.count) input_tokens=\(usage?.inputTokens ?? 0) thought_tokens=\(usage?.thoughtTokens ?? 0) output_tokens=\(usage?.outputTokens ?? 0)")
         return DetectionResult(ads: sorted, usage: usage)
     }
 
@@ -208,7 +215,11 @@ actor AdDetectionService {
             throw AdDetectionError.generationFailure(URLError(.cannotParseResponse))
         }
         let usage = decoded.usageMetadata.map {
-            TokenUsage(inputTokens: $0.promptTokenCount ?? 0, outputTokens: $0.candidatesTokenCount ?? 0)
+            TokenUsage(
+                inputTokens: $0.promptTokenCount ?? 0,
+                thoughtTokens: $0.thoughtsTokenCount ?? 0,
+                outputTokens: $0.candidatesTokenCount ?? 0
+            )
         }
         return (try Self.parseAdsJSON(text), usage)
     }
@@ -282,6 +293,7 @@ nonisolated private struct GeminiResponse: Decodable {
     }
     struct UsageMetadata: Decodable {
         let promptTokenCount: Int?
+        let thoughtsTokenCount: Int?
         let candidatesTokenCount: Int?
     }
 }

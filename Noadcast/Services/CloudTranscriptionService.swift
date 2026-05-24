@@ -94,6 +94,11 @@ nonisolated final class CloudTranscriptionService: NSObject, @unchecked Sendable
         let cleanupURL: URL?
     }
 
+    private struct UploadedGeminiFile {
+        let uri: String
+        let name: String?
+    }
+
     private struct TransferProgressSnapshot {
         var lastYieldUptime: TimeInterval
         var lastBytesSent: Int64
@@ -275,7 +280,7 @@ nonisolated final class CloudTranscriptionService: NSObject, @unchecked Sendable
         let fileSize = (try? uploadAudio.fileURL.resourceValues(forKeys: [.fileSizeKey]).fileSize).map(Int64.init) ?? 0
         Log.adDetection.info("Cloud analysis begin — provider=\(provider.label, privacy: .public) file=\(uploadAudio.fileURL.lastPathComponent, privacy: .public) bytes=\(fileSize) downsampled=\(downsampleBeforeUpload) path=files-api")
 
-        let fileURI = try await uploadToGeminiFiles(
+        let uploadedFile = try await uploadToGeminiFiles(
             fileURL: uploadAudio.fileURL,
             mimeType: uploadAudio.mimeType,
             apiKey: key,
@@ -283,15 +288,23 @@ nonisolated final class CloudTranscriptionService: NSObject, @unchecked Sendable
             onStage: onStage
         )
         onStage?(.analyzing)
-        let (ads, usage) = try await callGeminiCombined(
-            model: provider.apiModel,
-            fileURI: fileURI,
-            mimeType: uploadAudio.mimeType,
-            apiKey: key,
-            taskDescription: episodeGUID
-        )
+        let ads: [DetectedAd]
+        let usage: TokenUsage?
+        do {
+            (ads, usage) = try await callGeminiCombined(
+                model: provider.apiModel,
+                fileURI: uploadedFile.uri,
+                mimeType: uploadAudio.mimeType,
+                apiKey: key,
+                taskDescription: episodeGUID
+            )
+        } catch {
+            await deleteGeminiFile(uploadedFile, apiKey: key)
+            throw error
+        }
+        await deleteGeminiFile(uploadedFile, apiKey: key)
 
-        Log.adDetection.info("Cloud analysis complete — ads=\(ads.count) input_tokens=\(usage?.inputTokens ?? 0) output_tokens=\(usage?.outputTokens ?? 0)")
+        Log.adDetection.info("Cloud analysis complete — ads=\(ads.count) input_tokens=\(usage?.inputTokens ?? 0) thought_tokens=\(usage?.thoughtTokens ?? 0) output_tokens=\(usage?.outputTokens ?? 0)")
         return CloudTranscriptionResult(ads: ads, usage: usage)
     }
 
@@ -499,7 +512,7 @@ nonisolated final class CloudTranscriptionService: NSObject, @unchecked Sendable
         apiKey: String,
         taskDescription: String?,
         onStage: (@Sendable (CloudTranscriptionStage) -> Void)?
-    ) async throws -> String {
+    ) async throws -> UploadedGeminiFile {
         let byteCount = (try? fileURL.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0
         Log.adDetection.info("Uploading \(byteCount) bytes to Gemini Files API")
 
@@ -562,7 +575,51 @@ nonisolated final class CloudTranscriptionService: NSObject, @unchecked Sendable
             )
         }
         let decoded = try decoder.decode(GeminiFileUploadResponse.self, from: data)
-        return decoded.file.uri
+        return UploadedGeminiFile(
+            uri: decoded.file.uri,
+            name: decoded.file.name ?? Self.fileName(fromURI: decoded.file.uri)
+        )
+    }
+
+    private func deleteGeminiFile(_ file: UploadedGeminiFile, apiKey: String) async {
+        guard let name = file.name, !name.isEmpty else {
+            Log.adDetection.notice("Skipping Gemini file delete because response did not include a file name")
+            return
+        }
+        guard let encodedName = name.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed),
+              let url = URL(string: "https://generativelanguage.googleapis.com/v1beta/\(encodedName)?key=\(apiKey)")
+        else {
+            Log.adDetection.error("Couldn't build Gemini file delete URL for \(name, privacy: .public)")
+            return
+        }
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "DELETE"
+        do {
+            let (data, response) = try await URLSession.shared.data(for: request)
+            guard let http = response as? HTTPURLResponse else {
+                Log.adDetection.error("Gemini file delete failed: missing HTTP response")
+                return
+            }
+            guard (200..<300).contains(http.statusCode) else {
+                let body = String(data: data, encoding: .utf8) ?? ""
+                Log.adDetection.error("Gemini file delete failed — HTTP \(http.statusCode): \(body, privacy: .public)")
+                return
+            }
+            Log.adDetection.info("Deleted Gemini file \(name, privacy: .public)")
+        } catch {
+            Log.adDetection.error("Gemini file delete failed: \(Log.describe(error), privacy: .public)")
+        }
+    }
+
+    private static func fileName(fromURI uri: String) -> String? {
+        if uri.hasPrefix("files/") {
+            return uri
+        }
+        guard let marker = uri.range(of: "/files/") else { return nil }
+        let fileID = uri[marker.upperBound...]
+        guard !fileID.isEmpty else { return nil }
+        return "files/\(fileID)"
     }
 
     // MARK: - generateContent with file_data reference
@@ -645,7 +702,11 @@ nonisolated final class CloudTranscriptionService: NSObject, @unchecked Sendable
             throw CloudTranscriptionError.parseFailure(error.localizedDescription)
         }
         let usage = decoded.usageMetadata.map {
-            TokenUsage(inputTokens: $0.promptTokenCount ?? 0, outputTokens: $0.candidatesTokenCount ?? 0)
+            TokenUsage(
+                inputTokens: $0.promptTokenCount ?? 0,
+                thoughtTokens: $0.thoughtsTokenCount ?? 0,
+                outputTokens: $0.candidatesTokenCount ?? 0
+            )
         }
         return (ads.sorted { $0.startSeconds < $1.startSeconds }, usage)
     }
@@ -805,6 +866,7 @@ nonisolated private struct GeminiResponse: Decodable {
     }
     struct UsageMetadata: Decodable {
         let promptTokenCount: Int?
+        let thoughtsTokenCount: Int?
         let candidatesTokenCount: Int?
     }
 }

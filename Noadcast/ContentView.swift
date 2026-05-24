@@ -65,6 +65,7 @@ struct ContentView: View {
     ContentView()
         .modelContainer(for: [
             Podcast.self, Episode.self, AdMarker.self,
-            TranscriptSegment.self, QueueItem.self, AppSettings.self
+            TranscriptSegment.self, QueueItem.self, AppSettings.self,
+            UsageHistoryDay.self, TokenUsageRecord.self
         ], inMemory: true)
 }

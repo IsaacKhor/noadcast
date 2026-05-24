@@ -8,6 +8,7 @@ struct SettingsView: View {
 
     @State private var showOPMLPicker = false
     @State private var opmlMessage: String?
+    @State private var showResetTokenStatsConfirmation = false
 
     private var settings: AppSettings? { settingsList.first }
 
@@ -16,6 +17,7 @@ struct SettingsView: View {
             Form {
                 if let s = settings {
                     timeSavedSection(settings: s)
+                    usageHistorySection
                     playbackSection(settings: s)
                     skippingSection(settings: s)
                     downloadsSection(settings: s)
@@ -36,6 +38,16 @@ struct SettingsView: View {
             }, message: {
                 Text(opmlMessage ?? "")
             })
+            .confirmationDialog(
+                "Reset token usage statistics?",
+                isPresented: $showResetTokenStatsConfirmation,
+                titleVisibility: .visible
+            ) {
+                Button("Reset Statistics", role: .destructive) {
+                    resetTokenUsageStatistics()
+                }
+                Button("Cancel", role: .cancel) {}
+            }
         }
     }
 
@@ -65,6 +77,17 @@ struct SettingsView: View {
     }
 
     @ViewBuilder
+    private var usageHistorySection: some View {
+        Section("History") {
+            NavigationLink {
+                UsageHistoryView()
+            } label: {
+                Label("Usage History", systemImage: "chart.bar.xaxis")
+            }
+        }
+    }
+
+    @ViewBuilder
     private func playbackSection(settings: AppSettings) -> some View {
         @Bindable var s = settings
         Section("Playback") {
@@ -82,7 +105,13 @@ struct SettingsView: View {
     private func skippingSection(settings: AppSettings) -> some View {
         @Bindable var s = settings
         Section {
-            Toggle("Skip ads", isOn: $s.skipAds)
+            Toggle("Skip ads", isOn: Binding(
+                get: { settings.skipAds },
+                set: { enabled in
+                    settings.skipAds = enabled
+                    PlayerService.shared.setSkipAdsEnabled(enabled)
+                }
+            ))
             Toggle("Skip intros & outros", isOn: $s.skipIntrosAndOutros)
             Stepper(value: $s.chainSkipGapSeconds, in: 0...30) {
                 LabeledContent("Chain-skip gap") {
@@ -139,12 +168,31 @@ struct SettingsView: View {
                 .textInputAutocapitalization(.never)
             }
             Toggle("Downsample audio before upload", isOn: $s.downsampleAudioBeforeUpload)
+            Button(role: .destructive) {
+                showResetTokenStatsConfirmation = true
+            } label: {
+                Label("Reset Token Usage Statistics", systemImage: "arrow.counterclockwise")
+            }
         } header: {
             Text("Detection model")
         } footer: {
             VStack(alignment: .leading, spacing: 4) {
                 Text(providerFooter(for: provider))
-                Text(tokensFooter(settings: settings))
+                Text(tokenCostLine(
+                    label: "Input tokens",
+                    tokens: settings.lifetimeAdDetectionInputTokens,
+                    cost: settings.lifetimeAdDetectionInputCostUSD
+                ))
+                Text(tokenCostLine(
+                    label: "Thought tokens",
+                    tokens: settings.lifetimeAdDetectionThoughtTokens,
+                    cost: settings.lifetimeAdDetectionThoughtCostUSD
+                ))
+                Text(tokenCostLine(
+                    label: "Output tokens",
+                    tokens: settings.lifetimeAdDetectionOutputTokens,
+                    cost: settings.lifetimeAdDetectionOutputCostUSD
+                ))
             }
         }
     }
@@ -155,11 +203,15 @@ struct SettingsView: View {
 
     /// Compact running totals shown under the provider footer so the user
     /// can keep an eye on API spend. Summed across providers.
-    private func tokensFooter(settings: AppSettings) -> String {
-        let input = settings.lifetimeAdDetectionInputTokens
-        let output = settings.lifetimeAdDetectionOutputTokens
-        let cost = settings.lifetimeAdDetectionCostUSD
-        return "Tokens used: \(Self.formatTokens(input)) in · \(Self.formatTokens(output)) out · ~\(Self.formatCost(cost))"
+    private func tokenCostLine(label: String, tokens: Int, cost: Double) -> String {
+        "\(label): \(Self.formatTokens(tokens)) · ~\(Self.formatCost(cost))"
+    }
+
+    private func resetTokenUsageStatistics() {
+        guard let settings else { return }
+        settings.resetAdDetectionUsageStatistics()
+        TokenUsageRecord.resetAll(in: context)
+        try? context.save()
     }
 
     private static func formatTokens(_ count: Int) -> String {

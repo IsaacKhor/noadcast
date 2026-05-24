@@ -57,17 +57,23 @@ final class AppSettings {
     /// seconds for another segment to chain-skip. Set to 0 to disable.
     var chainSkipGapSeconds: Int = 5
 
-    /// Lifetime cumulative input + output tokens billed to the user's API
+    /// Lifetime cumulative input/thought/output tokens billed to the user's API
     /// key(s) for ad-detection (and, when enabled, cloud transcription)
     /// calls. Summed across models so changing providers doesn't reset the
     /// counter. Updated by `ProcessingPipeline` after each successful call.
     var lifetimeAdDetectionInputTokens: Int = 0
+    var lifetimeAdDetectionThoughtTokens: Int = 0
     var lifetimeAdDetectionOutputTokens: Int = 0
 
-    /// Running cost estimate in USD, accumulated as each call completes
-    /// using whatever per-token rate the provider was on at the time. A
-    /// historical record, not a re-computation — so changes to the pricing
-    /// constants in `AdDetectionProvider` only affect new calls.
+    /// Running cost estimates in USD, accumulated as each call completes
+    /// using whatever per-token rates the provider was on at the time. These
+    /// are historical records, not re-computations — so changes to the
+    /// pricing constants in `AdDetectionProvider` only affect new calls.
+    var lifetimeAdDetectionInputCostUSD: Double = 0
+    var lifetimeAdDetectionThoughtCostUSD: Double = 0
+    var lifetimeAdDetectionOutputCostUSD: Double = 0
+    /// Legacy combined total retained for older local stores and any future
+    /// migration/debugging needs.
     var lifetimeAdDetectionCostUSD: Double = 0
 
     /// Legacy setting retained for backwards compatibility with older local
@@ -127,6 +133,16 @@ final class AppSettings {
     var podcastSortMode: PodcastSortMode {
         get { PodcastSortMode(rawValue: podcastSortModeRaw) ?? .latestEpisode }
         set { podcastSortModeRaw = newValue.rawValue }
+    }
+
+    func resetAdDetectionUsageStatistics() {
+        lifetimeAdDetectionInputTokens = 0
+        lifetimeAdDetectionThoughtTokens = 0
+        lifetimeAdDetectionOutputTokens = 0
+        lifetimeAdDetectionInputCostUSD = 0
+        lifetimeAdDetectionThoughtCostUSD = 0
+        lifetimeAdDetectionOutputCostUSD = 0
+        lifetimeAdDetectionCostUSD = 0
     }
 
     /// Fetches the singleton settings row, creating it if missing.
