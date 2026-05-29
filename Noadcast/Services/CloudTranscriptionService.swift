@@ -255,6 +255,7 @@ nonisolated final class CloudTranscriptionService: NSObject, @unchecked Sendable
         provider: AdDetectionProvider,
         googleAPIKey: String?,
         mimeType: String,
+        thinkingLevel: AdDetectionThinkingLevel = .automatic,
         downsampleBeforeUpload: Bool = false,
         episodeGUID: String? = nil,
         onStage: (@Sendable (CloudTranscriptionStage) -> Void)? = nil
@@ -296,6 +297,7 @@ nonisolated final class CloudTranscriptionService: NSObject, @unchecked Sendable
                 fileURI: uploadedFile.uri,
                 mimeType: uploadAudio.mimeType,
                 apiKey: key,
+                thinkingLevel: provider.supportsThinkingLevel ? thinkingLevel : .automatic,
                 taskDescription: episodeGUID
             )
         } catch {
@@ -629,6 +631,7 @@ nonisolated final class CloudTranscriptionService: NSObject, @unchecked Sendable
         fileURI: String,
         mimeType: String,
         apiKey: String,
+        thinkingLevel: AdDetectionThinkingLevel,
         taskDescription: String?
     ) async throws -> ([DetectedAd], TokenUsage?) {
         let parts: [[String: Any]] = [
@@ -642,6 +645,7 @@ nonisolated final class CloudTranscriptionService: NSObject, @unchecked Sendable
             model: model,
             parts: parts,
             apiKey: apiKey,
+            thinkingLevel: thinkingLevel,
             taskDescription: taskDescription
         )
     }
@@ -654,6 +658,7 @@ nonisolated final class CloudTranscriptionService: NSObject, @unchecked Sendable
         model: String,
         parts: [[String: Any]],
         apiKey: String,
+        thinkingLevel: AdDetectionThinkingLevel,
         taskDescription: String?
     ) async throws -> ([DetectedAd], TokenUsage?) {
         guard let url = URL(string: "https://generativelanguage.googleapis.com/v1beta/models/\(model):generateContent?key=\(apiKey)") else {
@@ -663,15 +668,20 @@ nonisolated final class CloudTranscriptionService: NSObject, @unchecked Sendable
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
 
+        var generationConfig: [String: Any] = [
+            "responseMimeType": "application/json",
+            "responseSchema": Self.responseSchema
+        ]
+        if let apiValue = thinkingLevel.apiValue {
+            generationConfig["thinkingConfig"] = ["thinkingLevel": apiValue]
+        }
+
         let body: [String: Any] = [
             "systemInstruction": ["parts": [["text": Self.segmentsOnlyPrompt]]],
             "contents": [
                 ["role": "user", "parts": parts]
             ],
-            "generationConfig": [
-                "responseMimeType": "application/json",
-                "responseSchema": Self.responseSchema
-            ]
+            "generationConfig": generationConfig
         ]
         let bodyData = try JSONSerialization.data(withJSONObject: body)
         let bodyURL = try writeTempBody(bodyData)

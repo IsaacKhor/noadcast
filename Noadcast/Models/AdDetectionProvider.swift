@@ -40,6 +40,19 @@ nonisolated enum AdDetectionProvider: String, Codable, CaseIterable, Sendable {
         true
     }
 
+    var supportsThinkingLevel: Bool {
+        switch self {
+        case .gemini3Flash, .gemini35Flash, .gemini31FlashLite:
+            true
+        case .gemini25Flash, .gemini25FlashLite:
+            false
+        }
+    }
+
+    var thinkingLevelOptions: [AdDetectionThinkingLevel] {
+        supportsThinkingLevel ? AdDetectionThinkingLevel.allCases : [.automatic]
+    }
+
     /// USD per million text/image/video input tokens, based on the
     /// provider's published standard paid-tier rates.
     var pricePerMTokensTextInput: Double {
@@ -79,5 +92,33 @@ nonisolated enum AdDetectionProvider: String, Codable, CaseIterable, Sendable {
     /// Settings can show the estimate as its own line.
     var pricePerMTokensThoughtOutput: Double {
         pricePerMTokensOutput
+    }
+}
+
+nonisolated enum AdDetectionThinkingLevel: String, Codable, CaseIterable, Sendable {
+    case automatic
+    case minimal
+    case low
+    case medium
+    case high
+
+    var label: String {
+        switch self {
+        case .automatic: "Default"
+        case .minimal: "Minimal"
+        case .low: "Low"
+        case .medium: "Medium"
+        case .high: "High"
+        }
+    }
+
+    var apiValue: String? {
+        switch self {
+        case .automatic: nil
+        case .minimal: "minimal"
+        case .low: "low"
+        case .medium: "medium"
+        case .high: "high"
+        }
     }
 }

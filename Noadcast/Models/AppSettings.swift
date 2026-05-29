@@ -85,6 +85,9 @@ final class AppSettings {
 
     /// Which cloud model performs ad detection. See `AdDetectionProvider`.
     var adDetectionProviderRaw: String = AdDetectionProvider.gemini35Flash.rawValue
+    /// Optional thinking level for Gemini models whose API accepts
+    /// `thinkingConfig.thinkingLevel`. Unsupported models ignore this.
+    var adDetectionThinkingLevelRaw: String = AdDetectionThinkingLevel.automatic.rawValue
     /// If enabled, uploads a temporary low-bitrate copy to Gemini instead of
     /// the local playback file.
     var downsampleAudioBeforeUpload: Bool = false
@@ -96,6 +99,11 @@ final class AppSettings {
     var adDetectionProvider: AdDetectionProvider {
         get { AdDetectionProvider(rawValue: adDetectionProviderRaw) ?? .gemini35Flash }
         set { adDetectionProviderRaw = newValue.rawValue }
+    }
+
+    var adDetectionThinkingLevel: AdDetectionThinkingLevel {
+        get { AdDetectionThinkingLevel(rawValue: adDetectionThinkingLevelRaw) ?? .automatic }
+        set { adDetectionThinkingLevelRaw = newValue.rawValue }
     }
 
     var adDetectionMode: AdDetectionMode {

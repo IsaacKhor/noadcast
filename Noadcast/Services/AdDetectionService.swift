@@ -110,6 +110,7 @@ actor AdDetectionService {
         in transcript: [TranscribedSegment],
         provider: AdDetectionProvider,
         googleAPIKey: String? = nil,
+        thinkingLevel: AdDetectionThinkingLevel = .automatic,
         progress: (@Sendable (Int, Int) -> Void)? = nil
     ) async throws -> DetectionResult {
         guard !transcript.isEmpty else { return DetectionResult(ads: [], usage: nil) }
@@ -128,7 +129,8 @@ actor AdDetectionService {
             (raw, usage) = try await callGemini(
                 model: provider.apiModel,
                 prompt: prompt,
-                apiKey: key
+                apiKey: key,
+                thinkingLevel: provider.supportsThinkingLevel ? thinkingLevel : .automatic
             )
         }
         progress?(1, 1)
@@ -164,7 +166,8 @@ actor AdDetectionService {
     private func callGemini(
         model: String,
         prompt: String,
-        apiKey: String
+        apiKey: String,
+        thinkingLevel: AdDetectionThinkingLevel
     ) async throws -> ([DetectedAd], TokenUsage?) {
         let urlString = "https://generativelanguage.googleapis.com/v1beta/models/\(model):generateContent?key=\(apiKey)"
         guard let url = URL(string: urlString) else {
@@ -175,36 +178,41 @@ actor AdDetectionService {
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
 
         // Gemini's response-schema dialect uses uppercase type names.
+        var generationConfig: [String: Any] = [
+            "responseMimeType": "application/json",
+            "responseSchema": [
+                "type": "OBJECT",
+                "properties": [
+                    "segments": [
+                        "type": "ARRAY",
+                        "items": [
+                            "type": "OBJECT",
+                            "properties": [
+                                "startSeconds": ["type": "NUMBER"],
+                                "endSeconds": ["type": "NUMBER"],
+                                "summary": ["type": "STRING"],
+                                "kind": [
+                                    "type": "STRING",
+                                    "enum": ["ad", "intro", "outro"]
+                                ]
+                            ],
+                            "required": ["startSeconds", "endSeconds", "summary", "kind"]
+                        ]
+                    ]
+                ],
+                "required": ["segments"]
+            ]
+        ]
+        if let apiValue = thinkingLevel.apiValue {
+            generationConfig["thinkingConfig"] = ["thinkingLevel": apiValue]
+        }
+
         let body: [String: Any] = [
             "systemInstruction": ["parts": [["text": Self.detectionPrompt]]],
             "contents": [
                 ["role": "user", "parts": [["text": prompt]]]
             ],
-            "generationConfig": [
-                "responseMimeType": "application/json",
-                "responseSchema": [
-                    "type": "OBJECT",
-                    "properties": [
-                        "segments": [
-                            "type": "ARRAY",
-                            "items": [
-                                "type": "OBJECT",
-                                "properties": [
-                                    "startSeconds": ["type": "NUMBER"],
-                                    "endSeconds": ["type": "NUMBER"],
-                                    "summary": ["type": "STRING"],
-                                    "kind": [
-                                        "type": "STRING",
-                                        "enum": ["ad", "intro", "outro"]
-                                    ]
-                                ],
-                                "required": ["startSeconds", "endSeconds", "summary", "kind"]
-                            ]
-                        ]
-                    ],
-                    "required": ["segments"]
-                ]
-            ]
+            "generationConfig": generationConfig
         ]
         request.httpBody = try JSONSerialization.data(withJSONObject: body)
 

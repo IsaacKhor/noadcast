@@ -13,6 +13,7 @@ struct QueueView: View {
     /// `@State` and refreshed via `refreshPending()` only when the inputs
     /// change, so a body re-eval doesn't re-filter the array.
     @State private var pendingItems: [QueueItem] = []
+    @State private var pendingDuration: Double = 0
 
     /// The episode the player is currently loaded on, if any. Looked up by
     /// `PersistentIdentifier` so we don't fault every Episode just to render
@@ -24,11 +25,21 @@ struct QueueView: View {
 
     private func refreshPending() {
         let playingID = player.currentEpisodeID
-        guard let id = playingID else {
-            pendingItems = items
-            return
+        let pending: [QueueItem]
+        if let id = playingID {
+            pending = items.filter { $0.episode?.persistentModelID != id }
+        } else {
+            pending = items
         }
-        pendingItems = items.filter { $0.episode?.persistentModelID != id }
+
+        pendingItems = pending
+        pendingDuration = pending.reduce(0) { total, item in
+            guard let episode = item.episode,
+                  let duration = episode.duration,
+                  duration > 0 else { return total }
+            let remaining = episode.playbackPosition > 0 ? duration - episode.playbackPosition : duration
+            return total + max(0, remaining)
+        }
     }
 
     var body: some View {
@@ -108,7 +119,7 @@ struct QueueView: View {
                     }
                     .onMove(perform: move)
                 } header: {
-                    Text("Up Next")
+                    upNextHeader
                 }
             } else if currentEpisode == nil {
                 Section {
@@ -120,6 +131,17 @@ struct QueueView: View {
             }
         }
         .listStyle(.plain)
+    }
+
+    private var upNextHeader: some View {
+        HStack(spacing: 6) {
+            Text("Up Next")
+            if pendingDuration > 0 {
+                Text("·")
+                Text(TimeFormatting.minutesDuration(pendingDuration))
+                    .monospacedDigit()
+            }
+        }
     }
 
     private var sortMenu: some View {

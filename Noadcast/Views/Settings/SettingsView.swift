@@ -155,6 +155,17 @@ struct SettingsView: View {
                     Text(p.label).tag(p)
                 }
             }
+            if provider.supportsThinkingLevel {
+                Picker("Thinking level", selection: Binding(
+                    get: { s.adDetectionThinkingLevel },
+                    set: { s.adDetectionThinkingLevel = $0 }
+                )) {
+                    ForEach(provider.thinkingLevelOptions, id: \.self) { level in
+                        Text(level.label).tag(level)
+                    }
+                }
+                .pickerStyle(.menu)
+            }
             if provider.requiresGoogleKey {
                 SecureField(
                     "Google AI API key",

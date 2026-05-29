@@ -207,6 +207,7 @@ final class ProcessingPipeline {
         let settings = AppSettings.current(in: context)
         let provider = settings.adDetectionProvider
         let googleKey = settings.googleAPIKey
+        let thinkingLevel = settings.adDetectionThinkingLevel
         let downsampleBeforeUpload = settings.downsampleAudioBeforeUpload
         let mimeType = episode.audioMimeType ?? "audio/mpeg"
         let episodeID = episode.persistentModelID
@@ -217,6 +218,7 @@ final class ProcessingPipeline {
             provider: provider,
             googleAPIKey: googleKey,
             mimeType: mimeType,
+            thinkingLevel: thinkingLevel,
             downsampleBeforeUpload: downsampleBeforeUpload,
             episodeGUID: episode.guid,
             onStage: { stage in
