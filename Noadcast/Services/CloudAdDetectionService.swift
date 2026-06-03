@@ -2,31 +2,16 @@ import Foundation
 import AVFoundation
 import os
 
-/// One-shot file-analysis helper: uploads the entire audio file to a Gemini
-/// model and gets back skip segments in one structured-JSON response.
-///
-/// Replaces the `SpeechAnalyzer` + `AdDetectionService` two-step for the
-/// file-upload detection modes. Wins:
-/// * No on-device transcription — no CPU spike, no 79-min `SpeechAnalyzer`
-///   crash, no chunking.
-/// * Just an HTTP upload + response, so the whole pipeline rides on a
-///   **background** `URLSession` and keeps moving while the app is
-///   suspended.
-/// * The model has access to actual audio cues (music stings, voice
-///   changes), which makes intros / outros / ad reads more obvious than
-///   from text alone.
-///
-/// Costs: token spend goes up ~10–30× per episode (audio frames count as
-/// input tokens), and bandwidth depends on whether Settings uses the
-/// original playback file or a temporary downsampled upload copy.
-nonisolated struct CloudTranscriptionResult: Sendable {
+/// One-shot file-analysis helper: uploads the episode audio to Gemini and
+/// receives skip segments in one structured-JSON response.
+nonisolated struct CloudAdDetectionResult: Sendable {
     let ads: [DetectedAd]
     let usage: TokenUsage?
 }
 
 /// Per-stage signal the pipeline subscribes to so it can flip
 /// `Episode.processingState` and surface upload byte counts in the UI.
-nonisolated enum CloudTranscriptionStage: Sendable {
+nonisolated enum CloudAdDetectionStage: Sendable {
     /// Bytes have started moving. `totalBytes` is the request body size as
     /// reported by `URLSession` during the Gemini Files upload.
     case uploading(bytesSent: Int64, totalBytes: Int64)
@@ -35,7 +20,7 @@ nonisolated enum CloudTranscriptionStage: Sendable {
     case analyzing
 }
 
-enum CloudTranscriptionError: LocalizedError {
+enum CloudAdDetectionError: LocalizedError {
     case providerUnsupported(String)
     case missingAPIKey(String)
     case downsampleFailed(Error)
@@ -65,10 +50,10 @@ enum CloudTranscriptionError: LocalizedError {
 /// land on the session's serial delegate queue and are bridged to the
 /// caller's `async` continuation through a per-task entry in `pending`,
 /// guarded by `lock`.
-nonisolated final class CloudTranscriptionService: NSObject, @unchecked Sendable {
-    static let shared = CloudTranscriptionService()
+nonisolated final class CloudAdDetectionService: NSObject, @unchecked Sendable {
+    static let shared = CloudAdDetectionService()
 
-    static let backgroundSessionIdentifier = "com.isaackhor.Noadcast.background-cloud"
+    static let backgroundSessionIdentifier = "com.isaackhor.Noadcast.background-ad-detection"
 
     private struct PendingUpload {
         var receivedData = Data()
@@ -140,7 +125,7 @@ nonisolated final class CloudTranscriptionService: NSObject, @unchecked Sendable
                             reader.cancelReading()
                             writer.cancelWriting()
                             complete(
-                                .failure(writer.error ?? CloudTranscriptionService.downsampleError("Couldn't append audio sample.")),
+                                .failure(writer.error ?? CloudAdDetectionService.downsampleError("Couldn't append audio sample.")),
                                 completion
                             )
                             return
@@ -158,13 +143,13 @@ nonisolated final class CloudTranscriptionService: NSObject, @unchecked Sendable
 
         private func finalResult() -> Result<Void, Error> {
             if reader.status == .failed {
-                return .failure(reader.error ?? CloudTranscriptionService.downsampleError("Audio reader failed."))
+                return .failure(reader.error ?? CloudAdDetectionService.downsampleError("Audio reader failed."))
             }
             if writer.status == .failed || writer.status == .cancelled {
-                return .failure(writer.error ?? CloudTranscriptionService.downsampleError("Audio writer failed."))
+                return .failure(writer.error ?? CloudAdDetectionService.downsampleError("Audio writer failed."))
             }
             guard writer.status == .completed else {
-                return .failure(CloudTranscriptionService.downsampleError("Audio writer ended in state \(writer.status.rawValue)."))
+                return .failure(CloudAdDetectionService.downsampleError("Audio writer ended in state \(writer.status.rawValue)."))
             }
             return .success(())
         }
@@ -236,8 +221,10 @@ nonisolated final class CloudTranscriptionService: NSObject, @unchecked Sendable
 
     Use only timestamps that match the audio. Be conservative — flag segments \
     only when you're confident. Return an empty `segments` array if \
-    nothing should be skipped. Do not include transcript text or any fields \
-    other than `segments`.
+    nothing should be skipped. Do not include any fields other than `segments`. \
+    Ensure that the segment timestamps you return accurately reflect the input \
+    audio, make sure to not include bogus data such as timestamps that exceed \
+    the episode duration.
     """
 
     /// Top-level entry point. Always uploads the audio through Gemini's
@@ -258,13 +245,13 @@ nonisolated final class CloudTranscriptionService: NSObject, @unchecked Sendable
         thinkingLevel: AdDetectionThinkingLevel = .automatic,
         downsampleBeforeUpload: Bool = false,
         episodeGUID: String? = nil,
-        onStage: (@Sendable (CloudTranscriptionStage) -> Void)? = nil
-    ) async throws -> CloudTranscriptionResult {
-        guard provider.supportsCloudTranscription else {
-            throw CloudTranscriptionError.providerUnsupported(provider.label)
+        onStage: (@Sendable (CloudAdDetectionStage) -> Void)? = nil
+    ) async throws -> CloudAdDetectionResult {
+        guard provider.supportsAudioFileDetection else {
+            throw CloudAdDetectionError.providerUnsupported(provider.label)
         }
         guard let key = googleAPIKey, !key.isEmpty else {
-            throw CloudTranscriptionError.missingAPIKey(provider.label)
+            throw CloudAdDetectionError.missingAPIKey(provider.label)
         }
 
         let uploadAudio = try await prepareUploadAudio(
@@ -279,7 +266,7 @@ nonisolated final class CloudTranscriptionService: NSObject, @unchecked Sendable
         }
 
         let fileSize = (try? uploadAudio.fileURL.resourceValues(forKeys: [.fileSizeKey]).fileSize).map(Int64.init) ?? 0
-        Log.adDetection.info("Cloud analysis begin — provider=\(provider.label, privacy: .public) file=\(uploadAudio.fileURL.lastPathComponent, privacy: .public) bytes=\(fileSize) downsampled=\(downsampleBeforeUpload) path=files-api")
+        Log.adDetection.info("Audio analysis begin — provider=\(provider.label, privacy: .public) file=\(uploadAudio.fileURL.lastPathComponent, privacy: .public) bytes=\(fileSize) downsampled=\(downsampleBeforeUpload) path=files-api")
 
         let uploadedFile = try await uploadToGeminiFiles(
             fileURL: uploadAudio.fileURL,
@@ -306,8 +293,8 @@ nonisolated final class CloudTranscriptionService: NSObject, @unchecked Sendable
         }
         await deleteGeminiFile(uploadedFile, apiKey: key)
 
-        Log.adDetection.info("Cloud analysis complete — ads=\(ads.count) input_tokens=\(usage?.inputTokens ?? 0) thought_tokens=\(usage?.thoughtTokens ?? 0) output_tokens=\(usage?.outputTokens ?? 0)")
-        return CloudTranscriptionResult(ads: ads, usage: usage)
+        Log.adDetection.info("Audio analysis complete — ads=\(ads.count) input_tokens=\(usage?.inputTokens ?? 0) thought_tokens=\(usage?.thoughtTokens ?? 0) output_tokens=\(usage?.outputTokens ?? 0)")
+        return CloudAdDetectionResult(ads: ads, usage: usage)
     }
 
     /// Cancels any background tasks tagged with `taskDescription == guid`.
@@ -378,7 +365,7 @@ nonisolated final class CloudTranscriptionService: NSObject, @unchecked Sendable
             let outputURL = try await Self.downsampleForUpload(fileURL)
             return UploadAudio(fileURL: outputURL, mimeType: "audio/mp4", cleanupURL: outputURL)
         } catch {
-            throw CloudTranscriptionError.downsampleFailed(error)
+            throw CloudAdDetectionError.downsampleFailed(error)
         }
     }
 
@@ -513,14 +500,14 @@ nonisolated final class CloudTranscriptionService: NSObject, @unchecked Sendable
         mimeType: String,
         apiKey: String,
         taskDescription: String?,
-        onStage: (@Sendable (CloudTranscriptionStage) -> Void)?
+        onStage: (@Sendable (CloudAdDetectionStage) -> Void)?
     ) async throws -> UploadedGeminiFile {
         let byteCount = (try? fileURL.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0
         Log.adDetection.info("Uploading \(byteCount) bytes to Gemini Files API")
 
         // Step 1 — start a resumable upload session.
         guard let startURL = URL(string: "https://generativelanguage.googleapis.com/upload/v1beta/files?key=\(apiKey)") else {
-            throw CloudTranscriptionError.uploadFailed(URLError(.badURL))
+            throw CloudAdDetectionError.uploadFailed(URLError(.badURL))
         }
         var startRequest = URLRequest(url: startURL)
         startRequest.httpMethod = "POST"
@@ -545,7 +532,7 @@ nonisolated final class CloudTranscriptionService: NSObject, @unchecked Sendable
               let uploadURLString = startResponse.value(forHTTPHeaderField: "X-Goog-Upload-URL"),
               let uploadURL = URL(string: uploadURLString)
         else {
-            throw CloudTranscriptionError.uploadFailed(
+            throw CloudAdDetectionError.uploadFailed(
                 NSError(domain: "GeminiFiles", code: startResponse.statusCode,
                         userInfo: [NSLocalizedDescriptionKey: "Failed to start upload — HTTP \(startResponse.statusCode)"])
             )
@@ -571,7 +558,7 @@ nonisolated final class CloudTranscriptionService: NSObject, @unchecked Sendable
         guard (200..<300).contains(uploadResponse.statusCode) else {
             let body = String(data: data, encoding: .utf8) ?? ""
             Log.adDetection.error("Gemini Files upload failed — HTTP \(uploadResponse.statusCode): \(body, privacy: .public)")
-            throw CloudTranscriptionError.uploadFailed(
+            throw CloudAdDetectionError.uploadFailed(
                 NSError(domain: "GeminiFiles", code: uploadResponse.statusCode,
                         userInfo: [NSLocalizedDescriptionKey: "Upload failed — HTTP \(uploadResponse.statusCode)"])
             )
@@ -662,7 +649,7 @@ nonisolated final class CloudTranscriptionService: NSObject, @unchecked Sendable
         taskDescription: String?
     ) async throws -> ([DetectedAd], TokenUsage?) {
         guard let url = URL(string: "https://generativelanguage.googleapis.com/v1beta/models/\(model):generateContent?key=\(apiKey)") else {
-            throw CloudTranscriptionError.uploadFailed(URLError(.badURL))
+            throw CloudAdDetectionError.uploadFailed(URLError(.badURL))
         }
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
@@ -695,21 +682,21 @@ nonisolated final class CloudTranscriptionService: NSObject, @unchecked Sendable
         if !(200..<300).contains(response.statusCode) {
             let bodyText = String(data: data, encoding: .utf8) ?? ""
             Log.adDetection.error("Gemini combined call HTTP \(response.statusCode): \(bodyText, privacy: .public)")
-            throw CloudTranscriptionError.uploadFailed(
+            throw CloudAdDetectionError.uploadFailed(
                 NSError(domain: "Gemini", code: response.statusCode,
                         userInfo: [NSLocalizedDescriptionKey: "HTTP \(response.statusCode): \(bodyText.prefix(500))"])
             )
         }
         let decoded = try decoder.decode(GeminiResponse.self, from: data)
         guard let text = decoded.candidates.first?.content.parts.first?.text else {
-            throw CloudTranscriptionError.parseFailure("Missing response text")
+            throw CloudAdDetectionError.parseFailure("Missing response text")
         }
         let ads: [DetectedAd]
         do {
             let parsed = try JSONDecoder().decode(SegmentsOnlyResponse.self, from: Data(text.utf8))
             ads = Self.detectedAds(from: parsed.segments)
         } catch {
-            throw CloudTranscriptionError.parseFailure(error.localizedDescription)
+            throw CloudAdDetectionError.parseFailure(error.localizedDescription)
         }
         let usage = decoded.usageMetadata.map {
             TokenUsage(
@@ -756,14 +743,14 @@ nonisolated final class CloudTranscriptionService: NSObject, @unchecked Sendable
                 endSeconds: row.endSeconds,
                 summary: row.summary,
                 kind: kind
-            )
+            ).sanitized(episodeDuration: nil)
         }
     }
 }
 
 // MARK: - URLSession delegate
 
-extension CloudTranscriptionService: @preconcurrency URLSessionDataDelegate {
+extension CloudAdDetectionService: @preconcurrency URLSessionDataDelegate {
     func urlSession(
         _ session: URLSession,
         dataTask: URLSessionDataTask,

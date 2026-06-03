@@ -35,19 +35,32 @@ final class SubscriptionService {
         return podcast
     }
 
-    func refresh(podcast: Podcast, in context: ModelContext) async throws {
+    func refresh(
+        podcast: Podcast,
+        in context: ModelContext,
+        startQueuedDownloads: Bool = true
+    ) async throws {
         let parsed = try await FeedService.shared.fetch(feedURL: podcast.feedURL)
+        let previousTitle = podcast.title
+        let previousArtworkURL = podcast.artworkURL
         if podcast.title.isEmpty { podcast.title = parsed.title }
-        podcast.author = parsed.author ?? podcast.author
-        podcast.summary = parsed.summary ?? podcast.summary
+        if let author = parsed.author, podcast.author != author {
+            podcast.author = author
+        }
+        if let summary = parsed.summary, podcast.summary != summary {
+            podcast.summary = summary
+        }
         // Always pick up updated artwork from the feed — the show might have
         // rebranded since we first subscribed. `ArtworkService.cache(for:)`
         // below diffs against `cachedArtworkSourceURL` and only re-downloads
         // when the URL actually changed.
-        if let artwork = parsed.artworkURL {
+        if let artwork = parsed.artworkURL, podcast.artworkURL != artwork {
             podcast.artworkURL = artwork
         }
         importEpisodes(parsed.episodes, into: podcast, context: context)
+        if podcast.title != previousTitle || podcast.artworkURL != previousArtworkURL {
+            podcast.syncEpisodeSnapshots()
+        }
         podcast.lastFetched = .now
         try context.save()
         await ArtworkService.shared.cache(for: podcast)
@@ -55,16 +68,20 @@ final class SubscriptionService {
         // Newly-imported episodes that auto-enqueued in importEpisodes now
         // exist with persisted IDs; tell the pipeline to download/analyze
         // anything in the queue that isn't already ready.
-        processQueuedEpisodes(context: context)
+        if startQueuedDownloads {
+            processQueuedEpisodes(context: context)
+        }
     }
 
     func refreshAll(context: ModelContext) async {
         let podcasts = (try? context.fetch(FetchDescriptor<Podcast>())) ?? []
         for p in podcasts {
-            try? await refresh(podcast: p, in: context)
+            try? await refresh(podcast: p, in: context, startQueuedDownloads: false)
+            await Task.yield()
         }
         AppSettings.current(in: context).lastGlobalRefreshAt = .now
         try? context.save()
+        processQueuedEpisodes(context: context)
     }
 
     func unsubscribe(_ podcast: Podcast, in context: ModelContext) throws {
@@ -83,10 +100,10 @@ final class SubscriptionService {
     /// - Removes the local audio file.
     /// - Clears `localFilename`, `fileSizeBytes`, `playbackPosition`.
     /// - Resets `processingState` to `.new`.
-    /// - Deletes existing transcript segments and ad markers — a fresh
+    /// - Deletes existing ad markers — a fresh
     ///   download may have different audio (podcasts using dynamic ad
     ///   insertion change the ads and the file length per request), so the
-    ///   cached transcript and ad markers are no longer trustworthy.
+    ///   cached markers are no longer trustworthy.
     /// - Deletes every `QueueItem` pointing to the episode.
     /// - Unloads the player if it's the episode currently being played.
     func deleteEpisodeContent(
@@ -109,9 +126,6 @@ final class SubscriptionService {
         episode.processingError = nil
         episode.activeAdMarkerCount = 0
 
-        for segment in episode.transcript {
-            context.delete(segment)
-        }
         for marker in episode.adMarkers {
             context.delete(marker)
         }
@@ -127,8 +141,8 @@ final class SubscriptionService {
     }
 
     /// Re-runs the entire AI pipeline (download + ad detection) for one
-    /// episode. Wipes the local audio file, cached transcript, and
-    /// existing ad markers, then enqueues processing. Preserves any
+    /// episode. Wipes the local audio file and existing ad markers, then
+    /// enqueues processing. Preserves any
     /// `QueueItem`s pointing at the episode so the user's queue placement
     /// isn't lost when they ask the system to redo the analysis. Best for
     /// dynamically-ad-inserted feeds where the audio file itself may differ
@@ -151,7 +165,6 @@ final class SubscriptionService {
         episode.processingTotal = nil
         episode.processingError = nil
         episode.activeAdMarkerCount = 0
-        for segment in episode.transcript { context.delete(segment) }
         for marker in episode.adMarkers { context.delete(marker) }
         try? context.save()
 
@@ -171,7 +184,6 @@ final class SubscriptionService {
         }
         ProcessingPipeline.shared.cancel(episodeID: episode.persistentModelID)
 
-        for segment in episode.transcript { context.delete(segment) }
         for marker in episode.adMarkers { context.delete(marker) }
         episode.processingState = .downloaded
         episode.processingProgress = 0
@@ -225,16 +237,14 @@ final class SubscriptionService {
         into podcast: Podcast,
         context: ModelContext
     ) {
-        var podcastEpisodesByGUID = Dictionary(grouping: podcast.episodes, by: \.guid)
+        let parsedGUIDs = Set(parsed.map(\.guid))
+        var existingEpisodesByGUID = Dictionary(grouping: fetchEpisodes(withGUIDs: parsedGUIDs, context: context), by: \.guid)
             .mapValues { episodes in
-                episodes.max(by: { importPreferenceScore($0) < importPreferenceScore($1) })!
-            }
-        let allEpisodes = (try? context.fetch(FetchDescriptor<Episode>())) ?? []
-        var globalEpisodesByGUID = Dictionary(grouping: allEpisodes, by: \.guid)
-            .mapValues { episodes in
-                episodes.max(by: { importPreferenceScore($0) < importPreferenceScore($1) })!
+                episodes.first { $0.podcast?.persistentModelID == podcast.persistentModelID }
+                    ?? episodes.max(by: { importPreferenceScore($0) < importPreferenceScore($1) })!
             }
         var newestSeen: Date? = podcast.latestEpisodeAt
+        var episodeCount = podcast.episodeCount
 
         // `lastFetched == nil` is the first import for this podcast — i.e.,
         // the initial subscribe. We don't auto-enqueue then, otherwise the
@@ -268,21 +278,15 @@ final class SubscriptionService {
         }
 
         for entry in parsed {
-            if let existing = podcastEpisodesByGUID[entry.guid] {
-                update(existing, from: entry, podcast: podcast)
-                if let pub = entry.publishedAt,
-                   newestSeen == nil || pub > newestSeen! {
-                    newestSeen = pub
-                }
-                continue
-            }
-
-            if let existing = globalEpisodesByGUID[entry.guid] {
+            if let existing = existingEpisodesByGUID[entry.guid] {
+                let alreadyOwnedByPodcast = existing.podcast?.persistentModelID == podcast.persistentModelID
                 if existing.podcast == nil || existing.podcast?.feedURL == podcast.feedURL {
-                    existing.podcast = podcast
+                    if !alreadyOwnedByPodcast {
+                        existing.podcast = podcast
+                        episodeCount += 1
+                        enqueueIfNeeded(existing)
+                    }
                     update(existing, from: entry, podcast: podcast)
-                    podcastEpisodesByGUID[entry.guid] = existing
-                    enqueueIfNeeded(existing)
                     if let pub = entry.publishedAt,
                        newestSeen == nil || pub > newestSeen! {
                         newestSeen = pub
@@ -304,8 +308,8 @@ final class SubscriptionService {
                 podcast: podcast
             )
             context.insert(ep)
-            podcastEpisodesByGUID[entry.guid] = ep
-            globalEpisodesByGUID[entry.guid] = ep
+            existingEpisodesByGUID[entry.guid] = ep
+            episodeCount += 1
             if let pub = entry.publishedAt,
                newestSeen == nil || pub > newestSeen! {
                 newestSeen = pub
@@ -313,19 +317,65 @@ final class SubscriptionService {
             enqueueIfNeeded(ep)
         }
         if let newestSeen { podcast.latestEpisodeAt = newestSeen }
-        podcast.syncEpisodeSnapshots()
+        updateEpisodeCount(for: podcast, fallback: episodeCount, context: context)
         // Caller is responsible for saving and then invoking
         // `processQueuedEpisodes` (idempotent + cheap) so the pipeline only
         // ever looks up *persisted* `PersistentIdentifier`s.
     }
 
+    private func fetchEpisodes(withGUIDs guids: Set<String>, context: ModelContext) -> [Episode] {
+        guard !guids.isEmpty else { return [] }
+        let sortedGUIDs = Array(guids).sorted()
+        let batchSize = 250
+        var fetched: [Episode] = []
+        var start = sortedGUIDs.startIndex
+
+        while start < sortedGUIDs.endIndex {
+            let end = sortedGUIDs.index(
+                start,
+                offsetBy: batchSize,
+                limitedBy: sortedGUIDs.endIndex
+            ) ?? sortedGUIDs.endIndex
+            let batch = Array(sortedGUIDs[start..<end])
+            let descriptor = FetchDescriptor<Episode>(
+                predicate: #Predicate<Episode> { batch.contains($0.guid) }
+            )
+            if let matches = try? context.fetch(descriptor) {
+                fetched.append(contentsOf: matches)
+            }
+            start = end
+        }
+        return fetched
+    }
+
+    private func updateEpisodeCount(for podcast: Podcast, fallback: Int, context: ModelContext) {
+        let feedURL = podcast.feedURL
+        let descriptor = FetchDescriptor<Episode>(
+            predicate: #Predicate<Episode> { $0.podcast?.feedURL == feedURL }
+        )
+        let counted = (try? context.fetchCount(descriptor)) ?? fallback
+        podcast.episodeCount = max(fallback, counted)
+    }
+
     private func update(_ episode: Episode, from entry: ParsedEpisode, podcast: Podcast) {
-        episode.title = entry.title
-        episode.episodeDescription = entry.description
-        episode.publishedAt = entry.publishedAt
-        episode.duration = entry.duration
-        episode.audioURL = entry.audioURL
-        episode.audioMimeType = entry.audioMimeType
+        if episode.title != entry.title {
+            episode.title = entry.title
+        }
+        if episode.episodeDescription != entry.description {
+            episode.episodeDescription = entry.description
+        }
+        if episode.publishedAt != entry.publishedAt {
+            episode.publishedAt = entry.publishedAt
+        }
+        if episode.duration != entry.duration {
+            episode.duration = entry.duration
+        }
+        if episode.audioURL != entry.audioURL {
+            episode.audioURL = entry.audioURL
+        }
+        if episode.audioMimeType != entry.audioMimeType {
+            episode.audioMimeType = entry.audioMimeType
+        }
         episode.syncPodcastSnapshot(from: podcast)
     }
 
@@ -360,7 +410,7 @@ final class SubscriptionService {
             guard remainingStarts > 0 else { break }
             guard let episode = item.episode else { continue }
             switch episode.processingState {
-            case .ready, .downloading, .uploading, .transcribing, .detectingAds:
+            case .ready, .downloading, .uploading, .detectingAds:
                 continue
             case .new, .downloaded, .failed:
                 pipeline.process(episode: episode)

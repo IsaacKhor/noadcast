@@ -3,12 +3,10 @@ import os
 
 enum DownloadError: LocalizedError {
     case badResponse(Int)
-    case noLocalURL
     case moveFailed(Error)
     var errorDescription: String? {
         switch self {
         case .badResponse(let code): "Server returned HTTP \(code)."
-        case .noLocalURL: "Download finished but produced no file."
         case .moveFailed(let err): "Couldn't move the downloaded file: \(err.localizedDescription)"
         }
     }

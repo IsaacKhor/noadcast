@@ -6,14 +6,12 @@ nonisolated struct DuplicateCleanupReport: Sendable {
     var podcastsRemoved = 0
     var episodesRemoved = 0
     var queueItemsRemoved = 0
-    var transcriptSegmentsRemoved = 0
     var adMarkersRemoved = 0
 
     var changed: Bool {
         podcastsRemoved > 0
             || episodesRemoved > 0
             || queueItemsRemoved > 0
-            || transcriptSegmentsRemoved > 0
             || adMarkersRemoved > 0
     }
 }
@@ -34,12 +32,11 @@ actor DatabaseMaintenanceActor {
         report.episodesRemoved += mergeDuplicateEpisodes()
         report.queueItemsRemoved += removeDuplicateQueueItems()
         let childReport = removeDuplicateChildRowsAndRefreshDerivedState()
-        report.transcriptSegmentsRemoved += childReport.transcriptSegmentsRemoved
         report.adMarkersRemoved += childReport.adMarkersRemoved
 
         try? modelContext.save()
         if report.changed {
-            Log.startup.notice("Duplicate cleanup removed podcasts=\(report.podcastsRemoved) episodes=\(report.episodesRemoved) queueItems=\(report.queueItemsRemoved) transcriptSegments=\(report.transcriptSegmentsRemoved) adMarkers=\(report.adMarkersRemoved)")
+            Log.startup.notice("Duplicate cleanup removed podcasts=\(report.podcastsRemoved) episodes=\(report.episodesRemoved) queueItems=\(report.queueItemsRemoved) adMarkers=\(report.adMarkersRemoved)")
         }
         return report
     }
@@ -116,7 +113,6 @@ actor DatabaseMaintenanceActor {
         var report = DuplicateCleanupReport()
         let episodes = (try? modelContext.fetch(FetchDescriptor<Episode>())) ?? []
         for episode in episodes {
-            report.transcriptSegmentsRemoved += removeDuplicateTranscriptSegments(for: episode)
             report.adMarkersRemoved += removeDuplicateAdMarkers(for: episode)
             episode.activeAdMarkerCount = episode.adMarkers.filter { !$0.isDeleted }.count
         }
@@ -176,9 +172,6 @@ actor DatabaseMaintenanceActor {
             canonical.processingState = duplicateEpisode.processingState
         }
 
-        for segment in duplicateEpisode.transcript {
-            segment.episode = canonical
-        }
         for marker in duplicateEpisode.adMarkers {
             marker.episode = canonical
         }
@@ -194,20 +187,6 @@ actor DatabaseMaintenanceActor {
         for item in queueItems where item.episode?.persistentModelID == duplicate.persistentModelID {
             item.episode = canonical
         }
-    }
-
-    private func removeDuplicateTranscriptSegments(for episode: Episode) -> Int {
-        var seen = Set<String>()
-        var removed = 0
-        for segment in episode.transcript.sorted(by: sortTranscriptSegments) {
-            let key = "\(roundedMillis(segment.startSeconds))|\(roundedMillis(segment.endSeconds))|\(segment.text)"
-            guard seen.insert(key).inserted else {
-                modelContext.delete(segment)
-                removed += 1
-                continue
-            }
-        }
-        return removed
     }
 
     private func removeDuplicateAdMarkers(for episode: Episode) -> Int {
@@ -249,7 +228,6 @@ actor DatabaseMaintenanceActor {
         if episode.hasLocalFile { score += 500 }
         if episode.localFilename != nil { score += 250 }
         score += min(episode.adMarkers.count, 100) * 5
-        score += min(episode.transcript.count, 100)
         if episode.fileSizeBytes != nil { score += 10 }
         if episode.publishedAt != nil { score += 1 }
         return score
@@ -259,7 +237,7 @@ actor DatabaseMaintenanceActor {
         switch state {
         case .ready: 6
         case .detectingAds: 5
-        case .uploading, .transcribing: 4
+        case .uploading: 4
         case .downloaded: 3
         case .downloading: 2
         case .failed: 1
@@ -274,12 +252,6 @@ actor DatabaseMaintenanceActor {
 
     private func roundedMillis(_ value: Double) -> Int {
         Int((value * 1_000).rounded())
-    }
-
-    private func sortTranscriptSegments(_ lhs: TranscriptSegment, _ rhs: TranscriptSegment) -> Bool {
-        if lhs.startSeconds != rhs.startSeconds { return lhs.startSeconds < rhs.startSeconds }
-        if lhs.endSeconds != rhs.endSeconds { return lhs.endSeconds < rhs.endSeconds }
-        return lhs.text < rhs.text
     }
 
     private func sortAdMarkers(_ lhs: AdMarker, _ rhs: AdMarker) -> Bool {

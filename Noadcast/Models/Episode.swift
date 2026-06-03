@@ -35,7 +35,7 @@ final class Episode {
         set {
             processingStateRaw = newValue.rawValue
             switch newValue {
-            case .downloading, .uploading, .transcribing, .detectingAds:
+            case .downloading, .uploading, .detectingAds:
                 isInProgress = true
             case .new, .downloaded, .ready, .failed:
                 isInProgress = false
@@ -51,7 +51,7 @@ final class Episode {
     /// Stage-relative current value in the stage's natural unit. Interpret
     /// with `processingState`:
     /// * `.downloading` — bytes written
-    /// * `.transcribing` — seconds of audio transcribed
+    /// * `.uploading` — bytes uploaded
     /// * `.detectingAds` — number of LLM chunks completed
     var processingCurrent: Double?
     /// Stage-relative total value in the stage's natural unit. Same unit
@@ -76,9 +76,6 @@ final class Episode {
     /// Denormalized count of active ad/intro/outro markers. Rows can show
     /// the badge without faulting the `adMarkers` relationship.
     var activeAdMarkerCount: Int = 0
-
-    @Relationship(deleteRule: .cascade, inverse: \TranscriptSegment.episode)
-    var transcript: [TranscriptSegment] = []
 
     @Relationship(deleteRule: .cascade, inverse: \AdMarker.episode)
     var adMarkers: [AdMarker] = []
@@ -134,9 +131,15 @@ final class Episode {
     }
 
     func syncPodcastSnapshot(from podcast: Podcast) {
-        podcastTitle = podcast.title
-        podcastArtworkURL = podcast.artworkURL
-        podcastCachedArtworkFilename = podcast.cachedArtworkFilename
+        if podcastTitle != podcast.title {
+            podcastTitle = podcast.title
+        }
+        if podcastArtworkURL != podcast.artworkURL {
+            podcastArtworkURL = podcast.artworkURL
+        }
+        if podcastCachedArtworkFilename != podcast.cachedArtworkFilename {
+            podcastCachedArtworkFilename = podcast.cachedArtworkFilename
+        }
     }
 
     static var episodesDirectory: URL = {

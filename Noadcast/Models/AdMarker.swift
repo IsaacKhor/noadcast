@@ -37,9 +37,4 @@ final class AdMarker {
         self.episode = episode
     }
 
-    var duration: Double { max(0, endSeconds - startSeconds) }
-
-    func contains(_ time: Double) -> Bool {
-        !isDeleted && time >= startSeconds && time < endSeconds
-    }
 }

@@ -26,7 +26,6 @@ enum TimeFormatting {
     /// an episode is being processed. Returns `nil` when there's nothing
     /// meaningful to show yet.
     /// * `.downloading` / `.uploading` → "12.3 MB / 50 MB" (or "12.3 MB" if total unknown)
-    /// * `.transcribing` → "12:34 / 45:00"
     /// * `.detectingAds` → "Chunk 3 of 12"
     static func progressDetail(for episode: Episode) -> String? {
         switch episode.processingState {
@@ -42,11 +41,6 @@ enum TimeFormatting {
                 let pct = Int((episode.processingProgress * 100).rounded())
                 return "\(pct)%"
             }
-        case .transcribing:
-            guard let current = episode.processingCurrent,
-                  let total = episode.processingTotal,
-                  total > 0 else { return nil }
-            return "\(timestamp(current)) / \(timestamp(total))"
         case .detectingAds:
             guard let current = episode.processingCurrent,
                   let total = episode.processingTotal,

@@ -18,10 +18,10 @@ final class Podcast {
     /// global `AppSettings.autoDownloadPolicy`).
     var autoDownloadEnabled: Bool
 
-    /// If `true`, downloaded episodes are run through transcription + ad
-    /// detection and detected ads are skipped during playback. Off lets you
-    /// keep a podcast's episodes for normal listening without spending time
-    /// or battery on the AI pipeline (e.g. ad-free or short shows).
+    /// If `true`, downloaded episodes are eligible for audio ad analysis.
+    /// Detected segments can then be skipped during playback. The global
+    /// `AppSettings.adAnalysisEnabled` switch can still disable analysis for
+    /// every podcast at once.
     var aiProcessingEnabled: Bool = true
 
     /// Filename (under `ArtworkService.artworkDirectory`) of the locally
@@ -94,7 +94,10 @@ final class Podcast {
     }
 
     func syncEpisodeSnapshots() {
-        episodeCount = episodes.count
+        let count = episodes.count
+        if episodeCount != count {
+            episodeCount = count
+        }
         for episode in episodes {
             episode.syncPodcastSnapshot(from: self)
         }

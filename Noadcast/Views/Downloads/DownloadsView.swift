@@ -2,7 +2,7 @@ import SwiftUI
 import SwiftData
 
 /// Tab showing every episode currently being processed (downloading,
-/// transcribing, or having ads detected) and every episode whose audio is
+/// uploading, or having ads detected) and every episode whose audio is
 /// still on disk. Failed jobs surface here too with a retry affordance.
 struct DownloadsView: View {
     @Environment(\.modelContext) private var context
@@ -33,7 +33,7 @@ struct DownloadsView: View {
                     ContentUnavailableView {
                         Label("Nothing downloaded", systemImage: "arrow.down.circle")
                     } description: {
-                        Text("Queued episodes are downloaded and analysed automatically.")
+                        Text("Queued episodes are downloaded automatically. Analysis follows your download settings.")
                     }
                 } else {
                     List {

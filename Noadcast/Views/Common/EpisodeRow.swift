@@ -101,7 +101,7 @@ struct EpisodeRow<Trailing: View>: View {
             }
         case .downloaded:
             Image(systemName: "arrow.down.circle.fill").foregroundStyle(.tint)
-        case .downloading, .transcribing, .detectingAds:
+        case .downloading, .detectingAds:
             Image(systemName: "arrow.down.circle").foregroundStyle(.tint)
         case .uploading:
             Image(systemName: "arrow.up.circle").foregroundStyle(.tint)
@@ -123,10 +123,10 @@ struct EpisodeRow<Trailing: View>: View {
 
     /// Linear progress bar reused for two cases plus an error footer for
     /// failed jobs:
-    ///   * actively processing (download / transcribe / ad-detect) — uses
+    ///   * actively processing (download / upload / ad-detect) — uses
     ///     `processingProgress` reset to 0 at each stage transition. The
     ///     stage label + a unit-appropriate detail (`12 MB / 50 MB`,
-    ///     `12:34 / 45:00`, `Chunk 3 of 12`) sits below the bar.
+    ///     `Chunk 3 of 12`) sits below the bar.
     ///   * partially played — `playbackPosition / duration`, only when
     ///     listening is in progress (not played-to-end).
     ///   * failed — show the error message.
@@ -173,7 +173,6 @@ struct EpisodeRow<Trailing: View>: View {
         switch episode.processingState {
         case .downloading: "Downloading…"
         case .uploading: "Uploading…"
-        case .transcribing: "Transcribing…"
         case .detectingAds: "Analyzing…"
         default: ""
         }

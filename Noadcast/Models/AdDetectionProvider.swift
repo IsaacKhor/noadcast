@@ -34,9 +34,9 @@ nonisolated enum AdDetectionProvider: String, Codable, CaseIterable, Sendable {
         true
     }
 
-    /// All currently-exposed detection providers are Gemini models and can
-    /// accept file-based multimodal input through `CloudTranscriptionService`.
-    var supportsCloudTranscription: Bool {
+    /// All currently exposed detection providers are Gemini models that can
+    /// analyze uploaded audio files.
+    var supportsAudioFileDetection: Bool {
         true
     }
 
@@ -51,18 +51,6 @@ nonisolated enum AdDetectionProvider: String, Codable, CaseIterable, Sendable {
 
     var thinkingLevelOptions: [AdDetectionThinkingLevel] {
         supportsThinkingLevel ? AdDetectionThinkingLevel.allCases : [.automatic]
-    }
-
-    /// USD per million text/image/video input tokens, based on the
-    /// provider's published standard paid-tier rates.
-    var pricePerMTokensTextInput: Double {
-        switch self {
-        case .gemini3Flash: 0.50
-        case .gemini35Flash: 1.50
-        case .gemini31FlashLite: 0.25
-        case .gemini25Flash: 0.30
-        case .gemini25FlashLite: 0.10
-        }
     }
 
     /// USD per million audio input tokens, based on the provider's

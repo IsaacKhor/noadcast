@@ -49,7 +49,7 @@ struct NowPlayingView: View {
         }
         .sheet(isPresented: $showAds) {
             if let ep = currentEpisode {
-                AdsTranscriptView(
+                SkipSegmentsView(
                     ads: ep.adMarkers,
                     onSeek: { time in
                         player.seek(to: time)

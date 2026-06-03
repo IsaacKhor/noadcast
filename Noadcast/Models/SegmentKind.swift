@@ -17,7 +17,7 @@ nonisolated enum SegmentKind: String, Codable, CaseIterable, Sendable {
         }
     }
 
-    /// Color used on the timeline + transcript badge for this kind. Ads stay
+    /// Color used on the timeline and skip-segment badges. Ads stay
     /// orange (existing behaviour); intros and outros share an indigo tone
     /// so they read as "boundary segments" distinct from the main ad colour.
     var tint: Color {

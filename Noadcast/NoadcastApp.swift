@@ -11,7 +11,6 @@ struct NoadcastApp: App {
             let schema = Schema([
                 Podcast.self,
                 Episode.self,
-                TranscriptSegment.self,
                 AdMarker.self,
                 QueueItem.self,
                 AppSettings.self,

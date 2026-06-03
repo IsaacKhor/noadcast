@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Noadcast — a podcast app that actually skips ads</title>
-<meta name="description" content="Noadcast transcribes every episode on-device and uses an LLM to find and auto-skip ads, intros, and outros. iOS 26+, SwiftUI, SwiftData.">
+<meta name="description" content="Noadcast downloads podcast episodes, uses a cloud audio model to find ads, intros, and outros, then skips them during playback. iOS 26+, SwiftUI, SwiftData.">
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
@@ -19,16 +19,15 @@
   <div class="hero-inner">
     <h1>A podcast app that actually&nbsp;skips&nbsp;ads.</h1>
     <p class="lede">
-      Noadcast transcribes every episode on-device with Apple's
-      SpeechAnalyzer and uses a cloud LLM to mark every ad, intro, and
-      outro. Playback jumps right over them — including back-to-back
+      Noadcast analyzes downloaded episode audio with a cloud model to mark
+      every ad, intro, and outro. Playback jumps right over them — including back-to-back
       sponsor reads — without you touching the screen.
     </p>
     <div class="hero-meta">
       <span class="pill">iOS 26+</span>
       <span class="pill">SwiftUI</span>
       <span class="pill">SwiftData</span>
-      <span class="pill">On-device speech</span>
+      <span class="pill">Audio analysis</span>
     </div>
   </div>
   <img class="hero-screenshot" src="screenshots/now-playing.svg" alt="Now Playing screen with an ad-marker timeline">
@@ -63,14 +62,14 @@
         <svg viewBox="0 0 24 24" width="32" height="32" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12l4 4 10-10"/></svg>
       </div>
       <h3>Per-kind skip toggles</h3>
-      <p>Toggle ads, intros, and outros independently in Settings. Markers always render on the timeline and in the transcript — skipping is a separate choice.</p>
+      <p>Toggle ads, intros, and outros independently in Settings. Markers always render on the timeline and in the Skip Segments sheet — skipping is a separate choice.</p>
     </article>
     <article class="feature">
       <div class="feature-icon" aria-hidden="true">
         <svg viewBox="0 0 24 24" width="32" height="32" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 3"/></svg>
       </div>
-      <h3>Transcript view, with timestamps</h3>
-      <p>Every line is tappable to seek. Ad / intro / outro lines are color-coded, with a separate "Skip Segments" view showing just the parts that would be skipped.</p>
+      <h3>Skip segments sheet</h3>
+      <p>Every detected segment shows its kind, summary, and timestamp range. Tap a row to seek straight to that segment.</p>
     </article>
     <article class="feature">
       <div class="feature-icon" aria-hidden="true">
@@ -84,7 +83,7 @@
         <svg viewBox="0 0 24 24" width="32" height="32" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12M6 9l6 6 6-6M5 21h14"/></svg>
       </div>
       <h3>Background downloads</h3>
-      <p>Auto-downloads new queued episodes over Wi-Fi (configurable) and runs transcription + ad detection in the background so they're ready when you press play.</p>
+      <p>Auto-downloads new queued episodes over Wi-Fi (configurable) and runs audio analysis in the background so they're ready when you press play.</p>
     </article>
     <article class="feature">
       <div class="feature-icon" aria-hidden="true">
@@ -116,8 +115,8 @@
       <figcaption>Now Playing — ad-marker timeline shows what's coming up.</figcaption>
     </figure>
     <figure class="shot">
-      <img src="screenshots/transcript.svg" alt="Transcript view placeholder">
-      <figcaption>Transcript — color-coded segments, tap any line to seek.</figcaption>
+      <img src="screenshots/skip-segments.svg" alt="Skip Segments view placeholder">
+      <figcaption>Skip Segments — detected ads, intros, and outros with tap-to-seek timestamps.</figcaption>
     </figure>
     <figure class="shot">
       <img src="screenshots/settings.svg" alt="Settings placeholder">
@@ -146,15 +145,15 @@
     <li>
       <span class="step-num">3</span>
       <div>
-        <h3>Transcribe on-device</h3>
-        <p>Apple's <code>SpeechAnalyzer</code> (iOS 26) runs the audio through <code>SpeechTranscriber</code> in 30-minute streaming chunks. Transcripts stay on your device — nothing leaves until you ask for ad detection.</p>
+        <h3>Upload for analysis</h3>
+        <p><code>CloudAdDetectionService</code> uploads the episode audio through Gemini Files API. Optional downsampling can shrink the upload before the model call.</p>
       </div>
     </li>
     <li>
       <span class="step-num">4</span>
       <div>
         <h3>Detect ads, intros, outros</h3>
-        <p>The full timestamped transcript is sent in a single structured-JSON request to your chosen cloud model. The response is parsed against a strict schema and written as <code>AdMarker</code> rows.</p>
+        <p>The model receives the uploaded audio and returns only structured skip segments. The response is parsed against a strict schema and written as <code>AdMarker</code> rows.</p>
       </div>
     </li>
     <li>
@@ -175,20 +174,21 @@
       <ul>
         <li><strong>SwiftUI</strong> — every view, including the mini-player and Now Playing sheet.</li>
         <li><strong>SwiftData</strong> — <code>@Model</code> types for Podcast, Episode, AdMarker, QueueItem, AppSettings.</li>
-        <li><strong>SpeechAnalyzer</strong> (iOS 26) — on-device transcription with audio time ranges.</li>
         <li><strong>AVFoundation</strong> — playback, audio session, time observers.</li>
         <li><strong>MediaPlayer</strong> — lock-screen + Dynamic Island integration.</li>
+        <li><strong>URLSession</strong> — background downloads and audio-analysis uploads.</li>
       </ul>
     </div>
     <div class="stack-card">
       <h3>Cloud LLMs (pluggable)</h3>
       <ul>
-        <li>Gemini Flash-Lite (latest)</li>
-        <li>Gemini Flash (latest)</li>
-        <li>GPT-5.4 nano</li>
-        <li>GPT-5.4 mini</li>
+        <li>Gemini 3 Flash Preview</li>
+        <li>Gemini 3.5 Flash</li>
+        <li>Gemini 3.1 Flash Lite</li>
+        <li>Gemini 2.5 Flash</li>
+        <li>Gemini 2.5 Flash Lite</li>
       </ul>
-      <p class="muted">Bring your own API key. Single-shot structured-JSON request per episode — no streaming, no batching gymnastics.</p>
+      <p class="muted">Bring your own Google AI API key. One audio upload plus one structured-JSON request per episode.</p>
     </div>
     <div class="stack-card">
       <h3>Performance notes</h3>

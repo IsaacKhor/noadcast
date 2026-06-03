@@ -36,12 +36,15 @@ final class ArtworkService {
     func cache(for podcast: Podcast) async {
         guard let url = podcast.artworkURL else {
             // Podcast had artwork before but doesn't anymore — drop the cached file.
+            let hadCachedArtwork = podcast.cachedArtworkFilename != nil || podcast.cachedArtworkSourceURL != nil
             if let filename = podcast.cachedArtworkFilename {
                 try? FileManager.default.removeItem(at: Self.localURL(filename: filename))
             }
             podcast.cachedArtworkFilename = nil
             podcast.cachedArtworkSourceURL = nil
-            podcast.syncEpisodeSnapshots()
+            if hadCachedArtwork {
+                podcast.syncEpisodeSnapshots()
+            }
             return
         }
         // Skip when the cache is up to date and the file still exists.
@@ -55,9 +58,13 @@ final class ArtworkService {
             let filename = Self.filename(for: podcast, sourceURL: url)
             let destination = Self.localURL(filename: filename)
             try await Self.writeArtworkData(data, to: destination)
+            let previousFilename = podcast.cachedArtworkFilename
+            let previousSourceURL = podcast.cachedArtworkSourceURL
             podcast.cachedArtworkFilename = filename
             podcast.cachedArtworkSourceURL = url
-            podcast.syncEpisodeSnapshots()
+            if previousFilename != filename || previousSourceURL != url {
+                podcast.syncEpisodeSnapshots()
+            }
         } catch {
             Log.feed.notice("Artwork cache failed for \"\(podcast.title, privacy: .public)\": \(error.localizedDescription, privacy: .public)")
         }
@@ -86,12 +93,15 @@ final class ArtworkService {
     /// Removes the cached artwork file for a podcast (called from
     /// `SubscriptionService.unsubscribe`).
     func deleteCache(for podcast: Podcast) {
+        let hadCachedArtwork = podcast.cachedArtworkFilename != nil || podcast.cachedArtworkSourceURL != nil
         if let filename = podcast.cachedArtworkFilename {
             try? FileManager.default.removeItem(at: Self.localURL(filename: filename))
         }
         podcast.cachedArtworkFilename = nil
         podcast.cachedArtworkSourceURL = nil
-        podcast.syncEpisodeSnapshots()
+        if hadCachedArtwork {
+            podcast.syncEpisodeSnapshots()
+        }
     }
 
     /// Stable filename keyed on the podcast's `feedURL` so a re-cache simply

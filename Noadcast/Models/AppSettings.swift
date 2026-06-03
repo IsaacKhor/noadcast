@@ -1,33 +1,13 @@
 import Foundation
 import SwiftData
 
-nonisolated enum AdDetectionMode: String, Codable, CaseIterable, Sendable {
-    case apiAdTimestampsOnly
-
-    var label: String {
-        switch self {
-        case .apiAdTimestampsOnly:
-            "API ad timestamps only"
-        }
-    }
-
-    var requiresAudioUpload: Bool {
-        true
-    }
-
-    var storesTranscript: Bool {
-        false
-    }
-
-    func isSupported(by provider: AdDetectionProvider) -> Bool {
-        !requiresAudioUpload || provider.supportsCloudTranscription
-    }
-}
-
 @Model
 final class AppSettings {
     var defaultPlaybackSpeed: Double
     var autoDownloadPolicyRaw: String
+    /// Global master switch for episode ad analysis. When off, downloads skip
+    /// analysis even if an individual podcast's setting is on.
+    var adAnalysisEnabled: Bool = false
     var autoDeleteAfterPlayed: Bool
     var podcastSortModeRaw: String = PodcastSortMode.latestEpisode.rawValue
 
@@ -58,8 +38,7 @@ final class AppSettings {
     var chainSkipGapSeconds: Int = 5
 
     /// Lifetime cumulative input/thought/output tokens billed to the user's API
-    /// key(s) for ad-detection (and, when enabled, cloud transcription)
-    /// calls. Summed across models so changing providers doesn't reset the
+    /// key for ad-detection calls. Summed across models so changing providers doesn't reset the
     /// counter. Updated by `ProcessingPipeline` after each successful call.
     var lifetimeAdDetectionInputTokens: Int = 0
     var lifetimeAdDetectionThoughtTokens: Int = 0
@@ -72,16 +51,8 @@ final class AppSettings {
     var lifetimeAdDetectionInputCostUSD: Double = 0
     var lifetimeAdDetectionThoughtCostUSD: Double = 0
     var lifetimeAdDetectionOutputCostUSD: Double = 0
-    /// Legacy combined total retained for older local stores and any future
-    /// migration/debugging needs.
+    /// Combined total for quick summary display and debugging.
     var lifetimeAdDetectionCostUSD: Double = 0
-
-    /// Legacy setting retained for backwards compatibility with older local
-    /// stores. The app now always uses file upload plus segments-only output.
-    var useCloudTranscription: Bool = false
-    /// Legacy setting retained for backwards compatibility with older local
-    /// stores. The app now always uses file upload plus segments-only output.
-    var adDetectionModeRaw: String = AdDetectionMode.apiAdTimestampsOnly.rawValue
 
     /// Which cloud model performs ad detection. See `AdDetectionProvider`.
     var adDetectionProviderRaw: String = AdDetectionProvider.gemini35Flash.rawValue
@@ -106,30 +77,15 @@ final class AppSettings {
         set { adDetectionThinkingLevelRaw = newValue.rawValue }
     }
 
-    var adDetectionMode: AdDetectionMode {
-        get { .apiAdTimestampsOnly }
-        set {
-            adDetectionModeRaw = newValue.rawValue
-            useCloudTranscription = newValue.requiresAudioUpload
-        }
-    }
-
-    func resolvedAdDetectionMode(for provider: AdDetectionProvider? = nil) -> AdDetectionMode {
-        let provider = provider ?? adDetectionProvider
-        let selected = AdDetectionMode.apiAdTimestampsOnly
-        if selected.isSupported(by: provider) {
-            return selected
-        }
-        return .apiAdTimestampsOnly
-    }
-
     init(
         defaultPlaybackSpeed: Double = 1.0,
         autoDownloadPolicy: AutoDownloadPolicy = .wifiOnly,
+        adAnalysisEnabled: Bool = false,
         autoDeleteAfterPlayed: Bool = true
     ) {
         self.defaultPlaybackSpeed = defaultPlaybackSpeed
         self.autoDownloadPolicyRaw = autoDownloadPolicy.rawValue
+        self.adAnalysisEnabled = adAnalysisEnabled
         self.autoDeleteAfterPlayed = autoDeleteAfterPlayed
     }
 
@@ -151,6 +107,11 @@ final class AppSettings {
         lifetimeAdDetectionThoughtCostUSD = 0
         lifetimeAdDetectionOutputCostUSD = 0
         lifetimeAdDetectionCostUSD = 0
+    }
+
+    func resetPlaybackHistoryStatistics() {
+        lifetimePlayedSeconds = 0
+        lifetimeAdSkipSeconds = 0
     }
 
     /// Fetches the singleton settings row, creating it if missing.

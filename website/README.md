@@ -26,7 +26,7 @@ same filenames (any image format the browser handles works — update the
 
 - `screenshots/queue.svg`
 - `screenshots/now-playing.svg`
-- `screenshots/transcript.svg`
+- `screenshots/skip-segments.svg`
 - `screenshots/settings.svg`
 
 The hero also references `screenshots/now-playing.svg`, so replacing

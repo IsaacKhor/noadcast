@@ -1,7 +1,6 @@
 import Foundation
 
 struct OPMLEntry: Sendable {
-    let title: String?
     let feedURL: URL
 }
 
@@ -51,9 +50,6 @@ nonisolated private final class OPMLParser: NSObject, XMLParserDelegate {
               let xmlUrl = attributeDict["xmlUrl"],
               let url = URL(string: xmlUrl)
         else { return }
-        entries.append(OPMLEntry(
-            title: attributeDict["title"] ?? attributeDict["text"],
-            feedURL: url
-        ))
+        entries.append(OPMLEntry(feedURL: url))
     }
 }

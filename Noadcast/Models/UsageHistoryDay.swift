@@ -44,4 +44,11 @@ final class UsageHistoryDay {
         context.insert(day)
         return day
     }
+
+    static func resetAll(in context: ModelContext) {
+        let days = (try? context.fetch(FetchDescriptor<UsageHistoryDay>())) ?? []
+        for day in days {
+            context.delete(day)
+        }
+    }
 }

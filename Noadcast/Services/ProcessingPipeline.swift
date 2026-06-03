@@ -79,14 +79,13 @@ final class ProcessingPipeline {
         for episode in stuck {
             if activeEpisodes.contains(episode.persistentModelID) { continue }
 
-            await CloudTranscriptionService.shared.cancelTasks(forEpisodeGUID: episode.guid)
+            await CloudAdDetectionService.shared.cancelTasks(forEpisodeGUID: episode.guid)
 
             switch episode.processingState {
-            case .uploading, .detectingAds, .transcribing:
-                // The cloud or local-transcription leg was interrupted.
-                // If the audio is still on disk, jump straight to the
-                // cloud/transcription step by claiming `.downloaded`;
-                // otherwise start over from scratch.
+            case .uploading, .detectingAds:
+                // The audio-analysis leg was interrupted. If the audio is
+                // still on disk, jump straight to analysis by claiming
+                // `.downloaded`; otherwise start over from scratch.
                 episode.processingState = episode.hasLocalFile ? .downloaded : .new
             case .downloading:
                 // Download was interrupted; the partial file is in the
@@ -123,7 +122,8 @@ final class ProcessingPipeline {
             }
             try Task.checkCancellation()
 
-            let aiEnabled = episode.podcast?.aiProcessingEnabled ?? true
+            let settings = AppSettings.current(in: context)
+            let aiEnabled = settings.adAnalysisEnabled && (episode.podcast?.aiProcessingEnabled ?? true)
             if aiEnabled {
                 try await cloudAnalyzeStep(episode: episode, context: context)
             } else {
@@ -189,14 +189,12 @@ final class ProcessingPipeline {
         }
     }
 
-    /// File-upload step: upload audio and ask the API to return only skip
-    /// segments, without storing any transcript text locally.
+    /// File-upload step: upload audio and ask the API to return skip
+    /// segments.
     private func cloudAnalyzeStep(episode: Episode, context: ModelContext) async throws {
         guard let fileURL = episode.localFileURL else { return }
-        // Initial state: bytes about to go up. We set `.uploading` here
-        // rather than `.transcribing` so the UI's progress label and
-        // unit-aware formatter (`TimeFormatting.progressDetail`) render
-        // the byte counter (`12 MB / 50 MB`) as soon as the row appears.
+        // Initial state: bytes about to go up, so the row can render the
+        // byte counter (`12 MB / 50 MB`) as soon as it appears.
         episode.processingState = .uploading
         episode.processingProgress = 0
         episode.processingCurrent = 0
@@ -213,7 +211,7 @@ final class ProcessingPipeline {
         let episodeID = episode.persistentModelID
         let container = modelContainer
 
-        let result = try await CloudTranscriptionService.shared.analyzeFile(
+        let result = try await CloudAdDetectionService.shared.analyzeFile(
             fileURL: fileURL,
             provider: provider,
             googleAPIKey: googleKey,
@@ -256,14 +254,20 @@ final class ProcessingPipeline {
             )
         }
 
-        for old in episode.transcript { context.delete(old) }
         let preservedActiveMarkerCount = episode.adMarkers.filter {
             $0.manuallyEdited && !$0.isDeleted
         }.count
         for old in episode.adMarkers where !old.manuallyEdited {
             context.delete(old)
         }
-        for ad in result.ads {
+        let sanitizedAds = result.ads.compactMap {
+            $0.sanitized(episodeDuration: episode.duration)
+        }
+        let droppedAdCount = result.ads.count - sanitizedAds.count
+        if droppedAdCount > 0 {
+            Log.pipeline.notice("Dropped \(droppedAdCount) ad marker(s) with invalid timestamps for \"\(episode.title, privacy: .public)\"")
+        }
+        for ad in sanitizedAds {
             let m = AdMarker(
                 startSeconds: ad.startSeconds,
                 endSeconds: ad.endSeconds,
@@ -273,7 +277,7 @@ final class ProcessingPipeline {
             )
             context.insert(m)
         }
-        episode.activeAdMarkerCount = preservedActiveMarkerCount + result.ads.count
+        episode.activeAdMarkerCount = preservedActiveMarkerCount + sanitizedAds.count
         episode.processingProgress = 1.0
         try? context.save()
     }

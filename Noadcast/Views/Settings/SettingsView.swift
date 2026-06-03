@@ -130,7 +130,7 @@ struct SettingsView: View {
     @ViewBuilder
     private func downloadsSection(settings: AppSettings) -> some View {
         @Bindable var s = settings
-        Section("Downloads") {
+        Section {
             Picker("Auto-download", selection: Binding(
                 get: { s.autoDownloadPolicy },
                 set: { s.autoDownloadPolicy = $0 }
@@ -139,6 +139,11 @@ struct SettingsView: View {
                     Text(p.label).tag(p)
                 }
             }
+            Toggle("Analyze downloaded episodes", isOn: $s.adAnalysisEnabled)
+        } header: {
+            Text("Downloads")
+        } footer: {
+            Text("When off, downloads skip ad analysis for every podcast, even when a podcast's Detect & skip ads toggle is on.")
         }
     }
 
@@ -188,7 +193,7 @@ struct SettingsView: View {
             Text("Detection model")
         } footer: {
             VStack(alignment: .leading, spacing: 4) {
-                Text(providerFooter(for: provider))
+                Text(providerFooter)
                 Text(tokenCostLine(
                     label: "Input tokens",
                     tokens: settings.lifetimeAdDetectionInputTokens,
@@ -208,7 +213,7 @@ struct SettingsView: View {
         }
     }
 
-    private func providerFooter(for _: AdDetectionProvider) -> String {
+    private var providerFooter: String {
         "Uploads episode audio to Google AI Studio and receives back only skip segments with timestamps and summaries. Downsampling uses a temporary 32 kbps, 16 kHz mono copy."
     }
 

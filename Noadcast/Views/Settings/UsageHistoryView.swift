@@ -3,8 +3,12 @@ import SwiftData
 import Charts
 
 struct UsageHistoryView: View {
+    @Environment(\.modelContext) private var context
+    @Query private var settingsList: [AppSettings]
     @Query(sort: \UsageHistoryDay.dayStart) private var playbackDays: [UsageHistoryDay]
     @Query(sort: \TokenUsageRecord.createdAt) private var tokenRecords: [TokenUsageRecord]
+
+    @State private var showResetPlaybackHistoryConfirmation = false
 
     private var visibleDayStarts: [Date] {
         let playbackStarts = playbackDays
@@ -101,6 +105,13 @@ struct UsageHistoryView: View {
         Array(tokenRecords.suffix(10).reversed())
     }
 
+    private var hasPlaybackHistory: Bool {
+        playbackDays.contains(where: \.hasPlayback)
+            || settingsList.contains {
+                $0.lifetimePlayedSeconds > 0 || $0.lifetimeAdSkipSeconds > 0
+            }
+    }
+
     var body: some View {
         Form {
             if visibleDayStarts.isEmpty {
@@ -115,9 +126,22 @@ struct UsageHistoryView: View {
                 tokenSection
                 recentCallsSection
             }
+            playbackHistoryActionsSection
         }
         .navigationTitle("Usage History")
         .navigationBarTitleDisplayMode(.inline)
+        .confirmationDialog(
+            "Reset playback history?",
+            isPresented: $showResetPlaybackHistoryConfirmation,
+            titleVisibility: .visible
+        ) {
+            Button("Reset Playback History", role: .destructive) {
+                resetPlaybackHistory()
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("This clears daily playback totals and listening time saved statistics.")
+        }
     }
 
     private var summarySection: some View {
@@ -164,6 +188,17 @@ struct UsageHistoryView: View {
                 .chartLegend(position: .bottom)
                 .frame(height: 220)
             }
+        }
+    }
+
+    private var playbackHistoryActionsSection: some View {
+        Section("Playback History") {
+            Button(role: .destructive) {
+                showResetPlaybackHistoryConfirmation = true
+            } label: {
+                Label("Reset Playback History", systemImage: "arrow.counterclockwise")
+            }
+            .disabled(!hasPlaybackHistory)
         }
     }
 
@@ -244,6 +279,14 @@ struct UsageHistoryView: View {
             return String(format: "$%.4f", amount)
         }
         return "$0"
+    }
+
+    private func resetPlaybackHistory() {
+        let settings = settingsList.first ?? AppSettings.current(in: context)
+        PlayerService.shared.discardPendingPlaybackHistory()
+        settings.resetPlaybackHistoryStatistics()
+        UsageHistoryDay.resetAll(in: context)
+        try? context.save()
     }
 }
 

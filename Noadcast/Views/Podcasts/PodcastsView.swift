@@ -174,10 +174,4 @@ extension Podcast {
     var latestEpisodePublishedAt: Date? {
         latestEpisodeAt
     }
-
-    /// Sort key: falls back to `dateAdded` so feeds with un-dated entries
-    /// don't sink to the bottom forever.
-    var latestEpisodeSortDate: Date {
-        latestEpisodeAt ?? dateAdded
-    }
 }

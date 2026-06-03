@@ -1,0 +1,66 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 280 600" role="img" aria-label="Skip Segments view placeholder">
+  <defs>
+    <linearGradient id="bg-tx" x1="0" x2="0" y1="0" y2="1">
+      <stop offset="0" stop-color="#161a22"/>
+      <stop offset="1" stop-color="#0a0c12"/>
+    </linearGradient>
+  </defs>
+  <rect x="0" y="0" width="280" height="600" rx="34" fill="url(#bg-tx)"/>
+  <rect x="6" y="6" width="268" height="588" rx="30" fill="none" stroke="#2a313d" stroke-width="1"/>
+
+  <rect x="118" y="22" width="44" height="6" rx="3" fill="#2a313d"/>
+  <text x="140" y="62" text-anchor="middle" fill="#e8eaef" font-family="-apple-system,sans-serif" font-size="13" font-weight="600">Skip Segments</text>
+
+  <!-- Color key -->
+  <g font-family="-apple-system,sans-serif" font-size="9">
+    <rect x="22" y="84" width="10" height="10" rx="2" fill="#7d6cff"/>
+    <text x="36" y="93" fill="#9aa3b2">Intro</text>
+    <rect x="78" y="84" width="10" height="10" rx="2" fill="#ff8a3d"/>
+    <text x="92" y="93" fill="#9aa3b2">Ad</text>
+    <rect x="120" y="84" width="10" height="10" rx="2" fill="#7d6cff"/>
+    <text x="134" y="93" fill="#9aa3b2">Outro</text>
+  </g>
+
+  <!-- Line rows -->
+  <g font-family="-apple-system,sans-serif">
+    <g transform="translate(0, 110)">
+      <text x="22" y="12" fill="#9aa3b2" font-size="9">0:00-0:42</text>
+      <rect x="22" y="18" width="2" height="26" fill="#7d6cff"/>
+      <text x="76" y="28" fill="#e8eaef" font-size="10">Opening music and show intro</text>
+      <text x="76" y="42" fill="#7d6cff" font-size="9">INTRO</text>
+    </g>
+    <g transform="translate(0, 162)">
+      <text x="22" y="12" fill="#9aa3b2" font-size="9">8:02-9:45</text>
+      <rect x="22" y="18" width="2" height="26" fill="#ff8a3d"/>
+      <text x="76" y="28" fill="#e8eaef" font-size="10">Sponsor read for Aperture</text>
+      <text x="76" y="42" fill="#ff8a3d" font-size="9">AD</text>
+    </g>
+    <g transform="translate(0, 214)">
+      <text x="22" y="12" fill="#9aa3b2" font-size="9">9:47-10:30</text>
+      <rect x="22" y="18" width="2" height="26" fill="#ff8a3d"/>
+      <text x="76" y="28" fill="#e8eaef" font-size="10">Cross-promo for another show</text>
+      <text x="76" y="42" fill="#ff8a3d" font-size="9">AD</text>
+    </g>
+    <g transform="translate(0, 266)">
+      <text x="22" y="12" fill="#9aa3b2" font-size="9">52:30-53:18</text>
+      <rect x="22" y="18" width="2" height="26" fill="#7d6cff"/>
+      <text x="76" y="28" fill="#e8eaef" font-size="10">Credits and closing music</text>
+      <text x="76" y="42" fill="#7d6cff" font-size="9">OUTRO</text>
+    </g>
+    <g transform="translate(0, 318)">
+      <text x="22" y="12" fill="#9aa3b2" font-size="9">Tap any segment to seek</text>
+      <rect x="22" y="18" width="2" height="26" fill="#2a313d"/>
+      <text x="76" y="28" fill="#9aa3b2" font-size="10">Markers also appear on the</text>
+      <text x="76" y="42" fill="#9aa3b2" font-size="10">Now Playing timeline.</text>
+    </g>
+    <g transform="translate(0, 370)">
+      <text x="22" y="12" fill="#9aa3b2" font-size="9">Skipped this session</text>
+      <rect x="22" y="18" width="2" height="26" fill="#ff8a3d"/>
+      <text x="76" y="28" fill="#e8eaef" font-size="10">3 segments</text>
+      <text x="76" y="42" fill="#9aa3b2" font-size="10">2 min 56 sec saved</text>
+    </g>
+  </g>
+
+  <rect x="40" y="540" width="200" height="36" rx="10" fill="#181c24"/>
+  <text x="140" y="563" text-anchor="middle" fill="#e8eaef" font-family="-apple-system,sans-serif" font-size="11">Tap a segment to jump</text>
+</svg>

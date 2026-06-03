@@ -1,6 +1,8 @@
 # Noadcast
 
-iOS 26+ podcast app that auto-skips ads by transcribing each episode locally with **SpeechAnalyzer** (Speech framework, iOS 26) and detecting ad segments with **FoundationModels** (Apple Intelligence on-device LLM). Built with SwiftUI + SwiftData.
+iOS 26+ podcast app that downloads episodes, asks a cloud audio model to
+identify ads/intros/outros, and skips those segments during playback. Built
+with SwiftUI, SwiftData, AVFoundation, background `URLSession`, and Gemini.
 
 ## Architecture
 
@@ -9,95 +11,71 @@ Noadcast/
   Models/         SwiftData @Model types
   Services/       Singleton-style actors / observable services
   Views/          SwiftUI views, one folder per tab
-  Util/           Small helpers (time formatting, etc.)
+  Util/           Small helpers (time formatting, logging, etc.)
   NoadcastApp.swift   App entry, builds ModelContainer + service graph
   ContentView.swift   Root TabView
   Info.plist
   Noadcast.entitlements
 ```
 
-The Xcode project uses `PBXFileSystemSynchronizedRootGroup` — **any file added under `Noadcast/` is automatically compiled**. You do not need to edit `project.pbxproj` when adding new sources.
+The Xcode project uses `PBXFileSystemSynchronizedRootGroup`: any file added
+under `Noadcast/` is automatically compiled. You do not need to edit
+`project.pbxproj` when adding or removing app sources.
 
 ## Data flow
 
-1. **Subscribe** → `FeedService.fetch(rss:)` parses the RSS feed, creates a `Podcast` and inserts `Episode` rows.
-2. **Auto-download** → `ProcessingPipeline` watches new episodes and (when allowed by `AppSettings.autoDownloadPolicy` + `NetworkMonitor`) hands them to `DownloadService`.
-3. **Transcribe** → On download completion the pipeline calls `TranscriptionService.transcribe(fileURL:)`, which runs `SpeechAnalyzer` with a `SpeechTranscriber` module and writes `TranscriptSegment` rows with `CMTimeRange`-derived start/end seconds.
-4. **Detect ads** → `AdDetectionService.detectAds(in:promptOverride:)` chunks the transcript, calls `LanguageModelSession.respond(to:generating:)` with the `AdSegments` `@Generable` schema, and writes `AdMarker` rows.
-5. **Play** → `PlayerService` (AVPlayer) loads the local file, publishes time via `AsyncStream`, and on each periodic boundary checks whether the current time is inside an `AdMarker` — if so, seeks past the marker's end. Also drives `MPNowPlayingInfoCenter` + `MPRemoteCommandCenter` for lock-screen controls.
+1. **Subscribe** -> `FeedService.fetch(feedURL:)` parses an RSS feed, creates a
+   `Podcast`, and imports `Episode` rows.
+2. **Queue/download** -> `SubscriptionService` and `ProcessingPipeline` decide
+   what can start under `AppSettings.autoDownloadPolicy` and `NetworkMonitor`.
+   `DownloadService` writes the audio file to Application Support.
+3. **Analyze audio** -> `CloudAdDetectionService.analyzeFile(...)` optionally
+   down-samples the audio, uploads it through Gemini Files API on a background
+   `URLSession`, then calls `generateContent` with a strict segments-only JSON
+   schema.
+4. **Persist markers** -> `ProcessingPipeline` replaces automatic `AdMarker`
+   rows with sanitized `DetectedAd` results and updates
+   `Episode.activeAdMarkerCount`.
+5. **Play** -> `PlayerService` loads the local file in AVPlayer, snapshots
+   markers into `AdRegion`s, and skips segments on periodic playback ticks.
+   It also owns lock-screen metadata and remote commands.
 
-## Key Apple APIs (iOS 26)
+## Current Detection Model
 
-### SpeechAnalyzer
+- The app stores skip segments, not transcripts.
+- `CloudAdDetectionService.segmentsOnlyPrompt` is the live prompt.
+- `DetectedAd`, `TokenUsage`, and timestamp sanitization live in
+  `AdDetectionModels.swift`.
+- `AdDetectionProvider` currently exposes Gemini audio-capable models.
+- Token usage and cost records are historical counters, accumulated at the
+  provider rates in effect when each call completes.
 
-```swift
-import Speech
+## Threading Rules
 
-let transcriber = SpeechTranscriber(
-    locale: .current,
-    transcriptionOptions: [],
-    reportingOptions: [.volatileResults],
-    attributeOptions: [.audioTimeRange]
-)
-try await ensureModelInstalled(for: transcriber)
+- The project sets `SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor`. Top-level types
+  are MainActor by default.
+- `ModelContext` is not `Sendable`. Background services that need storage
+  should use their own context or hop back to the main context intentionally.
+- Long-running transfers use background `URLSession`; the app delegate forwards
+  system completion callbacks to the owning service.
 
-let analyzer = SpeechAnalyzer(modules: [transcriber])
-let audioFile = try AVAudioFile(forReading: url)
+## Adding A New Tab / View
 
-// Stream results concurrently while feeding the analyzer.
-async let _ = analyzer.analyzeSequence(from: audioFile)
-for try await result in transcriber.results {
-    let text = String(result.text.characters)
-    let range = result.range            // CMTimeRange
-    // result.isFinal == true for stable segments
-}
-```
+Drop a SwiftUI file into `Views/<Tab>/`, add it to `ContentView`'s `TabView`,
+and keep row bodies from reading high-frequency fields unless the view really
+needs live progress updates.
 
-Model assets are downloaded once via `AssetInventory.assetInstallationRequest(supporting:)`. Always check `SpeechTranscriber.installedLocales` before downloading.
-
-### FoundationModels
-
-```swift
-import FoundationModels
-
-@Generable
-struct AdSegment {
-    @Guide(description: "Start time in seconds, from the transcript timestamps.")
-    let startSeconds: Double
-    @Guide(description: "End time in seconds, from the transcript timestamps.")
-    let endSeconds: Double
-    @Guide(description: "Short description of what is being advertised.")
-    let summary: String
-}
-
-@Generable
-struct AdSegments { let segments: [AdSegment] }
-
-let session = LanguageModelSession(instructions: settings.adDetectionPrompt)
-let response = try await session.respond(to: prompt, generating: AdSegments.self)
-let ads = response.content.segments
-```
-
-Check `SystemLanguageModel.default.availability` before using; gracefully degrade if Apple Intelligence is unavailable on-device.
-
-## Threading rules
-
-- The project sets `SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor`. Top-level types are MainActor by default. Mark CPU/I-O heavy services as `actor` or annotate methods `nonisolated`.
-- `ModelContext` is not `Sendable`. Background services that need to write should create a fresh `ModelContext(modelContainer)` on the background task and merge by saving — never pass a context across actors.
-
-## Adding a new tab / view
-
-Drop a SwiftUI file into `Views/<Tab>/`. Add a case to `ContentView`'s `TabView` and update the `AppTab` enum.
-
-## Adding a new piece of episode metadata
+## Adding Episode Metadata
 
 1. Add the property to `Episode` in `Models/Episode.swift`.
-2. SwiftData migrates additive schema changes automatically when the property is optional or has a default. For non-trivial migrations write a `SchemaMigrationPlan`.
-3. Read it where needed — no separate DTO layer.
+2. SwiftData migrates additive schema changes automatically when the property is
+   optional or has a default. For non-trivial migrations, write a
+   `SchemaMigrationPlan`.
+3. Prefer denormalized scalar fields for data shown in large scrolling lists.
 
-## Things that are intentionally simple in v1
+## Product Choices
 
-- No CarPlay scene (lock-screen + Now Playing only).
-- Episodes are fully downloaded before playback starts (we wait for transcription + ad detection to finish — see `Wait + show progress` UX).
-- Auto-delete after fully played; no per-podcast retention cap.
-- One ad-detection prompt for all podcasts, editable in Settings.
+- Episodes are fully downloaded before playback starts.
+- Ad analysis is globally toggleable and can also be disabled per podcast.
+- Markers remain visible even when skipping is disabled.
+- Queue auto-advances when an episode finishes.

@@ -14,6 +14,26 @@ struct AdRegion: Sendable, Equatable {
     let startSeconds: Double
     let endSeconds: Double
     let kind: SegmentKind
+
+    static func sanitized(
+        startSeconds: Double,
+        endSeconds: Double,
+        kind: SegmentKind,
+        episodeDuration: Double?
+    ) -> AdRegion? {
+        guard let range = AdTimestampSanitizer.sanitizedRange(
+            startSeconds: startSeconds,
+            endSeconds: endSeconds,
+            episodeDuration: episodeDuration
+        ) else {
+            return nil
+        }
+        return AdRegion(
+            startSeconds: range.startSeconds,
+            endSeconds: range.endSeconds,
+            kind: kind
+        )
+    }
 }
 
 @MainActor
@@ -29,7 +49,6 @@ final class PlayerService {
     private(set) var duration: Double = 0
     private(set) var isPlaying: Bool = false
     private(set) var playbackRate: Double = 1.0
-    private(set) var volume: Float = 1.0
     private(set) var skippedAds: Int = 0
     private(set) var adRegions: [AdRegion] = []
     private(set) var playAdsForCurrentEpisode: Bool = false
@@ -120,11 +139,19 @@ final class PlayerService {
         currentEpisodeTitle = episode.title
         currentPodcastTitle = episode.podcastTitle ?? podcast?.title ?? ""
         artworkURL = displayArtworkURL
-        let analysisEnabled = podcast?.aiProcessingEnabled ?? true
+        duration = Self.positiveFiniteDuration(episode.duration) ?? 0
+        let analysisEnabled = settings.adAnalysisEnabled && (podcast?.aiProcessingEnabled ?? true)
         adRegions = analysisEnabled
             ? episode.adMarkers
                 .filter { !$0.isDeleted }
-                .map { AdRegion(startSeconds: $0.startSeconds, endSeconds: $0.endSeconds, kind: $0.kind) }
+                .compactMap {
+                    AdRegion.sanitized(
+                        startSeconds: $0.startSeconds,
+                        endSeconds: $0.endSeconds,
+                        kind: $0.kind,
+                        episodeDuration: duration
+                    )
+                }
                 .sorted { $0.startSeconds < $1.startSeconds }
             : []
         skipAdsEnabled = settings.skipAds
@@ -133,7 +160,7 @@ final class PlayerService {
         playAdsForCurrentEpisode = false
         skippedAds = 0
 
-        let resume = episode.playbackPosition
+        let resume = Self.clampedPlaybackTime(episode.playbackPosition, duration: duration)
         if resume > 0 {
             player.seek(to: CMTime(seconds: resume, preferredTimescale: 600))
             currentTime = resume
@@ -142,7 +169,6 @@ final class PlayerService {
         }
         lastObservedTime = resume
         lastPersistTime = 0  // allow the first throttled persist to write immediately
-        if let dur = episode.duration { duration = dur }
 
         let speed = podcast?.customPlaybackSpeed ?? settings.defaultPlaybackSpeed
         playbackRate = speed
@@ -219,7 +245,7 @@ final class PlayerService {
     }
 
     func seek(to seconds: Double) {
-        let clamped = max(0, min(duration, seconds))
+        let clamped = Self.clampedPlaybackTime(seconds, duration: duration)
         player.seek(to: CMTime(seconds: clamped, preferredTimescale: 600))
         currentTime = clamped
         // Suppress the next time-observer delta so this seek doesn't count
@@ -237,11 +263,6 @@ final class PlayerService {
         updateNowPlayingInfo()
     }
 
-    func setVolume(_ v: Float) {
-        volume = max(0, min(1, v))
-        player.volume = volume
-    }
-
     func setSkipAdsEnabled(_ enabled: Bool) {
         skipAdsEnabled = enabled
         if !enabled {
@@ -251,6 +272,12 @@ final class PlayerService {
 
     func setPlayAdsForCurrentEpisode(_ enabled: Bool) {
         playAdsForCurrentEpisode = enabled && skipAdsEnabled
+    }
+
+    func discardPendingPlaybackHistory() {
+        pendingLifetimePlayedSeconds = 0
+        pendingLifetimeAdSkipSeconds = 0
+        lastLifetimeStatsFlushTime = ProcessInfo.processInfo.systemUptime
     }
 
     // MARK: - Observers
@@ -267,9 +294,10 @@ final class PlayerService {
                 if t.isFinite { self.currentTime = t }
                 if let dur = self.player.currentItem?.duration.seconds, dur.isFinite, dur > 0 {
                     self.duration = dur
+                    self.sanitizeAdRegionsForCurrentDuration()
                 }
                 self.accumulatePlayedTime()
-                self.maybeSkipAd()
+                if self.maybeSkipAd() { return }
                 self.persistPosition(force: false)
                 self.lastObservedTime = self.currentTime
             }
@@ -311,12 +339,13 @@ final class PlayerService {
 
     // MARK: - Ad skipping
 
-    private func maybeSkipAd() {
+    @discardableResult
+    private func maybeSkipAd() -> Bool {
         // Find the region we're currently inside, and only act if the user
         // wants this kind skipped.
         guard let initial = adRegions.first(where: { $0.startSeconds <= currentTime && currentTime < $0.endSeconds }),
               shouldSkip(kind: initial.kind)
-        else { return }
+        else { return false }
 
         // Chain-skip: walk forward through additional regions whose start
         // is within `chainSkipGapSeconds` of the previous region's end and
@@ -334,9 +363,49 @@ final class PlayerService {
         }
 
         skippedAds += skipped
-        let saved = max(0, targetEnd - currentTime)
+        let effectiveTargetEnd = duration > 0 ? min(targetEnd, duration) : targetEnd
+        let saved = max(0, effectiveTargetEnd - currentTime)
         addPendingLifetimeAdSkipSeconds(saved)
-        seek(to: targetEnd + 0.05)
+        let skipTarget = targetEnd + 0.05
+        if duration > 0, skipTarget >= duration {
+            player.pause()
+            player.seek(to: CMTime(seconds: duration, preferredTimescale: 600))
+            currentTime = duration
+            lastObservedTime = duration
+            updateNowPlayingInfo()
+            handlePlaybackFinished()
+            return true
+        }
+        seek(to: skipTarget)
+        return false
+    }
+
+    private func sanitizeAdRegionsForCurrentDuration() {
+        guard duration > 0 else { return }
+        let sanitized = adRegions.compactMap {
+            AdRegion.sanitized(
+                startSeconds: $0.startSeconds,
+                endSeconds: $0.endSeconds,
+                kind: $0.kind,
+                episodeDuration: duration
+            )
+        }
+        if sanitized != adRegions {
+            adRegions = sanitized.sorted { $0.startSeconds < $1.startSeconds }
+        }
+    }
+
+    private nonisolated static func positiveFiniteDuration(_ seconds: Double?) -> Double? {
+        guard let seconds, seconds.isFinite, seconds > 0 else { return nil }
+        return seconds
+    }
+
+    nonisolated static func clampedPlaybackTime(_ seconds: Double, duration: Double) -> Double {
+        guard seconds.isFinite else { return 0 }
+        if duration.isFinite, duration > 0 {
+            return max(0, min(duration, seconds))
+        }
+        return max(0, seconds)
     }
 
     private func shouldSkip(kind: SegmentKind) -> Bool {
@@ -418,7 +487,7 @@ final class PlayerService {
         flushLifetimeStats(force: true)
         episode.isPlayed = true
         episode.datePlayed = .now
-        episode.playbackPosition = episode.duration ?? 0
+        episode.playbackPosition = episode.duration ?? duration
 
         let settings = AppSettings.current(in: context)
         if settings.autoDeleteAfterPlayed, let localURL = episode.localFileURL {

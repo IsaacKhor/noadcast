@@ -47,5 +47,5 @@
   <text x="140" y="520" text-anchor="middle" fill="#9aa3b2" font-family="-apple-system,sans-serif" font-size="10">3 ads · intro · outro</text>
 
   <rect x="40" y="544" width="200" height="36" rx="10" fill="#181c24"/>
-  <text x="140" y="567" text-anchor="middle" fill="#e8eaef" font-family="-apple-system,sans-serif" font-size="11">Show Transcript</text>
+  <text x="140" y="567" text-anchor="middle" fill="#e8eaef" font-family="-apple-system,sans-serif" font-size="11">Skip Segments</text>
 </svg>

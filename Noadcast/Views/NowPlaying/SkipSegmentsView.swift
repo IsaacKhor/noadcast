@@ -2,7 +2,7 @@ import SwiftUI
 
 /// Sheet showing each detected skippable segment (ad, intro, or outro).
 /// Reached by tapping the segments summary in `NowPlayingView`.
-struct AdsTranscriptView: View {
+struct SkipSegmentsView: View {
     let ads: [AdMarker]
     let onSeek: (Double) -> Void
 

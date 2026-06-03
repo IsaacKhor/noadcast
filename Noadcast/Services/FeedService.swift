@@ -19,17 +19,13 @@ struct ParsedEpisode: Sendable {
 }
 
 enum FeedError: LocalizedError {
-    case invalidURL
     case networkFailure(Error)
     case parseFailure(String)
-    case noEpisodes
 
     var errorDescription: String? {
         switch self {
-        case .invalidURL: "The feed URL is invalid."
         case .networkFailure(let err): "Couldn't reach the feed: \(err.localizedDescription)"
         case .parseFailure(let msg): "Feed parse error: \(msg)"
-        case .noEpisodes: "Feed has no episodes."
         }
     }
 }

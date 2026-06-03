@@ -2,8 +2,7 @@ import SwiftUI
 import SwiftData
 
 /// Cross-podcast view of the most recent 100 episodes in the library,
-/// sorted by `publishedAt` descending. Accessible from the Queue tab's
-/// toolbar.
+/// sorted by `publishedAt` descending. Accessible from the Queue tab.
 struct LatestEpisodesView: View {
     @Environment(\.modelContext) private var context
     @Query private var episodes: [Episode]
