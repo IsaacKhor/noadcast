@@ -1,2 +1,6 @@
 secrets.env
 bench/
+whisper.cpp/
+server/.venv/
+server/__pycache__/
+server/uv.lock

@@ -117,7 +117,7 @@ async def analyze(
     with tempfile.TemporaryDirectory(prefix="noadcast-analysis-") as tmp:
         work_dir = Path(tmp)
         suffix = Path(audio.filename or "episode").suffix or suffix_for_mime_type(mime_type)
-        uploaded_path = work_dir / f"input{suffix}"
+        uploaded_path = work_dir / f"uploaded{suffix}"
         wav_path = work_dir / "input.wav"
 
         try:
