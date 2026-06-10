@@ -399,7 +399,7 @@ def suffix_for_mime_type(mime_type: str | None) -> str:
 
 
 def main() -> None:
-    host = os.getenv("HOST", "127.0.0.1")
+    host = os.getenv("HOST", "0.0.0.0")
     port = int(os.getenv("PORT", "8765"))
     uvicorn.run("main:app", host=host, port=port)
 
