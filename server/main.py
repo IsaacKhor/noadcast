@@ -13,9 +13,13 @@ from typing import Any
 
 import httpx
 import uvicorn
+from dotenv import load_dotenv
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from pydantic import BaseModel, Field
 
+
+ROOT_DIR = Path(__file__).resolve().parent.parent
+load_dotenv(ROOT_DIR / "secrets.env")
 
 app = FastAPI(title="Noadcast Ad Detection Server")
 
@@ -197,19 +201,22 @@ def run_command(command: list[str], failure_message: str) -> None:
             command,
             check=False,
             capture_output=True,
-            text=True,
         )
     except FileNotFoundError as exc:
         raise HTTPException(status_code=500, detail=f"{command[0]} not found") from exc
 
     if completed.returncode != 0:
-        stderr = completed.stderr.strip() or completed.stdout.strip()
+        stderr = decode_output(completed.stderr).strip() or decode_output(completed.stdout).strip()
         raise HTTPException(status_code=500, detail=f"{failure_message}: {stderr[-2000:]}")
+
+
+def decode_output(output: bytes) -> str:
+    return output.decode("utf-8", errors="replace")
 
 
 def parse_whisper_json(path: Path) -> list[TranscriptSegment]:
     try:
-        payload = json.loads(path.read_text())
+        payload = json.loads(decode_output(path.read_bytes()))
     except FileNotFoundError as exc:
         raise HTTPException(status_code=500, detail="whisper.cpp did not write transcript.json") from exc
     except json.JSONDecodeError as exc:
