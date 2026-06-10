@@ -151,7 +151,16 @@ struct SettingsView: View {
     private func adProviderSection(settings: AppSettings) -> some View {
         @Bindable var s = settings
         let provider = s.adDetectionProvider
+        let backend = s.adDetectionBackend
         Section {
+            Picker("Backend", selection: Binding(
+                get: { s.adDetectionBackend },
+                set: { s.adDetectionBackend = $0 }
+            )) {
+                ForEach(AdDetectionBackend.allCases, id: \.self) { backend in
+                    Text(backend.label).tag(backend)
+                }
+            }
             Picker("Model", selection: Binding(
                 get: { s.adDetectionProvider },
                 set: { s.adDetectionProvider = $0 }
@@ -183,7 +192,18 @@ struct SettingsView: View {
                 .autocorrectionDisabled()
                 .textInputAutocapitalization(.never)
             }
-            Toggle("Downsample audio before upload", isOn: $s.downsampleAudioBeforeUpload)
+            if backend == .whisperServer {
+                TextField("Server URL", text: $s.adDetectionServerHost)
+                    .textContentType(.URL)
+                    .keyboardType(.URL)
+                    .autocorrectionDisabled()
+                    .textInputAutocapitalization(.never)
+                TextField("Port", value: $s.adDetectionServerPort, format: .number)
+                    .keyboardType(.numberPad)
+            }
+            if backend == .geminiFiles {
+                Toggle("Downsample audio before upload", isOn: $s.downsampleAudioBeforeUpload)
+            }
             Button(role: .destructive) {
                 showResetTokenStatsConfirmation = true
             } label: {
@@ -193,7 +213,7 @@ struct SettingsView: View {
             Text("Detection model")
         } footer: {
             VStack(alignment: .leading, spacing: 4) {
-                Text(providerFooter)
+                Text(providerFooter(settings: settings))
                 Text(tokenCostLine(
                     label: "Input tokens",
                     tokens: settings.lifetimeAdDetectionInputTokens,
@@ -213,8 +233,13 @@ struct SettingsView: View {
         }
     }
 
-    private var providerFooter: String {
-        "Uploads episode audio to Google AI Studio and receives back only skip segments with timestamps and summaries. Downsampling uses a temporary 32 kbps, 16 kHz mono copy."
+    private func providerFooter(settings: AppSettings) -> String {
+        switch settings.adDetectionBackend {
+        case .geminiFiles:
+            "Uploads episode audio to Google AI Studio and receives back only skip segments with timestamps and summaries. Downsampling uses a temporary 32 kbps, 16 kHz mono copy."
+        case .whisperServer:
+            "Uploads episode audio to the configured server. The server transcribes with whisper.cpp, sends only the timestamped transcript to Gemini, and returns skip segments. The saved Google key is sent with the request; if it is blank, the server must provide GEMINI_API_KEY."
+        }
     }
 
     /// Compact running totals shown under the provider footer so the user

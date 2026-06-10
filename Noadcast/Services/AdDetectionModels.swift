@@ -55,7 +55,7 @@ nonisolated enum AdTimestampSanitizer {
 }
 
 /// Token usage reported by the provider for one audio-analysis call.
-nonisolated struct TokenUsage: Sendable {
+nonisolated struct TokenUsage: Codable, Sendable {
     var inputTokens: Int
     var thoughtTokens: Int
     var outputTokens: Int

@@ -203,21 +203,27 @@ final class ProcessingPipeline {
         try? context.save()
 
         let settings = AppSettings.current(in: context)
+        let backend = settings.adDetectionBackend
         let provider = settings.adDetectionProvider
         let googleKey = settings.googleAPIKey
         let thinkingLevel = settings.adDetectionThinkingLevel
         let downsampleBeforeUpload = settings.downsampleAudioBeforeUpload
+        let serverHost = settings.adDetectionServerHost
+        let serverPort = settings.adDetectionServerPort
         let mimeType = episode.audioMimeType ?? "audio/mpeg"
         let episodeID = episode.persistentModelID
         let container = modelContainer
 
         let result = try await CloudAdDetectionService.shared.analyzeFile(
             fileURL: fileURL,
+            backend: backend,
             provider: provider,
             googleAPIKey: googleKey,
             mimeType: mimeType,
             thinkingLevel: thinkingLevel,
             downsampleBeforeUpload: downsampleBeforeUpload,
+            serverHost: serverHost,
+            serverPort: serverPort,
             episodeGUID: episode.guid,
             onStage: { stage in
                 Task { @MainActor in

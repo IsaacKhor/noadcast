@@ -1,5 +1,17 @@
 import Foundation
 
+nonisolated enum AdDetectionBackend: String, Codable, CaseIterable, Sendable {
+    case geminiFiles
+    case whisperServer
+
+    var label: String {
+        switch self {
+        case .geminiFiles: "Direct Gemini upload"
+        case .whisperServer: "Whisper.cpp server"
+        }
+    }
+}
+
 /// Cloud model that handles ad detection by analyzing the uploaded audio
 /// file and returning a structured JSON list of skip segments.
 nonisolated enum AdDetectionProvider: String, Codable, CaseIterable, Sendable {

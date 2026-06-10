@@ -23,8 +23,10 @@ nonisolated enum CloudAdDetectionStage: Sendable {
 enum CloudAdDetectionError: LocalizedError {
     case providerUnsupported(String)
     case missingAPIKey(String)
+    case invalidServerURL(String)
     case downsampleFailed(Error)
     case uploadFailed(Error)
+    case serverFailed(Int, String)
     case parseFailure(String)
 
     var errorDescription: String? {
@@ -33,10 +35,14 @@ enum CloudAdDetectionError: LocalizedError {
             "\(provider) doesn't support file-based analysis. Pick a different Gemini model in Settings → Detection model."
         case .missingAPIKey(let provider):
             "\(provider) API key missing — add one in Settings → Detection model."
+        case .invalidServerURL(let value):
+            "Invalid ad-detection server URL: \(value)"
         case .downsampleFailed(let err):
             "Couldn't downsample the audio file: \(err.localizedDescription)"
         case .uploadFailed(let err):
             "Couldn't upload the audio file: \(err.localizedDescription)"
+        case .serverFailed(let status, let body):
+            "Ad-detection server failed with HTTP \(status): \(body)"
         case .parseFailure(let msg):
             "Couldn't parse the provider response: \(msg)"
         }
@@ -77,6 +83,12 @@ nonisolated final class CloudAdDetectionService: NSObject, @unchecked Sendable {
         let fileURL: URL
         let mimeType: String
         let cleanupURL: URL?
+    }
+
+    private struct MultipartBody {
+        let fileURL: URL
+        let boundary: String
+        let byteCount: Int64
     }
 
     private struct UploadedGeminiFile {
@@ -221,10 +233,7 @@ nonisolated final class CloudAdDetectionService: NSObject, @unchecked Sendable {
 
     Use only timestamps that match the audio. Be conservative — flag segments \
     only when you're confident. Return an empty `segments` array if \
-    nothing should be skipped. Do not include any fields other than `segments`. \
-    Ensure that the segment timestamps you return accurately reflect the input \
-    audio, make sure to not include bogus data such as timestamps that exceed \
-    the episode duration.
+    nothing should be skipped. Do not include any fields other than `segments`.
     """
 
     /// Top-level entry point. Always uploads the audio through Gemini's
@@ -239,13 +248,53 @@ nonisolated final class CloudAdDetectionService: NSObject, @unchecked Sendable {
     /// app termination + relaunch.
     func analyzeFile(
         fileURL: URL,
+        backend: AdDetectionBackend,
         provider: AdDetectionProvider,
         googleAPIKey: String?,
         mimeType: String,
         thinkingLevel: AdDetectionThinkingLevel = .automatic,
         downsampleBeforeUpload: Bool = false,
+        serverHost: String = "",
+        serverPort: Int = 0,
         episodeGUID: String? = nil,
         onStage: (@Sendable (CloudAdDetectionStage) -> Void)? = nil
+    ) async throws -> CloudAdDetectionResult {
+        switch backend {
+        case .geminiFiles:
+            return try await analyzeWithGeminiFiles(
+                fileURL: fileURL,
+                provider: provider,
+                googleAPIKey: googleAPIKey,
+                mimeType: mimeType,
+                thinkingLevel: thinkingLevel,
+                downsampleBeforeUpload: downsampleBeforeUpload,
+                episodeGUID: episodeGUID,
+                onStage: onStage
+            )
+        case .whisperServer:
+            return try await analyzeWithWhisperServer(
+                fileURL: fileURL,
+                provider: provider,
+                googleAPIKey: googleAPIKey,
+                mimeType: mimeType,
+                thinkingLevel: thinkingLevel,
+                serverHost: serverHost,
+                serverPort: serverPort,
+                episodeGUID: episodeGUID,
+                onStage: onStage
+            )
+        }
+    }
+
+    private func analyzeWithGeminiFiles(
+        fileURL: URL,
+        provider: AdDetectionProvider,
+        googleAPIKey: String?,
+        mimeType: String,
+        thinkingLevel: AdDetectionThinkingLevel,
+        downsampleBeforeUpload: Bool,
+        episodeGUID: String?,
+        onStage: (@Sendable (CloudAdDetectionStage) -> Void)?
     ) async throws -> CloudAdDetectionResult {
         guard provider.supportsAudioFileDetection else {
             throw CloudAdDetectionError.providerUnsupported(provider.label)
@@ -295,6 +344,74 @@ nonisolated final class CloudAdDetectionService: NSObject, @unchecked Sendable {
 
         Log.adDetection.info("Audio analysis complete — ads=\(ads.count) input_tokens=\(usage?.inputTokens ?? 0) thought_tokens=\(usage?.thoughtTokens ?? 0) output_tokens=\(usage?.outputTokens ?? 0)")
         return CloudAdDetectionResult(ads: ads, usage: usage)
+    }
+
+    private func analyzeWithWhisperServer(
+        fileURL: URL,
+        provider: AdDetectionProvider,
+        googleAPIKey: String?,
+        mimeType: String,
+        thinkingLevel: AdDetectionThinkingLevel,
+        serverHost: String,
+        serverPort: Int,
+        episodeGUID: String?,
+        onStage: (@Sendable (CloudAdDetectionStage) -> Void)?
+    ) async throws -> CloudAdDetectionResult {
+        let endpoint = try Self.serverAnalyzeURL(host: serverHost, port: serverPort)
+        let fileSize = (try? fileURL.resourceValues(forKeys: [.fileSizeKey]).fileSize).map(Int64.init) ?? 0
+        Log.adDetection.info("Audio analysis begin — provider=\(provider.label, privacy: .public) file=\(fileURL.lastPathComponent, privacy: .public) bytes=\(fileSize) path=whisper-server endpoint=\(endpoint.absoluteString, privacy: .public)")
+
+        var fields: [String: String] = [
+            "model": provider.apiModel,
+            "mime_type": mimeType
+        ]
+        if provider.supportsThinkingLevel, let level = thinkingLevel.apiValue {
+            fields["thinking_level"] = level
+        }
+        if let googleAPIKey, !googleAPIKey.isEmpty {
+            fields["google_api_key"] = googleAPIKey
+        }
+
+        let body = try writeMultipartBody(
+            fileURL: fileURL,
+            fileFieldName: "audio",
+            mimeType: mimeType,
+            fields: fields
+        )
+
+        var request = URLRequest(url: endpoint)
+        request.httpMethod = "POST"
+        request.setValue("multipart/form-data; boundary=\(body.boundary)", forHTTPHeaderField: "Content-Type")
+        request.setValue(String(body.byteCount), forHTTPHeaderField: "Content-Length")
+
+        let (data, response) = try await upload(
+            request: request,
+            fromFile: body.fileURL,
+            tempBodyURL: body.fileURL,
+            taskDescription: episodeGUID,
+            onProgress: { sent, total in
+                onStage?(.uploading(bytesSent: sent, totalBytes: total))
+                if total > 0, sent >= total {
+                    onStage?(.analyzing)
+                }
+            }
+        )
+
+        guard (200..<300).contains(response.statusCode) else {
+            let bodyText = String(data: data, encoding: .utf8) ?? ""
+            Log.adDetection.error("Whisper server call HTTP \(response.statusCode): \(bodyText, privacy: .public)")
+            throw CloudAdDetectionError.serverFailed(response.statusCode, String(bodyText.prefix(500)))
+        }
+
+        let decoded: ServerAdDetectionResponse
+        do {
+            decoded = try decoder.decode(ServerAdDetectionResponse.self, from: data)
+        } catch {
+            throw CloudAdDetectionError.parseFailure(error.localizedDescription)
+        }
+        let ads = Self.detectedAds(from: decoded.segments)
+        Log.adDetection.info("Audio analysis complete — server ads=\(ads.count) input_tokens=\(decoded.usage?.inputTokens ?? 0) thought_tokens=\(decoded.usage?.thoughtTokens ?? 0) output_tokens=\(decoded.usage?.outputTokens ?? 0)")
+        return CloudAdDetectionResult(ads: ads, usage: decoded.usage)
     }
 
     /// Cancels any background tasks tagged with `taskDescription == guid`.
@@ -349,6 +466,83 @@ nonisolated final class CloudAdDetectionService: NSObject, @unchecked Sendable {
             .appendingPathComponent("noadcast-cloud-\(UUID().uuidString).\(ext)")
         try data.write(to: url, options: [.atomic])
         return url
+    }
+
+    static func serverAnalyzeURL(host: String, port: Int) throws -> URL {
+        let trimmed = host.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, (1...65_535).contains(port) else {
+            throw CloudAdDetectionError.invalidServerURL(host)
+        }
+
+        let withScheme = trimmed.contains("://") ? trimmed : "http://\(trimmed)"
+        guard var components = URLComponents(string: withScheme),
+              components.host != nil
+        else {
+            throw CloudAdDetectionError.invalidServerURL(host)
+        }
+
+        components.port = port
+        components.query = nil
+        components.fragment = nil
+        if components.path.isEmpty || components.path == "/" {
+            components.path = "/analyze"
+        } else if !components.path.hasSuffix("/analyze") {
+            components.path += components.path.hasSuffix("/") ? "analyze" : "/analyze"
+        }
+
+        guard let url = components.url else {
+            throw CloudAdDetectionError.invalidServerURL(host)
+        }
+        return url
+    }
+
+    private func writeMultipartBody(
+        fileURL: URL,
+        fileFieldName: String,
+        mimeType: String,
+        fields: [String: String]
+    ) throws -> MultipartBody {
+        let boundary = "Noadcast-\(UUID().uuidString)"
+        let bodyURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("noadcast-server-upload-\(UUID().uuidString).multipart")
+        _ = FileManager.default.createFile(atPath: bodyURL.path, contents: nil)
+
+        let output = try FileHandle(forWritingTo: bodyURL)
+        var didCloseOutput = false
+        defer {
+            if !didCloseOutput {
+                try? output.close()
+            }
+        }
+
+        func write(_ string: String) throws {
+            try output.write(contentsOf: Data(string.utf8))
+        }
+
+        for (name, value) in fields.sorted(by: { $0.key < $1.key }) {
+            try write("--\(boundary)\r\n")
+            try write("Content-Disposition: form-data; name=\"\(name)\"\r\n\r\n")
+            try write("\(value)\r\n")
+        }
+
+        let filename = fileURL.lastPathComponent.isEmpty ? "episode-audio" : fileURL.lastPathComponent
+        try write("--\(boundary)\r\n")
+        try write("Content-Disposition: form-data; name=\"\(fileFieldName)\"; filename=\"\(filename)\"\r\n")
+        try write("Content-Type: \(mimeType)\r\n\r\n")
+
+        let input = try FileHandle(forReadingFrom: fileURL)
+        defer { try? input.close() }
+        while true {
+            let chunk = try input.read(upToCount: 1024 * 1024) ?? Data()
+            guard !chunk.isEmpty else { break }
+            try output.write(contentsOf: chunk)
+        }
+
+        try write("\r\n--\(boundary)--\r\n")
+        try output.close()
+        didCloseOutput = true
+        let byteCount = (try bodyURL.resourceValues(forKeys: [.fileSizeKey]).fileSize).map(Int64.init) ?? 0
+        return MultipartBody(fileURL: bodyURL, boundary: boundary, byteCount: byteCount)
     }
 
     // MARK: - Optional upload downsampling
@@ -838,6 +1032,11 @@ nonisolated private struct CombinedResponse {
 
 nonisolated private struct SegmentsOnlyResponse: Decodable {
     let segments: [CombinedResponse.SegmentRow]
+}
+
+nonisolated private struct ServerAdDetectionResponse: Decodable {
+    let segments: [CombinedResponse.SegmentRow]
+    let usage: TokenUsage?
 }
 
 nonisolated private struct GeminiFileUploadResponse: Decodable {
