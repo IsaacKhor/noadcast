@@ -26,7 +26,8 @@ enum TimeFormatting {
     /// an episode is being processed. Returns `nil` when there's nothing
     /// meaningful to show yet.
     /// * `.downloading` / `.uploading` → "12.3 MB / 50 MB" (or "12.3 MB" if total unknown)
-    /// * `.detectingAds` → "Chunk 3 of 12"
+    /// * `.detectingAds` → optional determinate analysis detail, when a backend provides one
+    ///   (`12:34 / 45:00` for transcription, `Chunk 3 of 12` for chunked analysis)
     static func progressDetail(for episode: Episode) -> String? {
         switch episode.processingState {
         case .downloading, .uploading:
@@ -38,6 +39,7 @@ enum TimeFormatting {
             case (let c?, _):
                 return fileSize(c)
             default:
+                guard episode.processingProgress > 0 else { return nil }
                 let pct = Int((episode.processingProgress * 100).rounded())
                 return "\(pct)%"
             }
@@ -45,6 +47,10 @@ enum TimeFormatting {
             guard let current = episode.processingCurrent,
                   let total = episode.processingTotal,
                   total > 0 else { return nil }
+            let label = episode.processingStatusText?.lowercased() ?? ""
+            if label.contains("transcrib") {
+                return "\(timestamp(current)) / \(timestamp(total))"
+            }
             return "Chunk \(Int(current)) of \(Int(total))"
         default:
             return nil

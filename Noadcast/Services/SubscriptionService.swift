@@ -106,11 +106,18 @@ final class SubscriptionService {
     ///   cached markers are no longer trustworthy.
     /// - Deletes every `QueueItem` pointing to the episode.
     /// - Unloads the player if it's the episode currently being played.
+    /// - Optionally records the episode as played when deletion represents a
+    ///   deliberate dismissal from the queue.
     func deleteEpisodeContent(
         _ episode: Episode,
         in context: ModelContext,
+        markAsPlayed: Bool = false,
         save: Bool = true
     ) {
+        ProcessingPipeline.shared.cancel(
+            episodeID: episode.persistentModelID,
+            episodeGUID: episode.guid
+        )
         PlayerService.shared.unloadIfCurrent(episodeID: episode.persistentModelID)
 
         if let url = episode.localFileURL {
@@ -119,11 +126,14 @@ final class SubscriptionService {
         episode.localFilename = nil
         episode.fileSizeBytes = nil
         episode.playbackPosition = 0
-        episode.isPlayed = false
-        episode.datePlayed = nil
+        episode.isPlayed = markAsPlayed
+        episode.datePlayed = markAsPlayed ? .now : nil
         episode.processingState = .new
         episode.processingProgress = 0
+        episode.processingCurrent = nil
+        episode.processingTotal = nil
         episode.processingError = nil
+        episode.processingStatusText = nil
         episode.activeAdMarkerCount = 0
 
         for marker in episode.adMarkers {
@@ -148,7 +158,10 @@ final class SubscriptionService {
     /// dynamically-ad-inserted feeds where the audio file itself may differ
     /// between downloads.
     func redownloadAndReprocess(_ episode: Episode, in context: ModelContext) {
-        ProcessingPipeline.shared.cancel(episodeID: episode.persistentModelID)
+        ProcessingPipeline.shared.cancel(
+            episodeID: episode.persistentModelID,
+            episodeGUID: episode.guid
+        )
         PlayerService.shared.unloadIfCurrent(episodeID: episode.persistentModelID)
 
         if let url = episode.localFileURL {
@@ -164,6 +177,7 @@ final class SubscriptionService {
         episode.processingCurrent = nil
         episode.processingTotal = nil
         episode.processingError = nil
+        episode.processingStatusText = nil
         episode.activeAdMarkerCount = 0
         for marker in episode.adMarkers { context.delete(marker) }
         try? context.save()
@@ -182,7 +196,10 @@ final class SubscriptionService {
             redownloadAndReprocess(episode, in: context)
             return
         }
-        ProcessingPipeline.shared.cancel(episodeID: episode.persistentModelID)
+        ProcessingPipeline.shared.cancel(
+            episodeID: episode.persistentModelID,
+            episodeGUID: episode.guid
+        )
 
         for marker in episode.adMarkers { context.delete(marker) }
         episode.processingState = .downloaded
@@ -190,6 +207,7 @@ final class SubscriptionService {
         episode.processingCurrent = nil
         episode.processingTotal = nil
         episode.processingError = nil
+        episode.processingStatusText = nil
         episode.activeAdMarkerCount = 0
         try? context.save()
 
@@ -270,6 +288,7 @@ final class SubscriptionService {
 
         func enqueueIfNeeded(_ episode: Episode) {
             guard autoEnqueue else { return }
+            guard !episode.isPlayed else { return }
             let episodeID = episode.persistentModelID
             guard queuedEpisodeIDs.insert(episodeID).inserted else { return }
             let item = QueueItem(position: nextQueuePosition, episode: episode)
@@ -367,7 +386,11 @@ final class SubscriptionService {
         if episode.publishedAt != entry.publishedAt {
             episode.publishedAt = entry.publishedAt
         }
-        if episode.duration != entry.duration {
+        // Once audio is downloaded, ProcessingPipeline stores the measured
+        // local-file duration. Preserve that authoritative endpoint across
+        // feed refreshes; RSS duration can be absent or stale with dynamic
+        // ad insertion.
+        if episode.localFilename == nil, episode.duration != entry.duration {
             episode.duration = entry.duration
         }
         if episode.audioURL != entry.audioURL {

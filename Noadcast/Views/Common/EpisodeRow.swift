@@ -101,8 +101,10 @@ struct EpisodeRow<Trailing: View>: View {
             }
         case .downloaded:
             Image(systemName: "arrow.down.circle.fill").foregroundStyle(.tint)
-        case .downloading, .detectingAds:
+        case .downloading:
             Image(systemName: "arrow.down.circle").foregroundStyle(.tint)
+        case .detectingAds:
+            Image(systemName: detectingStatusIconName).foregroundStyle(.tint)
         case .uploading:
             Image(systemName: "arrow.up.circle").foregroundStyle(.tint)
         case .failed:
@@ -138,8 +140,13 @@ struct EpisodeRow<Trailing: View>: View {
         // the Downloads tab.
         if showProgress, episode.isInProgress {
             VStack(alignment: .leading, spacing: 2) {
-                ProgressView(value: max(0, min(1, episode.processingProgress)))
-                    .progressViewStyle(.linear)
+                if hasDeterminateProcessingProgress {
+                    ProgressView(value: max(0, min(1, episode.processingProgress)))
+                        .progressViewStyle(.linear)
+                } else {
+                    ProgressView()
+                        .progressViewStyle(.linear)
+                }
                 HStack(spacing: 6) {
                     Text(processingLabel)
                     if let detail = TimeFormatting.progressDetail(for: episode) {
@@ -170,12 +177,41 @@ struct EpisodeRow<Trailing: View>: View {
     }
 
     private var processingLabel: String {
-        switch episode.processingState {
+        if let text = episode.processingStatusText, !text.isEmpty {
+            return text
+        }
+        return switch episode.processingState {
         case .downloading: "Downloading…"
         case .uploading: "Uploading…"
         case .detectingAds: "Analyzing…"
         default: ""
         }
+    }
+
+    private var hasDeterminateProcessingProgress: Bool {
+        guard let total = episode.processingTotal, total > 0 else {
+            return false
+        }
+        guard episode.processingCurrent != nil else {
+            return false
+        }
+        switch episode.processingState {
+        case .downloading, .uploading, .detectingAds:
+            return true
+        default:
+            return false
+        }
+    }
+
+    private var detectingStatusIconName: String {
+        let label = episode.processingStatusText?.lowercased() ?? ""
+        if label.contains("transcrib") {
+            return "waveform"
+        }
+        if label.contains("gemini") {
+            return "sparkles"
+        }
+        return "waveform"
     }
 }
 

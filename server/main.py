@@ -40,15 +40,24 @@ Each segment has a `kind`:
 - "outro": one contiguous segment at the very END of the episode covering
   closing music, credits, next-episode teasers, postroll ads, and farewells.
   At most one per episode. Spans from where substantive content finishes
-  through to the end of the audio.
+  through to the end of the audio. Closing material and any postroll ads belong
+  in this single outro segment, not in separate segments.
 
 - "ad": a mid-episode advertisement, sponsored message, host-read ad, promo
   code, paid endorsement, or cross-promotion of another podcast that appears
   BETWEEN the intro and outro.
 
-Use only timestamps from the transcript. Be conservative. Return an empty
-`segments` array if nothing should be skipped. Do not include any fields other
-than `segments`.
+Before finalizing the response, deliberately inspect the final transcript
+ranges for a farewell, credits, a next-episode teaser, a postroll ad, or another
+transition away from substantive content. Do not omit an outro merely because
+the transcript ends before trailing music or silence that has no spoken words.
+Return no outro only when there is no evidence that substantive content has
+ended. Segment starts must be grounded in transcript timestamps. When the
+complete episode duration is supplied, use that audio endpoint as the outro's
+`endSeconds`; other segment timestamps must stay within transcript ranges.
+
+Be conservative. Return an empty `segments` array if nothing should be skipped.
+Do not include any fields other than `segments`.
 """.strip()
 
 
@@ -110,6 +119,7 @@ async def analyze(
     mime_type: str | None = Form(None),
     thinking_level: str | None = Form(None),
     google_api_key: str | None = Form(None),
+    episode_duration: float | None = Form(None),
 ) -> AnalyzeResponse:
     api_key = google_api_key or os.getenv("GEMINI_API_KEY")
     if not api_key:
@@ -135,8 +145,13 @@ async def analyze(
                 model=model,
                 api_key=api_key,
                 thinking_level=thinking_level,
+                episode_duration=episode_duration,
             )
-            cleaned = sanitize_segments(segments, transcript)
+            cleaned = sanitize_segments(
+                segments,
+                transcript,
+                episode_duration=episode_duration,
+            )
             return AnalyzeResponse(segments=cleaned, usage=usage)
         finally:
             await audio.close()
@@ -287,10 +302,12 @@ async def call_gemini(
     model: str,
     api_key: str,
     thinking_level: str | None,
+    episode_duration: float | None = None,
 ) -> tuple[list[SegmentResponse], TokenUsageResponse | None]:
     base_url = os.getenv("GEMINI_API_BASE", "https://generativelanguage.googleapis.com")
     url = f"{base_url.rstrip('/')}/v1beta/models/{model}:generateContent"
     transcript_text = format_transcript(transcript)
+    duration_guidance = episode_duration_guidance(episode_duration, transcript)
 
     generation_config: dict[str, Any] = {
         "responseMimeType": "application/json",
@@ -308,7 +325,9 @@ async def call_gemini(
                     {
                         "text": (
                             "Classify only the following transcript. "
-                            "All returned timestamps must be within these transcript ranges.\n\n"
+                            "Segment starts, intros, and ads must stay within these "
+                            "transcript ranges.\n\n"
+                            f"{duration_guidance}\n\n"
                             f"{transcript_text}"
                         )
                     }
@@ -350,6 +369,32 @@ def format_transcript(transcript: list[TranscriptSegment]) -> str:
     )
 
 
+def valid_episode_endpoint(
+    episode_duration: float | None,
+    transcript: list[TranscriptSegment],
+) -> float | None:
+    """Return a usable physical endpoint that does not precede the transcript."""
+    if episode_duration is None or not math.isfinite(episode_duration) or episode_duration <= 0:
+        return None
+    if transcript and episode_duration < max(segment.end_seconds for segment in transcript):
+        return None
+    return episode_duration
+
+
+def episode_duration_guidance(
+    episode_duration: float | None,
+    transcript: list[TranscriptSegment],
+) -> str:
+    endpoint = valid_episode_endpoint(episode_duration, transcript)
+    if endpoint is None:
+        return "The complete episode duration is unknown; use the final transcript timestamp as the endpoint."
+    return (
+        f"The complete episode ends at {endpoint:.2f} seconds. "
+        "Deliberately inspect the final portion for closing material. If an outro is detected, "
+        f"set its endSeconds to the audio endpoint, {endpoint:.2f}."
+    )
+
+
 def strip_json_fence(text: str) -> str:
     stripped = text.strip()
     if stripped.startswith("```"):
@@ -361,11 +406,13 @@ def strip_json_fence(text: str) -> str:
 def sanitize_segments(
     segments: list[SegmentResponse],
     transcript: list[TranscriptSegment],
+    episode_duration: float | None = None,
 ) -> list[SegmentResponse]:
     if not transcript:
         return []
     min_start = max(0.0, min(segment.start_seconds for segment in transcript))
-    max_end = max(segment.end_seconds for segment in transcript)
+    transcript_end = max(segment.end_seconds for segment in transcript)
+    episode_endpoint = valid_episode_endpoint(episode_duration, transcript)
 
     cleaned: list[SegmentResponse] = []
     for segment in segments:
@@ -373,8 +420,11 @@ def sanitize_segments(
             continue
         if not math.isfinite(segment.startSeconds) or not math.isfinite(segment.endSeconds):
             continue
-        start = min(max(segment.startSeconds, min_start), max_end)
-        end = min(max(segment.endSeconds, min_start), max_end)
+        start = min(max(segment.startSeconds, min_start), transcript_end)
+        if segment.kind == "outro" and episode_endpoint is not None:
+            end = episode_endpoint
+        else:
+            end = min(max(segment.endSeconds, min_start), transcript_end)
         if end <= start:
             continue
         cleaned.append(

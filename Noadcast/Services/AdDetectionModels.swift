@@ -8,9 +8,22 @@ nonisolated struct DetectedAd: Sendable {
     var duration: Double { endSeconds - startSeconds }
 
     func sanitized(episodeDuration: Double?) -> DetectedAd? {
+        // Transcripts often stop at the final spoken word and omit trailing
+        // music/silence/postroll audio. Automatic outros intentionally span
+        // through the known physical endpoint; other kinds retain the model's
+        // own end timestamp and are only clamped when out of bounds.
+        let normalizedEnd: Double
+        if kind == .outro,
+           let episodeDuration,
+           episodeDuration.isFinite,
+           episodeDuration > 0 {
+            normalizedEnd = episodeDuration
+        } else {
+            normalizedEnd = endSeconds
+        }
         guard let range = AdTimestampSanitizer.sanitizedRange(
             startSeconds: startSeconds,
-            endSeconds: endSeconds,
+            endSeconds: normalizedEnd,
             episodeDuration: episodeDuration
         ) else {
             return nil
@@ -52,6 +65,12 @@ nonisolated enum AdTimestampSanitizer {
         guard end > start else { return nil }
         return (start, end)
     }
+}
+
+nonisolated struct TimestampedTranscriptSegment: Sendable {
+    let startSeconds: Double
+    let endSeconds: Double
+    let text: String
 }
 
 /// Token usage reported by the provider for one audio-analysis call.

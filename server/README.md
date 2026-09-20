@@ -64,6 +64,9 @@ API
 - `mime_type`: original audio MIME type
 - `thinking_level`: optional Gemini thinking level
 - `google_api_key`: optional key; overrides `GEMINI_API_KEY`
+- `episode_duration`: optional complete audio duration in seconds; lets the
+  classifier and sanitizer extend a detected outro through trailing music or
+  postroll audio beyond the final transcribed word
 
 The response matches the app contract:
 

@@ -10,19 +10,24 @@ nonisolated struct CloudAdDetectionResult: Sendable {
 }
 
 /// Per-stage signal the pipeline subscribes to so it can flip
-/// `Episode.processingState` and surface upload byte counts in the UI.
+/// `Episode.processingState` and surface backend-specific progress in the UI.
 nonisolated enum CloudAdDetectionStage: Sendable {
     /// Bytes have started moving. `totalBytes` is the request body size as
     /// reported by `URLSession` during the Gemini Files upload.
-    case uploading(bytesSent: Int64, totalBytes: Int64)
+    case uploading(bytesSent: Int64, totalBytes: Int64, status: String)
+    /// Local or remote transcription is in progress. Transcript-capable
+    /// backends can provide audio seconds so the UI can show a determinate
+    /// progress bar; server backends may leave them `nil`.
+    case transcribing(status: String, currentSeconds: Double?, totalSeconds: Double?)
     /// Upload finished; we're now waiting on the LLM to produce the
     /// structured response.
-    case analyzing
+    case analyzing(String)
 }
 
 enum CloudAdDetectionError: LocalizedError {
     case providerUnsupported(String)
     case missingAPIKey(String)
+    case unsupportedAudioFormat(String)
     case invalidServerURL(String)
     case downsampleFailed(Error)
     case uploadFailed(Error)
@@ -35,6 +40,8 @@ enum CloudAdDetectionError: LocalizedError {
             "\(provider) doesn't support file-based analysis. Pick a different Gemini model in Settings → Detection model."
         case .missingAPIKey(let provider):
             "\(provider) API key missing — add one in Settings → Detection model."
+        case .unsupportedAudioFormat(let format):
+            "OpenRouter can't accept this episode's audio format (\(format)). Enable upload downsampling or use Direct Gemini upload."
         case .invalidServerURL(let value):
             "Invalid ad-detection server URL: \(value)"
         case .downsampleFailed(let err):
@@ -88,6 +95,11 @@ nonisolated final class CloudAdDetectionService: NSObject, @unchecked Sendable {
     private struct MultipartBody {
         let fileURL: URL
         let boundary: String
+        let byteCount: Int64
+    }
+
+    private struct OpenRouterJSONBody {
+        let fileURL: URL
         let byteCount: Int64
     }
 
@@ -221,9 +233,11 @@ nonisolated final class CloudAdDetectionService: NSObject, @unchecked Sendable {
     - "outro": one contiguous segment at the very END of the episode \
     covering closing music, credits, next-episode teasers, postroll ads, \
     and farewells. At most one per episode. Spans from where the \
-    substantive content finishes through to the end of the audio. Intros \
-    and outros may include ads — they're still a single intro/outro \
-    segment, not separate entries.
+    substantive content finishes through the physical end of the audio file. \
+    Fold every farewell, credit, closing theme, next-episode teaser, and \
+    postroll ad in that final tail into this single outro rather than returning \
+    separate entries. If the user supplies the complete episode duration, an \
+    outro's `endSeconds` must equal that endpoint.
 
     - "ad": a mid-episode advertisement, sponsored message, host-read ad, \
     promo code, paid endorsement, or cross-promotion of another podcast \
@@ -231,16 +245,103 @@ nonisolated final class CloudAdDetectionService: NSObject, @unchecked Sendable {
     listener mail, the host's own products discussed editorially, and \
     interview segments are NOT ads.
 
+    Before returning, deliberately inspect the final portion of the episode \
+    and make an explicit outro decision. Podcasts commonly end with a \
+    farewell, credits, closing music, or a postroll ad. Return no outro only \
+    when substantive episode content genuinely continues to the physical \
+    endpoint and there is no safe-to-skip final tail.
+
     Use only timestamps that match the audio. Be conservative — flag segments \
     only when you're confident. Return an empty `segments` array if \
     nothing should be skipped. Do not include any fields other than `segments`.
     """
 
-    /// Top-level entry point. Always uploads the audio through Gemini's
-    /// resumable Files API, then references the resulting file URI in the
-    /// follow-up `generateContent` call. `onStage` fires with
-    /// `.uploading(sent, total)` continuously as bytes go up, then once
-    /// with `.analyzing` while we wait on the LLM.
+    nonisolated static let transcriptSegmentsPrompt: String = """
+    You are analyzing a timestamped podcast transcript. Return a single JSON \
+    object with one field, `segments`, containing every contiguous portion \
+    of the episode the listener would want to skip.
+
+    Each segment has a `kind`:
+
+    - "intro": one contiguous segment near the BEGINNING of the episode \
+    covering theme music, branding, and any preroll ads. At most one per episode. \
+    Spans from the start through where substantive content begins. Do not \
+    include host banter, guest introductions, or setup for the main topic.
+
+    - "ad": a mid-episode advertisement, sponsored message, host-read ad, \
+    promo code, paid endorsement, or cross-promotion of another podcast \
+    that appears BETWEEN the intro and outro.
+
+    - "outro": one contiguous segment at the very END of the episode \
+    covering closing music, credits, next-episode teasers, postroll ads, \
+    and farewells. At most one per episode. Fold all of those elements in the \
+    final tail into this single outro. Speech transcription may omit trailing \
+    music, silence, or low-confidence postroll audio: ground `startSeconds` in \
+    the transcript, but when the user supplies the physical episode endpoint, \
+    set the detected outro's `endSeconds` to that endpoint.
+
+    Before returning, deliberately inspect the transcript's final portion and \
+    make an explicit outro decision. Podcasts commonly have a skippable final \
+    tail. Return no outro only when substantive content genuinely continues \
+    through the endpoint and there is no farewell, credit, closing theme, \
+    teaser, or postroll ad to skip.
+
+    Segment starts and all non-outro timestamps must be grounded in the \
+    transcript. Be conservative about intros and mid-episode ads. Return an \
+    empty `segments` array if nothing should be skipped. Do not include any \
+    fields other than `segments`.
+    """
+
+    nonisolated static func durationPromptContext(_ episodeDuration: Double?) -> String {
+        guard let duration = validEpisodeDuration(episodeDuration) else { return "" }
+        let endpoint = String(
+            format: "%.2f",
+            locale: Locale(identifier: "en_US_POSIX"),
+            duration
+        )
+        return """
+        The complete episode duration is \(endpoint) seconds. Treat \(endpoint) \
+        seconds as the physical audio endpoint and deliberately inspect the \
+        final portion. If an outro exists, its endSeconds must be \(endpoint), \
+        including any trailing music, silence, or postroll audio.
+        """
+    }
+
+    nonisolated static func validEpisodeDuration(_ episodeDuration: Double?) -> Double? {
+        guard let episodeDuration,
+              episodeDuration.isFinite,
+              episodeDuration > 0 else { return nil }
+        return episodeDuration
+    }
+
+    nonisolated static func transcriptEndpointGuidance(
+        episodeDuration: Double?,
+        transcriptEnd: Double?
+    ) -> String {
+        let validTranscriptEnd = transcriptEnd.flatMap { value -> Double? in
+            guard value.isFinite, value > 0 else { return nil }
+            return value
+        }
+        if let duration = validEpisodeDuration(episodeDuration),
+           validTranscriptEnd == nil || duration >= validTranscriptEnd! {
+            return """
+            \(durationPromptContext(duration))
+            A detected outro may end at that supplied physical endpoint because \
+            transcription can omit the trailing non-speech tail.
+            """
+        }
+        return """
+        The physical episode endpoint is unavailable. Keep every returned \
+        timestamp within the transcript ranges and use the final transcript \
+        timestamp as a detected outro's endSeconds.
+        """
+    }
+
+    /// Top-level entry point. Direct Gemini uploads stream audio through
+    /// Files API; transcript backends emit transcribe/analyze stages and
+    /// only send timestamped text to Gemini. `onStage` carries enough
+    /// backend-specific text for the downloads row to describe the current
+    /// action.
     ///
     /// `episodeGUID`, when supplied, is set as each task's
     /// `taskDescription` so that `cancelTasks(forEpisodeGUID:)` can find
@@ -252,6 +353,8 @@ nonisolated final class CloudAdDetectionService: NSObject, @unchecked Sendable {
         provider: AdDetectionProvider,
         googleAPIKey: String?,
         mimeType: String,
+        openRouterAPIKey: String? = nil,
+        episodeDuration: Double? = nil,
         thinkingLevel: AdDetectionThinkingLevel = .automatic,
         downsampleBeforeUpload: Bool = false,
         serverHost: String = "",
@@ -266,6 +369,19 @@ nonisolated final class CloudAdDetectionService: NSObject, @unchecked Sendable {
                 provider: provider,
                 googleAPIKey: googleAPIKey,
                 mimeType: mimeType,
+                episodeDuration: episodeDuration,
+                thinkingLevel: thinkingLevel,
+                downsampleBeforeUpload: downsampleBeforeUpload,
+                episodeGUID: episodeGUID,
+                onStage: onStage
+            )
+        case .openRouter:
+            return try await analyzeWithOpenRouter(
+                fileURL: fileURL,
+                provider: provider,
+                openRouterAPIKey: openRouterAPIKey,
+                mimeType: mimeType,
+                episodeDuration: episodeDuration,
                 thinkingLevel: thinkingLevel,
                 downsampleBeforeUpload: downsampleBeforeUpload,
                 episodeGUID: episodeGUID,
@@ -277,9 +393,20 @@ nonisolated final class CloudAdDetectionService: NSObject, @unchecked Sendable {
                 provider: provider,
                 googleAPIKey: googleAPIKey,
                 mimeType: mimeType,
+                episodeDuration: episodeDuration,
                 thinkingLevel: thinkingLevel,
                 serverHost: serverHost,
                 serverPort: serverPort,
+                episodeGUID: episodeGUID,
+                onStage: onStage
+            )
+        case .appleSpeech:
+            return try await analyzeWithAppleSpeech(
+                fileURL: fileURL,
+                provider: provider,
+                googleAPIKey: googleAPIKey,
+                episodeDuration: episodeDuration,
+                thinkingLevel: thinkingLevel,
                 episodeGUID: episodeGUID,
                 onStage: onStage
             )
@@ -291,6 +418,7 @@ nonisolated final class CloudAdDetectionService: NSObject, @unchecked Sendable {
         provider: AdDetectionProvider,
         googleAPIKey: String?,
         mimeType: String,
+        episodeDuration: Double?,
         thinkingLevel: AdDetectionThinkingLevel,
         downsampleBeforeUpload: Bool,
         episodeGUID: String?,
@@ -324,7 +452,7 @@ nonisolated final class CloudAdDetectionService: NSObject, @unchecked Sendable {
             taskDescription: episodeGUID,
             onStage: onStage
         )
-        onStage?(.analyzing)
+        onStage?(.analyzing("Asking Gemini…"))
         let ads: [DetectedAd]
         let usage: TokenUsage?
         do {
@@ -332,6 +460,7 @@ nonisolated final class CloudAdDetectionService: NSObject, @unchecked Sendable {
                 model: provider.apiModel,
                 fileURI: uploadedFile.uri,
                 mimeType: uploadAudio.mimeType,
+                episodeDuration: episodeDuration,
                 apiKey: key,
                 thinkingLevel: provider.supportsThinkingLevel ? thinkingLevel : .automatic,
                 taskDescription: episodeGUID
@@ -346,11 +475,150 @@ nonisolated final class CloudAdDetectionService: NSObject, @unchecked Sendable {
         return CloudAdDetectionResult(ads: ads, usage: usage)
     }
 
+    private func analyzeWithOpenRouter(
+        fileURL: URL,
+        provider: AdDetectionProvider,
+        openRouterAPIKey: String?,
+        mimeType: String,
+        episodeDuration: Double?,
+        thinkingLevel: AdDetectionThinkingLevel,
+        downsampleBeforeUpload: Bool,
+        episodeGUID: String?,
+        onStage: (@Sendable (CloudAdDetectionStage) -> Void)?
+    ) async throws -> CloudAdDetectionResult {
+        guard provider.supportsAudioFileDetection else {
+            throw CloudAdDetectionError.providerUnsupported(provider.label)
+        }
+        let key = openRouterAPIKey?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard !key.isEmpty else {
+            throw CloudAdDetectionError.missingAPIKey("OpenRouter")
+        }
+
+        let uploadAudio = try await prepareUploadAudio(
+            fileURL: fileURL,
+            mimeType: mimeType,
+            downsampleBeforeUpload: downsampleBeforeUpload
+        )
+        defer {
+            if let cleanupURL = uploadAudio.cleanupURL {
+                try? FileManager.default.removeItem(at: cleanupURL)
+            }
+        }
+
+        guard let audioFormat = Self.openRouterAudioFormat(
+            mimeType: uploadAudio.mimeType,
+            fileExtension: uploadAudio.fileURL.pathExtension
+        ) else {
+            throw CloudAdDetectionError.unsupportedAudioFormat(uploadAudio.mimeType)
+        }
+
+        let openRouterModel = provider.openRouterAPIModel
+        let effectiveThinkingLevel = provider.supportsThinkingLevel
+            ? thinkingLevel
+            : .automatic
+        let bodyTask = Task.detached(priority: .utility) {
+            try Self.writeOpenRouterJSONBody(
+                audioFileURL: uploadAudio.fileURL,
+                audioFormat: audioFormat,
+                model: openRouterModel,
+                episodeDuration: episodeDuration,
+                thinkingLevel: effectiveThinkingLevel
+            )
+        }
+        let body = try await withTaskCancellationHandler {
+            try await bodyTask.value
+        } onCancel: {
+            bodyTask.cancel()
+        }
+        // The upload helper also removes this file when its delegate callback
+        // settles. This defer covers failures before a task is registered.
+        defer { try? FileManager.default.removeItem(at: body.fileURL) }
+
+        guard let url = URL(string: "https://openrouter.ai/api/v1/chat/completions") else {
+            throw CloudAdDetectionError.uploadFailed(URLError(.badURL))
+        }
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("Bearer \(key)", forHTTPHeaderField: "Authorization")
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.setValue(String(body.byteCount), forHTTPHeaderField: "Content-Length")
+        request.setValue("Noadcast", forHTTPHeaderField: "X-Title")
+
+        let sourceBytes = (try? uploadAudio.fileURL.resourceValues(forKeys: [.fileSizeKey]).fileSize)
+            .map(Int64.init) ?? 0
+        Log.adDetection.info("Audio analysis begin — provider=\(provider.label, privacy: .public) model=\(provider.openRouterAPIModel, privacy: .public) file=\(uploadAudio.fileURL.lastPathComponent, privacy: .public) audio_bytes=\(sourceBytes) request_bytes=\(body.byteCount) downsampled=\(downsampleBeforeUpload) path=openrouter")
+        onStage?(.uploading(
+            bytesSent: 0,
+            totalBytes: body.byteCount,
+            status: "Uploading audio to OpenRouter…"
+        ))
+
+        let (data, response) = try await upload(
+            request: request,
+            fromFile: body.fileURL,
+            tempBodyURL: body.fileURL,
+            taskDescription: episodeGUID,
+            onProgress: { sent, total in
+                if total > 0, sent >= total {
+                    onStage?(.analyzing("Asking OpenRouter…"))
+                } else {
+                    onStage?(.uploading(
+                        bytesSent: sent,
+                        totalBytes: total,
+                        status: "Uploading audio to OpenRouter…"
+                    ))
+                }
+            }
+        )
+
+        guard (200..<300).contains(response.statusCode) else {
+            let responseBody = String(data: data, encoding: .utf8) ?? ""
+            Log.adDetection.error("OpenRouter call HTTP \(response.statusCode): \(responseBody, privacy: .public)")
+            throw Self.openRouterHTTPError(statusCode: response.statusCode, body: responseBody)
+        }
+
+        let decoded: OpenRouterResponse
+        do {
+            decoded = try decoder.decode(OpenRouterResponse.self, from: data)
+        } catch {
+            throw CloudAdDetectionError.parseFailure(error.localizedDescription)
+        }
+        guard let text = decoded.choices.first?.message.content, !text.isEmpty else {
+            throw CloudAdDetectionError.parseFailure("Missing OpenRouter response text")
+        }
+
+        let ads: [DetectedAd]
+        do {
+            let parsed = try JSONDecoder().decode(
+                SegmentsOnlyResponse.self,
+                from: Data(Self.strippingJSONFence(from: text).utf8)
+            )
+            ads = Self.detectedAds(from: parsed.segments)
+        } catch {
+            throw CloudAdDetectionError.parseFailure(error.localizedDescription)
+        }
+
+        let usage = decoded.usage.map { raw in
+            let thoughtTokens = raw.completionTokensDetails?.reasoningTokens ?? 0
+            return TokenUsage(
+                inputTokens: raw.promptTokens ?? 0,
+                thoughtTokens: thoughtTokens,
+                outputTokens: max(0, (raw.completionTokens ?? 0) - thoughtTokens)
+            )
+        }
+        Log.adDetection.info("Audio analysis complete — openrouter ads=\(ads.count) input_tokens=\(usage?.inputTokens ?? 0) thought_tokens=\(usage?.thoughtTokens ?? 0) output_tokens=\(usage?.outputTokens ?? 0)")
+        return CloudAdDetectionResult(
+            ads: ads.sorted { $0.startSeconds < $1.startSeconds },
+            usage: usage
+        )
+    }
+
     private func analyzeWithWhisperServer(
         fileURL: URL,
         provider: AdDetectionProvider,
         googleAPIKey: String?,
         mimeType: String,
+        episodeDuration: Double?,
         thinkingLevel: AdDetectionThinkingLevel,
         serverHost: String,
         serverPort: Int,
@@ -365,6 +633,13 @@ nonisolated final class CloudAdDetectionService: NSObject, @unchecked Sendable {
             "model": provider.apiModel,
             "mime_type": mimeType
         ]
+        if let duration = Self.validEpisodeDuration(episodeDuration) {
+            fields["episode_duration"] = String(
+                format: "%.2f",
+                locale: Locale(identifier: "en_US_POSIX"),
+                duration
+            )
+        }
         if provider.supportsThinkingLevel, let level = thinkingLevel.apiValue {
             fields["thinking_level"] = level
         }
@@ -390,9 +665,17 @@ nonisolated final class CloudAdDetectionService: NSObject, @unchecked Sendable {
             tempBodyURL: body.fileURL,
             taskDescription: episodeGUID,
             onProgress: { sent, total in
-                onStage?(.uploading(bytesSent: sent, totalBytes: total))
+                onStage?(.uploading(
+                    bytesSent: sent,
+                    totalBytes: total,
+                    status: "Uploading audio to server…"
+                ))
                 if total > 0, sent >= total {
-                    onStage?(.analyzing)
+                    onStage?(.transcribing(
+                        status: "Server transcribing and analyzing…",
+                        currentSeconds: nil,
+                        totalSeconds: nil
+                    ))
                 }
             }
         )
@@ -412,6 +695,45 @@ nonisolated final class CloudAdDetectionService: NSObject, @unchecked Sendable {
         let ads = Self.detectedAds(from: decoded.segments)
         Log.adDetection.info("Audio analysis complete — server ads=\(ads.count) input_tokens=\(decoded.usage?.inputTokens ?? 0) thought_tokens=\(decoded.usage?.thoughtTokens ?? 0) output_tokens=\(decoded.usage?.outputTokens ?? 0)")
         return CloudAdDetectionResult(ads: ads, usage: decoded.usage)
+    }
+
+    private func analyzeWithAppleSpeech(
+        fileURL: URL,
+        provider: AdDetectionProvider,
+        googleAPIKey: String?,
+        episodeDuration: Double?,
+        thinkingLevel: AdDetectionThinkingLevel,
+        episodeGUID: String?,
+        onStage: (@Sendable (CloudAdDetectionStage) -> Void)?
+    ) async throws -> CloudAdDetectionResult {
+        guard let key = googleAPIKey, !key.isEmpty else {
+            throw CloudAdDetectionError.missingAPIKey(provider.label)
+        }
+
+        onStage?(.transcribing(
+            status: "Preparing Apple local transcription…",
+            currentSeconds: nil,
+            totalSeconds: nil
+        ))
+        Log.adDetection.info("Audio analysis begin — provider=\(provider.label, privacy: .public) file=\(fileURL.lastPathComponent, privacy: .public) path=apple-local-transcription")
+        let transcript = try await AppleSpeechTranscriptionService.shared.transcribe(fileURL: fileURL) { status, currentSeconds, totalSeconds in
+            onStage?(.transcribing(
+                status: status,
+                currentSeconds: currentSeconds,
+                totalSeconds: totalSeconds
+            ))
+        }
+        onStage?(.analyzing("Asking Gemini…"))
+        let (ads, usage) = try await callGeminiTranscript(
+            model: provider.apiModel,
+            transcript: transcript,
+            episodeDuration: episodeDuration,
+            apiKey: key,
+            thinkingLevel: provider.supportsThinkingLevel ? thinkingLevel : .automatic,
+            taskDescription: episodeGUID
+        )
+        Log.adDetection.info("Audio analysis complete — apple-local-transcription ads=\(ads.count) input_tokens=\(usage?.inputTokens ?? 0) thought_tokens=\(usage?.thoughtTokens ?? 0) output_tokens=\(usage?.outputTokens ?? 0)")
+        return CloudAdDetectionResult(ads: ads, usage: usage)
     }
 
     /// Cancels any background tasks tagged with `taskDescription == guid`.
@@ -466,6 +788,208 @@ nonisolated final class CloudAdDetectionService: NSObject, @unchecked Sendable {
             .appendingPathComponent("noadcast-cloud-\(UUID().uuidString).\(ext)")
         try data.write(to: url, options: [.atomic])
         return url
+    }
+
+    nonisolated private static func writeOpenRouterJSONBody(
+        audioFileURL: URL,
+        audioFormat: String,
+        model: String,
+        episodeDuration: Double?,
+        thinkingLevel: AdDetectionThinkingLevel
+    ) throws -> OpenRouterJSONBody {
+        let placeholder = "NOADCAST_AUDIO_DATA_\(UUID().uuidString)"
+        let durationContext = Self.durationPromptContext(episodeDuration)
+        let userInstruction = ([
+            "Analyze the complete attached podcast audio and produce the JSON object as specified.",
+            durationContext
+        ])
+        .filter { !$0.isEmpty }
+        .joined(separator: "\n\n")
+
+        var body: [String: Any] = [
+            "model": model,
+            "messages": [
+                [
+                    "role": "system",
+                    "content": Self.segmentsOnlyPrompt
+                ],
+                [
+                    "role": "user",
+                    "content": [
+                        ["type": "text", "text": userInstruction],
+                        [
+                            "type": "input_audio",
+                            "input_audio": [
+                                "data": placeholder,
+                                "format": audioFormat
+                            ]
+                        ]
+                    ]
+                ]
+            ],
+            "response_format": [
+                "type": "json_schema",
+                "json_schema": [
+                    "name": "podcast_skip_segments",
+                    "strict": true,
+                    "schema": Self.openRouterResponseSchema
+                ]
+            ]
+        ]
+        if let effort = thinkingLevel.apiValue {
+            body["reasoning"] = ["effort": effort]
+        }
+
+        let serialized = try JSONSerialization.data(withJSONObject: body)
+        let placeholderData = Data(placeholder.utf8)
+        guard let placeholderRange = serialized.range(of: placeholderData) else {
+            throw CloudAdDetectionError.parseFailure("Couldn't construct OpenRouter audio request")
+        }
+
+        let bodyURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("noadcast-openrouter-\(UUID().uuidString).json")
+        guard FileManager.default.createFile(atPath: bodyURL.path, contents: nil) else {
+            throw CocoaError(.fileWriteUnknown)
+        }
+
+        let output: FileHandle
+        do {
+            output = try FileHandle(forWritingTo: bodyURL)
+        } catch {
+            try? FileManager.default.removeItem(at: bodyURL)
+            throw error
+        }
+        var didCloseOutput = false
+        do {
+            try output.write(contentsOf: Data(serialized[..<placeholderRange.lowerBound]))
+            try Self.writeBase64EncodedContents(of: audioFileURL, to: output)
+            try output.write(contentsOf: Data(serialized[placeholderRange.upperBound...]))
+            try output.close()
+            didCloseOutput = true
+        } catch {
+            if !didCloseOutput { try? output.close() }
+            try? FileManager.default.removeItem(at: bodyURL)
+            throw error
+        }
+
+        let fileSize: Int
+        do {
+            guard let size = try bodyURL.resourceValues(forKeys: [.fileSizeKey]).fileSize else {
+                throw CocoaError(.fileReadUnknown)
+            }
+            fileSize = size
+        } catch {
+            try? FileManager.default.removeItem(at: bodyURL)
+            throw error
+        }
+        let byteCount = Int64(fileSize)
+        return OpenRouterJSONBody(fileURL: bodyURL, byteCount: byteCount)
+    }
+
+    /// Streams base64 without loading a podcast-sized file into memory. A
+    /// short read is not necessarily EOF, so carry its final 0–2 bytes into
+    /// the next read and emit padding only once at the true end of the file.
+    nonisolated static func writeBase64EncodedContents(
+        of sourceURL: URL,
+        to output: FileHandle,
+        chunkSize: Int = 768 * 1024
+    ) throws {
+        precondition(chunkSize > 0)
+        let input = try FileHandle(forReadingFrom: sourceURL)
+        defer { try? input.close() }
+
+        var remainder = Data()
+        while true {
+            try Task.checkCancellation()
+            let chunk = try input.read(upToCount: chunkSize) ?? Data()
+            guard !chunk.isEmpty else { break }
+
+            var pending = Data()
+            pending.reserveCapacity(remainder.count + chunk.count)
+            pending.append(remainder)
+            pending.append(chunk)
+
+            let encodableCount = pending.count - (pending.count % 3)
+            if encodableCount > 0 {
+                let encoded = Data(pending.prefix(encodableCount)).base64EncodedData()
+                try output.write(contentsOf: encoded)
+            }
+            remainder = Data(pending.dropFirst(encodableCount))
+        }
+        if !remainder.isEmpty {
+            try output.write(contentsOf: remainder.base64EncodedData())
+        }
+    }
+
+    nonisolated static func openRouterAudioFormat(
+        mimeType: String,
+        fileExtension: String
+    ) -> String? {
+        let normalizedMime = mimeType
+            .split(separator: ";", maxSplits: 1)
+            .first?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased() ?? ""
+        switch normalizedMime {
+        case "audio/mpeg", "audio/mp3": return "mp3"
+        case "audio/wav", "audio/x-wav", "audio/wave": return "wav"
+        case "audio/mp4", "audio/m4a", "audio/x-m4a": return "m4a"
+        case "audio/aac": return "aac"
+        case "audio/aiff", "audio/x-aiff": return "aiff"
+        case "audio/flac", "audio/x-flac": return "flac"
+        case "audio/ogg": return "ogg"
+        case "audio/webm": return "webm"
+        default: break
+        }
+
+        switch fileExtension.lowercased() {
+        case "mp3": return "mp3"
+        case "wav": return "wav"
+        case "m4a", "mp4": return "m4a"
+        case "aac": return "aac"
+        case "aif", "aiff": return "aiff"
+        case "flac": return "flac"
+        case "ogg", "oga": return "ogg"
+        case "webm": return "webm"
+        default: return nil
+        }
+    }
+
+    nonisolated private static func openRouterHTTPError(
+        statusCode: Int,
+        body: String
+    ) -> Error {
+        let detail = String(body.prefix(500))
+        let description: String
+        switch statusCode {
+        case 401:
+            description = "OpenRouter rejected the API key. Check it in Settings → Detection model."
+        case 413:
+            description = "The OpenRouter audio request is too large. Enable upload downsampling and try again."
+        case 429:
+            description = "OpenRouter is rate-limiting requests. Try this episode again later."
+        case 500...599:
+            description = "OpenRouter is temporarily unavailable (HTTP \(statusCode)). \(detail)"
+        default:
+            description = "OpenRouter returned HTTP \(statusCode): \(detail)"
+        }
+        return NSError(
+            domain: "OpenRouter",
+            code: statusCode,
+            userInfo: [NSLocalizedDescriptionKey: description]
+        )
+    }
+
+    nonisolated private static func strippingJSONFence(from text: String) -> String {
+        var value = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard value.hasPrefix("```") else { return value }
+        if let firstNewline = value.firstIndex(of: "\n") {
+            value = String(value[value.index(after: firstNewline)...])
+        }
+        if value.hasSuffix("```") {
+            value.removeLast(3)
+        }
+        return value.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     static func serverAnalyzeURL(host: String, port: Int) throws -> URL {
@@ -746,7 +1270,11 @@ nonisolated final class CloudAdDetectionService: NSObject, @unchecked Sendable {
             fromFile: fileURL,
             taskDescription: taskDescription,
             onProgress: { sent, total in
-                onStage?(.uploading(bytesSent: sent, totalBytes: total))
+                onStage?(.uploading(
+                    bytesSent: sent,
+                    totalBytes: total,
+                    status: "Uploading audio to Gemini…"
+                ))
             }
         )
         guard (200..<300).contains(uploadResponse.statusCode) else {
@@ -811,13 +1339,20 @@ nonisolated final class CloudAdDetectionService: NSObject, @unchecked Sendable {
         model: String,
         fileURI: String,
         mimeType: String,
+        episodeDuration: Double?,
         apiKey: String,
         thinkingLevel: AdDetectionThinkingLevel,
         taskDescription: String?
     ) async throws -> ([DetectedAd], TokenUsage?) {
+        let instruction = ([
+            "Produce the JSON object as specified.",
+            Self.durationPromptContext(episodeDuration)
+        ])
+        .filter { !$0.isEmpty }
+        .joined(separator: "\n\n")
         let parts: [[String: Any]] = [
             ["file_data": ["mime_type": mimeType, "file_uri": fileURI]],
-            ["text": "Produce the JSON object as specified."]
+            ["text": instruction]
         ]
         // Body is tiny (just the URI reference), so we don't bother
         // reporting upload byte progress here. The outer pipeline has
@@ -831,6 +1366,42 @@ nonisolated final class CloudAdDetectionService: NSObject, @unchecked Sendable {
         )
     }
 
+    private func callGeminiTranscript(
+        model: String,
+        transcript: [TimestampedTranscriptSegment],
+        episodeDuration: Double?,
+        apiKey: String,
+        thinkingLevel: AdDetectionThinkingLevel,
+        taskDescription: String?
+    ) async throws -> ([DetectedAd], TokenUsage?) {
+        let transcriptText = Self.formattedTranscript(transcript)
+        let endpointGuidance = Self.transcriptEndpointGuidance(
+            episodeDuration: episodeDuration,
+            transcriptEnd: transcript.map(\.endSeconds).max()
+        )
+        let parts: [[String: Any]] = [
+            [
+                "text": """
+                Classify only the following timestamped transcript. Segment \
+                starts and all non-outro timestamps must stay within these \
+                transcript ranges.
+
+                \(endpointGuidance)
+
+                \(transcriptText)
+                """
+            ]
+        ]
+        return try await postCombined(
+            model: model,
+            parts: parts,
+            apiKey: apiKey,
+            thinkingLevel: thinkingLevel,
+            taskDescription: taskDescription,
+            systemPrompt: Self.transcriptSegmentsPrompt
+        )
+    }
+
     // MARK: - Shared request body + parsing
 
     /// Posts a `generateContent` request whose user content is `parts`
@@ -840,7 +1411,8 @@ nonisolated final class CloudAdDetectionService: NSObject, @unchecked Sendable {
         parts: [[String: Any]],
         apiKey: String,
         thinkingLevel: AdDetectionThinkingLevel,
-        taskDescription: String?
+        taskDescription: String?,
+        systemPrompt: String? = nil
     ) async throws -> ([DetectedAd], TokenUsage?) {
         guard let url = URL(string: "https://generativelanguage.googleapis.com/v1beta/models/\(model):generateContent?key=\(apiKey)") else {
             throw CloudAdDetectionError.uploadFailed(URLError(.badURL))
@@ -858,7 +1430,7 @@ nonisolated final class CloudAdDetectionService: NSObject, @unchecked Sendable {
         }
 
         let body: [String: Any] = [
-            "systemInstruction": ["parts": [["text": Self.segmentsOnlyPrompt]]],
+            "systemInstruction": ["parts": [["text": systemPrompt ?? Self.segmentsOnlyPrompt]]],
             "contents": [
                 ["role": "user", "parts": parts]
             ],
@@ -902,6 +1474,21 @@ nonisolated final class CloudAdDetectionService: NSObject, @unchecked Sendable {
         return (ads.sorted { $0.startSeconds < $1.startSeconds }, usage)
     }
 
+    private static func formattedTranscript(_ transcript: [TimestampedTranscriptSegment]) -> String {
+        transcript.map { segment in
+            let text = segment.text
+                .replacingOccurrences(of: "\n", with: " ")
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            return String(
+                format: "[%.2f - %.2f] %@",
+                segment.startSeconds,
+                segment.endSeconds,
+                text
+            )
+        }
+        .joined(separator: "\n")
+    }
+
     private static let responseSchema: [String: Any] = {
         let segmentSchema: [String: Any] = [
             "type": "OBJECT",
@@ -925,6 +1512,34 @@ nonisolated final class CloudAdDetectionService: NSObject, @unchecked Sendable {
                 ]
             ],
             "required": ["segments"]
+        ]
+    }()
+
+    private static let openRouterResponseSchema: [String: Any] = {
+        let segmentSchema: [String: Any] = [
+            "type": "object",
+            "properties": [
+                "startSeconds": ["type": "number"],
+                "endSeconds": ["type": "number"],
+                "summary": ["type": "string"],
+                "kind": [
+                    "type": "string",
+                    "enum": ["ad", "intro", "outro"]
+                ]
+            ],
+            "required": ["startSeconds", "endSeconds", "summary", "kind"],
+            "additionalProperties": false
+        ]
+        return [
+            "type": "object",
+            "properties": [
+                "segments": [
+                    "type": "array",
+                    "items": segmentSchema
+                ]
+            ],
+            "required": ["segments"],
+            "additionalProperties": false
         ]
     }()
 
@@ -1064,5 +1679,60 @@ nonisolated private struct GeminiResponse: Decodable {
         let promptTokenCount: Int?
         let thoughtsTokenCount: Int?
         let candidatesTokenCount: Int?
+    }
+}
+
+nonisolated private struct OpenRouterResponse: Decodable {
+    let choices: [Choice]
+    let usage: Usage?
+
+    struct Choice: Decodable {
+        let message: Message
+    }
+
+    struct Message: Decodable {
+        let content: String?
+
+        private enum CodingKeys: String, CodingKey {
+            case content
+        }
+
+        private struct ContentPart: Decodable {
+            let text: String?
+        }
+
+        init(from decoder: Decoder) throws {
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            if let text = try? container.decode(String.self, forKey: .content) {
+                content = text
+                return
+            }
+            if let parts = try? container.decode([ContentPart].self, forKey: .content) {
+                let joined = parts.compactMap(\.text).joined()
+                content = joined.isEmpty ? nil : joined
+                return
+            }
+            content = nil
+        }
+    }
+
+    struct Usage: Decodable {
+        let promptTokens: Int?
+        let completionTokens: Int?
+        let completionTokensDetails: CompletionTokensDetails?
+
+        enum CodingKeys: String, CodingKey {
+            case promptTokens = "prompt_tokens"
+            case completionTokens = "completion_tokens"
+            case completionTokensDetails = "completion_tokens_details"
+        }
+    }
+
+    struct CompletionTokensDetails: Decodable {
+        let reasoningTokens: Int?
+
+        enum CodingKeys: String, CodingKey {
+            case reasoningTokens = "reasoning_tokens"
+        }
     }
 }

@@ -180,7 +180,18 @@ struct SettingsView: View {
                 }
                 .pickerStyle(.menu)
             }
-            if provider.requiresGoogleKey {
+            if backend == .openRouter {
+                SecureField(
+                    "OpenRouter API key",
+                    text: Binding(
+                        get: { s.openRouterAPIKey ?? "" },
+                        set: { s.openRouterAPIKey = $0.isEmpty ? nil : $0 }
+                    )
+                )
+                .textContentType(.password)
+                .autocorrectionDisabled()
+                .textInputAutocapitalization(.never)
+            } else {
                 SecureField(
                     "Google AI API key",
                     text: Binding(
@@ -201,7 +212,7 @@ struct SettingsView: View {
                 TextField("Port", value: $s.adDetectionServerPort, format: .number)
                     .keyboardType(.numberPad)
             }
-            if backend == .geminiFiles {
+            if backend == .geminiFiles || backend == .openRouter {
                 Toggle("Downsample audio before upload", isOn: $s.downsampleAudioBeforeUpload)
             }
             Button(role: .destructive) {
@@ -237,8 +248,12 @@ struct SettingsView: View {
         switch settings.adDetectionBackend {
         case .geminiFiles:
             "Uploads episode audio to Google AI Studio and receives back only skip segments with timestamps and summaries. Downsampling uses a temporary 32 kbps, 16 kHz mono copy."
+        case .openRouter:
+            "Sends episode audio to the selected Gemini model through OpenRouter and receives skip segments. Audio is embedded in the request; downsampling uses a temporary 32 kbps, 16 kHz mono copy to reduce its size."
         case .whisperServer:
             "Uploads episode audio to the configured server. The server transcribes with whisper.cpp, sends only the timestamped transcript to Gemini, and returns skip segments. The saved Google key is sent with the request; if it is blank, the server must provide GEMINI_API_KEY."
+        case .appleSpeech:
+            "Transcribes downloaded audio locally with Apple's on-device transcription, sends only the timestamped transcript to Gemini, and receives back skip segments."
         }
     }
 

@@ -9,6 +9,8 @@
 	</dict>
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>Noadcast connects to your configured local ad-detection server.</string>
+	<key>NSSpeechRecognitionUsageDescription</key>
+	<string>Noadcast uses on-device transcription to analyze downloaded episodes for ad detection.</string>
 	<key>UIBackgroundModes</key>
 	<array>
 		<string>audio</string>

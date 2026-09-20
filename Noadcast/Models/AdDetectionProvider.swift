@@ -2,12 +2,16 @@ import Foundation
 
 nonisolated enum AdDetectionBackend: String, Codable, CaseIterable, Sendable {
     case geminiFiles
+    case openRouter
     case whisperServer
+    case appleSpeech
 
     var label: String {
         switch self {
         case .geminiFiles: "Direct Gemini upload"
+        case .openRouter: "OpenRouter"
         case .whisperServer: "Whisper.cpp server"
+        case .appleSpeech: "Apple local transcription"
         }
     }
 }
@@ -17,6 +21,8 @@ nonisolated enum AdDetectionBackend: String, Codable, CaseIterable, Sendable {
 nonisolated enum AdDetectionProvider: String, Codable, CaseIterable, Sendable {
     case gemini3Flash
     case gemini35Flash
+    case gemini36Flash
+    case gemini37Flash
     case gemini31FlashLite
     case gemini25Flash
     case gemini25FlashLite
@@ -25,6 +31,8 @@ nonisolated enum AdDetectionProvider: String, Codable, CaseIterable, Sendable {
         switch self {
         case .gemini3Flash: "Gemini 3 Flash Preview"
         case .gemini35Flash: "Gemini 3.5 Flash"
+        case .gemini36Flash: "Gemini 3.6 Flash"
+        case .gemini37Flash: "Gemini 3.7 Flash"
         case .gemini31FlashLite: "Gemini 3.1 Flash Lite"
         case .gemini25Flash: "Gemini 2.5 Flash"
         case .gemini25FlashLite: "Gemini 2.5 Flash Lite"
@@ -36,14 +44,18 @@ nonisolated enum AdDetectionProvider: String, Codable, CaseIterable, Sendable {
         switch self {
         case .gemini3Flash: "gemini-3-flash-preview"
         case .gemini35Flash: "gemini-3.5-flash"
+        case .gemini36Flash: "gemini-3.6-flash"
+        case .gemini37Flash: "gemini-3.7-flash"
         case .gemini31FlashLite: "gemini-3.1-flash-lite"
         case .gemini25Flash: "gemini-2.5-flash"
         case .gemini25FlashLite: "gemini-2.5-flash-lite"
         }
     }
 
-    var requiresGoogleKey: Bool {
-        true
+    /// OpenRouter exposes the same Gemini lineup under provider-qualified
+    /// identifiers while the native Gemini API uses the unqualified id.
+    var openRouterAPIModel: String {
+        "google/\(apiModel)"
     }
 
     /// All currently exposed detection providers are Gemini models that can
@@ -54,7 +66,8 @@ nonisolated enum AdDetectionProvider: String, Codable, CaseIterable, Sendable {
 
     var supportsThinkingLevel: Bool {
         switch self {
-        case .gemini3Flash, .gemini35Flash, .gemini31FlashLite:
+        case .gemini3Flash, .gemini35Flash, .gemini36Flash, .gemini37Flash,
+             .gemini31FlashLite:
             true
         case .gemini25Flash, .gemini25FlashLite:
             false
@@ -71,6 +84,8 @@ nonisolated enum AdDetectionProvider: String, Codable, CaseIterable, Sendable {
         switch self {
         case .gemini3Flash: 1.00
         case .gemini35Flash: 1.50
+        case .gemini36Flash: 1.50
+        case .gemini37Flash: 1.50
         case .gemini31FlashLite: 0.50
         case .gemini25Flash: 1.00
         case .gemini25FlashLite: 0.30
@@ -82,6 +97,8 @@ nonisolated enum AdDetectionProvider: String, Codable, CaseIterable, Sendable {
         switch self {
         case .gemini3Flash: 3.00
         case .gemini35Flash: 9.00
+        case .gemini36Flash: 9.00
+        case .gemini37Flash: 9.00
         case .gemini31FlashLite: 1.50
         case .gemini25Flash: 2.50
         case .gemini25FlashLite: 0.40

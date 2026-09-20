@@ -1,4 +1,5 @@
 import Foundation
+import AVFoundation
 import SwiftData
 import Observation
 import os
@@ -43,8 +44,13 @@ final class ProcessingPipeline {
         tasks[id] = task
     }
 
-    func cancel(episodeID: PersistentIdentifier) {
+    func cancel(episodeID: PersistentIdentifier, episodeGUID: String? = nil) {
         tasks[episodeID]?.cancel()
+        if let episodeGUID {
+            Task {
+                await CloudAdDetectionService.shared.cancelTasks(forEpisodeGUID: episodeGUID)
+            }
+        }
     }
 
     func isProcessing(episodeID: PersistentIdentifier) -> Bool {
@@ -99,6 +105,7 @@ final class ProcessingPipeline {
             episode.processingCurrent = 0
             episode.processingTotal = nil
             episode.processingError = nil
+            episode.processingStatusText = nil
             try? context.save()
             process(episode: episode)
         }
@@ -133,19 +140,39 @@ final class ProcessingPipeline {
             episode.processingState = .ready
             episode.processingProgress = 1.0
             episode.processingError = nil
+            episode.processingStatusText = nil
             try? context.save()
             Log.pipeline.info("Pipeline done — episode=\"\(title, privacy: .public)\"")
         } catch is CancellationError {
+            recordCancellation(for: episode, title: title, context: context)
+        } catch {
+            if Task.isCancelled || (error as? URLError)?.code == .cancelled {
+                recordCancellation(for: episode, title: title, context: context)
+            } else {
+                episode.processingState = .failed
+                episode.processingError = error.localizedDescription
+                episode.processingStatusText = nil
+                try? context.save()
+                Log.pipeline.error("Pipeline failed — episode=\"\(title, privacy: .public)\" \(Log.describe(error), privacy: .public)")
+            }
+        }
+    }
+
+    /// Delete/reprocess flows reset an episode to `.new` before the old task
+    /// unwinds. Preserve that deliberate reset instead of racing it with a
+    /// stale `.failed` write from the cancelled task.
+    private func recordCancellation(
+        for episode: Episode,
+        title: String,
+        context: ModelContext
+    ) {
+        if episode.processingState != .new {
             episode.processingState = .failed
             episode.processingError = "Cancelled."
+            episode.processingStatusText = nil
             try? context.save()
-            Log.pipeline.notice("Pipeline cancelled — episode=\"\(title, privacy: .public)\"")
-        } catch {
-            episode.processingState = .failed
-            episode.processingError = error.localizedDescription
-            try? context.save()
-            Log.pipeline.error("Pipeline failed — episode=\"\(title, privacy: .public)\" \(Log.describe(error), privacy: .public)")
         }
+        Log.pipeline.notice("Pipeline cancelled — episode=\"\(title, privacy: .public)\"")
     }
 
     private func startNextQueuedEpisodesIfPossible() {
@@ -160,6 +187,7 @@ final class ProcessingPipeline {
         episode.processingProgress = 0
         episode.processingCurrent = 0
         episode.processingTotal = nil
+        episode.processingStatusText = "Downloading audio…"
         try? context.save()
 
         let filename = DownloadService.suggestedFilename(
@@ -189,23 +217,26 @@ final class ProcessingPipeline {
         }
     }
 
-    /// File-upload step: upload audio and ask the API to return skip
-    /// segments.
+    /// Analysis step: direct backends may upload audio, transcript backends
+    /// transcribe first, then Gemini returns skip segments.
     private func cloudAnalyzeStep(episode: Episode, context: ModelContext) async throws {
         guard let fileURL = episode.localFileURL else { return }
-        // Initial state: bytes about to go up, so the row can render the
-        // byte counter (`12 MB / 50 MB`) as soon as it appears.
-        episode.processingState = .uploading
-        episode.processingProgress = 0
-        episode.processingCurrent = 0
-        episode.processingTotal = (try? fileURL.resourceValues(forKeys: [.fileSizeKey]).fileSize)
-            .map { Double($0) }
-        try? context.save()
-
+        let analysisDuration = await Self.resolvedEpisodeDuration(
+            fileURL: fileURL,
+            fallback: episode.duration
+        )
+        if let analysisDuration,
+           episode.duration == nil || abs((episode.duration ?? 0) - analysisDuration) > 0.01 {
+            // Once downloaded, the local file is authoritative. This also
+            // handles feeds with no or stale iTunes duration metadata and
+            // dynamically inserted audio whose length differs per download.
+            episode.duration = analysisDuration
+        }
         let settings = AppSettings.current(in: context)
         let backend = settings.adDetectionBackend
         let provider = settings.adDetectionProvider
         let googleKey = settings.googleAPIKey
+        let openRouterKey = settings.openRouterAPIKey
         let thinkingLevel = settings.adDetectionThinkingLevel
         let downsampleBeforeUpload = settings.downsampleAudioBeforeUpload
         let serverHost = settings.adDetectionServerHost
@@ -214,12 +245,22 @@ final class ProcessingPipeline {
         let episodeID = episode.persistentModelID
         let container = modelContainer
 
+        setInitialAnalysisProgress(
+            episode: episode,
+            backend: backend,
+            fileURL: fileURL,
+            downsampleBeforeUpload: downsampleBeforeUpload
+        )
+        try? context.save()
+
         let result = try await CloudAdDetectionService.shared.analyzeFile(
             fileURL: fileURL,
             backend: backend,
             provider: provider,
             googleAPIKey: googleKey,
             mimeType: mimeType,
+            openRouterAPIKey: openRouterKey,
+            episodeDuration: analysisDuration,
             thinkingLevel: thinkingLevel,
             downsampleBeforeUpload: downsampleBeforeUpload,
             serverHost: serverHost,
@@ -230,25 +271,50 @@ final class ProcessingPipeline {
                     guard let container,
                           let ep = container.mainContext.model(for: episodeID) as? Episode
                     else { return }
+                    // A queue dismissal marks the episode played before
+                    // cancelling its transfer. Ignore already-enqueued
+                    // progress callbacks from that stale task.
+                    guard !ep.isPlayed else { return }
                     switch stage {
-                    case .uploading(let sent, let total):
+                    case .uploading(let sent, let total, let status):
                         if ep.processingState != .uploading {
                             ep.processingState = .uploading
                         }
                         ep.processingCurrent = Double(sent)
                         ep.processingTotal = Double(total)
                         ep.processingProgress = total > 0 ? Double(sent) / Double(total) : 0
-                    case .analyzing:
+                        ep.processingStatusText = status
+                    case .transcribing(
+                        status: let status,
+                        currentSeconds: let currentSeconds,
+                        totalSeconds: let totalSeconds
+                    ):
+                        ep.processingState = .detectingAds
+                        if let currentSeconds,
+                           let totalSeconds,
+                           totalSeconds > 0 {
+                            ep.processingCurrent = max(0, min(currentSeconds, totalSeconds))
+                            ep.processingTotal = totalSeconds
+                            ep.processingProgress = max(0, min(1, currentSeconds / totalSeconds))
+                        } else {
+                            ep.processingCurrent = nil
+                            ep.processingTotal = nil
+                            ep.processingProgress = 0
+                        }
+                        ep.processingStatusText = status
+                    case .analyzing(let status):
                         ep.processingState = .detectingAds
                         ep.processingCurrent = nil
                         ep.processingTotal = nil
                         // Indeterminate spinner-style — the LLM call has
                         // no incremental progress to report.
                         ep.processingProgress = 0
+                        ep.processingStatusText = status
                     }
                 }
             }
         )
+        try Task.checkCancellation()
 
         if let usage = result.usage {
             Self.accumulateUsage(
@@ -267,7 +333,7 @@ final class ProcessingPipeline {
             context.delete(old)
         }
         let sanitizedAds = result.ads.compactMap {
-            $0.sanitized(episodeDuration: episode.duration)
+            $0.sanitized(episodeDuration: analysisDuration)
         }
         let droppedAdCount = result.ads.count - sanitizedAds.count
         if droppedAdCount > 0 {
@@ -285,7 +351,58 @@ final class ProcessingPipeline {
         }
         episode.activeAdMarkerCount = preservedActiveMarkerCount + sanitizedAds.count
         episode.processingProgress = 1.0
+        episode.processingStatusText = nil
         try? context.save()
+    }
+
+    nonisolated private static func resolvedEpisodeDuration(
+        fileURL: URL,
+        fallback: Double?
+    ) async -> Double? {
+        let asset = AVURLAsset(url: fileURL)
+        if let time = try? await asset.load(.duration) {
+            let measured = time.seconds
+            if measured.isFinite, measured > 0 {
+                return measured
+            }
+        }
+        guard let fallback, fallback.isFinite, fallback > 0 else { return nil }
+        return fallback
+    }
+
+    private func setInitialAnalysisProgress(
+        episode: Episode,
+        backend: AdDetectionBackend,
+        fileURL: URL,
+        downsampleBeforeUpload: Bool
+    ) {
+        episode.processingProgress = 0
+        episode.processingCurrent = nil
+        episode.processingTotal = nil
+        switch backend {
+        case .geminiFiles:
+            if downsampleBeforeUpload {
+                episode.processingState = .detectingAds
+                episode.processingStatusText = "Preparing audio for Gemini…"
+            } else {
+                episode.processingState = .uploading
+                episode.processingCurrent = 0
+                episode.processingTotal = (try? fileURL.resourceValues(forKeys: [.fileSizeKey]).fileSize)
+                    .map { Double($0) }
+                episode.processingStatusText = "Preparing Gemini upload…"
+            }
+        case .openRouter:
+            episode.processingState = .uploading
+            episode.processingStatusText = downsampleBeforeUpload
+                ? "Preparing audio for OpenRouter…"
+                : "Preparing OpenRouter request…"
+        case .whisperServer:
+            episode.processingState = .uploading
+            episode.processingStatusText = "Preparing server upload…"
+        case .appleSpeech:
+            episode.processingState = .detectingAds
+            episode.processingStatusText = "Preparing Apple local transcription…"
+        }
     }
 
     /// Bump `AppSettings`'s running lifetime token + cost counters using

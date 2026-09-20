@@ -42,7 +42,10 @@ struct DownloadsView: View {
                                 ForEach(inProgressEpisodes) { episode in
                                     EpisodeRow(episode: episode, style: .withPodcast, showProgress: true) {
                                         Button {
-                                            pipeline.cancel(episodeID: episode.persistentModelID)
+                                            pipeline.cancel(
+                                                episodeID: episode.persistentModelID,
+                                                episodeGUID: episode.guid
+                                            )
                                         } label: {
                                             Image(systemName: "xmark.circle.fill")
                                                 .foregroundStyle(.secondary)
@@ -135,7 +138,10 @@ struct DownloadsView: View {
 
     private func cancelAllInProgress() {
         for episode in inProgressEpisodes {
-            pipeline.cancel(episodeID: episode.persistentModelID)
+            pipeline.cancel(
+                episodeID: episode.persistentModelID,
+                episodeGUID: episode.guid
+            )
         }
     }
 

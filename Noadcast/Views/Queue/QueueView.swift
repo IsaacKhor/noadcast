@@ -14,6 +14,10 @@ struct QueueView: View {
     /// change, so a body re-eval doesn't re-filter the array.
     @State private var pendingItems: [QueueItem] = []
     @State private var pendingDuration: Double = 0
+    /// Bumped after a swipe-to-top action so SwiftUI throws away the List that
+    /// still owns the active swipe gesture instead of keeping its row as an
+    /// overlay at the old screen position.
+    @State private var queuePresentationRevision = 0
 
     /// The episode the player is currently loaded on, if any. Looked up by
     /// `PersistentIdentifier` so we don't fault every Episode just to render
@@ -33,7 +37,11 @@ struct QueueView: View {
         }
 
         pendingItems = pending
-        pendingDuration = pending.reduce(0) { total, item in
+        pendingDuration = totalDuration(of: pending)
+    }
+
+    private func totalDuration(of items: [QueueItem]) -> Double {
+        items.reduce(0) { total, item in
             guard let episode = item.episode,
                   let duration = episode.duration,
                   duration > 0 else { return total }
@@ -131,6 +139,7 @@ struct QueueView: View {
             }
         }
         .listStyle(.plain)
+        .id(queuePresentationRevision)
     }
 
     private var upNextHeader: some View {
@@ -202,10 +211,30 @@ struct QueueView: View {
     }
 
     private func remove(_ item: QueueItem) {
-        if let episode = item.episode {
+        let episode = item.episode
+
+        // `pendingItems` is a cached view of the @Query results. Remove the
+        // row from that cache before touching SwiftData so a full swipe does
+        // not leave the swiped row hanging around while @Query catches up.
+        // Disabling the transaction animation makes the following row snap
+        // into place immediately instead of briefly exposing an empty slot.
+        var transaction = Transaction(animation: nil)
+        transaction.disablesAnimations = true
+        withTransaction(transaction) {
+            pendingItems.removeAll { $0 === item }
+            pendingDuration = totalDuration(of: pendingItems)
+        }
+
+        if let episode {
             // Unified delete: wipes the audio file too so it doesn't linger
-            // in the Downloads tab after being removed from the queue.
-            SubscriptionService.shared.deleteEpisodeContent(episode, in: context)
+            // in the Downloads tab after being removed from the queue. Queue
+            // removal also records the episode as played so refreshes do not
+            // treat it as an unplayed episode that should be queued again.
+            SubscriptionService.shared.deleteEpisodeContent(
+                episode,
+                in: context,
+                markAsPlayed: true
+            )
         } else {
             context.delete(item)
             try? context.save()
@@ -215,20 +244,36 @@ struct QueueView: View {
     private func moveToTop(_ item: QueueItem) {
         // Renumber so this item lands just after the currently-playing one
         // (if there is one) — i.e. it becomes the next to play.
-        //
-        // `withAnimation` so the position writes and the @Query-driven row
-        // reorder ride the same transaction; without it the swipe action's
-        // spring-back animation finishes before the row moves, leaving a
-        // visible gap where the row used to be.
-        withAnimation {
-            let playingID = player.currentEpisodeID
-            let playing = items.first { $0.episode?.persistentModelID == playingID }
-            let rest = items.filter { $0 !== item && $0 !== playing }
+        let playingID = player.currentEpisodeID
+        let playing = playingID.flatMap { id in
+            items.first { $0.episode?.persistentModelID == id }
+        }
+        guard items.contains(where: { $0 === item }) else { return }
+        guard playingID == nil || item.episode?.persistentModelID != playingID else {
+            refreshPending()
+            return
+        }
+        let remainingPending = items.filter { other in
+            guard other !== item else { return false }
+            guard let playingID else { return true }
+            return other.episode?.persistentModelID != playingID
+        }
+        let reorderedPending = [item] + remainingPending
+
+        // A List keeps the full-swiped row alive as a gesture overlay even
+        // after its model moves. Replace the visible ordering ourselves and
+        // recreate the List in a no-animation transaction; that discards
+        // the gesture-owned row and paints a fresh copy at the top immediately.
+        var transaction = Transaction(animation: nil)
+        transaction.disablesAnimations = true
+        withTransaction(transaction) {
+            pendingItems = reorderedPending
+            pendingDuration = totalDuration(of: reorderedPending)
+            queuePresentationRevision &+= 1
+
             var pos = 0
             if let playing { playing.position = pos; pos += 1 }
-            item.position = pos
-            pos += 1
-            for other in rest {
+            for other in reorderedPending {
                 other.position = pos
                 pos += 1
             }

@@ -153,6 +153,7 @@ actor DatabaseMaintenanceActor {
         canonical.processingProgress = max(canonical.processingProgress, duplicateEpisode.processingProgress)
         canonical.processingCurrent = canonical.processingCurrent ?? duplicateEpisode.processingCurrent
         canonical.processingTotal = canonical.processingTotal ?? duplicateEpisode.processingTotal
+        canonical.processingStatusText = canonical.processingStatusText ?? duplicateEpisode.processingStatusText
         canonical.playbackPosition = max(canonical.playbackPosition, duplicateEpisode.playbackPosition)
         canonical.isPlayed = canonical.isPlayed || duplicateEpisode.isPlayed
         canonical.datePlayed = [canonical.datePlayed, duplicateEpisode.datePlayed].compactMap { $0 }.max()

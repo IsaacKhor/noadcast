@@ -54,10 +54,9 @@ final class AppSettings {
     /// Combined total for quick summary display and debugging.
     var lifetimeAdDetectionCostUSD: Double = 0
 
-    /// Where audio analysis runs. Direct Gemini uploads send episode audio to
-    /// Gemini Files API; the server backend sends audio to a local service
-    /// that transcribes with whisper.cpp before asking Gemini to classify the
-    /// transcript.
+    /// Where audio analysis runs. Direct cloud backends send episode audio to
+    /// Gemini or OpenRouter; transcript backends send only timestamped text
+    /// for segment classification.
     var adDetectionBackendRaw: String = AdDetectionBackend.geminiFiles.rawValue
     /// Which cloud model performs ad detection. See `AdDetectionProvider`.
     var adDetectionProviderRaw: String = AdDetectionProvider.gemini35Flash.rawValue
@@ -71,6 +70,9 @@ final class AppSettings {
     /// the app's SwiftData store — fine for a personal-use app; move to
     /// Keychain if this ever ships to multiple users.
     var googleAPIKey: String?
+    /// API key for direct OpenRouter analysis. Kept separate from the Google
+    /// key so changing backends never sends one provider another's secret.
+    var openRouterAPIKey: String?
     /// Hostname/base URL for the local whisper.cpp analysis server.
     var adDetectionServerHost: String = "http://127.0.0.1"
     /// TCP port for the local whisper.cpp analysis server.

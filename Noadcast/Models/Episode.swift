@@ -52,11 +52,14 @@ final class Episode {
     /// with `processingState`:
     /// * `.downloading` — bytes written
     /// * `.uploading` — bytes uploaded
-    /// * `.detectingAds` — number of LLM chunks completed
+    /// * `.detectingAds` — transcript seconds processed, or number of LLM chunks completed
     var processingCurrent: Double?
     /// Stage-relative total value in the stage's natural unit. Same unit
     /// scheme as `processingCurrent`.
     var processingTotal: Double?
+    /// Human-readable current pipeline action, used where a coarse state like
+    /// `.detectingAds` can mean different backend-specific work.
+    var processingStatusText: String?
 
     /// Last playback position in seconds.
     var playbackPosition: Double
