@@ -1,6 +1,16 @@
-secrets.env
-bench/
-whisper.cpp/
-server/.venv/
-server/__pycache__/
-server/uv.lock
+# Python-generated files
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+
+# Virtual environments
+.venv
+.cache/
+vendor/
+
+# Downloaded benchmark inputs, models, and generated transcripts
+benchmarks/*
+vendor/
