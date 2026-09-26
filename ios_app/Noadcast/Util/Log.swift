@@ -16,6 +16,9 @@ nonisolated enum Log {
     static let player = Logger(subsystem: subsystem, category: "Player")
     static let feed = Logger(subsystem: subsystem, category: "Feed")
     static let startup = Logger(subsystem: subsystem, category: "Startup")
+    static let network = Logger(subsystem: subsystem, category: "Network")
+    static let sync = Logger(subsystem: subsystem, category: "Sync")
+    static let migration = Logger(subsystem: subsystem, category: "Migration")
 
     /// Signposter for cold-start measurements. View intervals in Instruments
     /// → Logging template, filter to subsystem `com.isaackhor.Noadcast`

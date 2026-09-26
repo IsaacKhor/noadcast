@@ -1,0 +1,40 @@
+# systemd *user* unit for the Noadcast server. Install and enable it with the
+# commands in deploy/README.md; it needs `loginctl enable-linger` to run
+# without an open login session.
+[Unit]
+Description=Noadcast podcast server (RSS, transcription, ad markers)
+Documentation=file:///home/ikhor/code/noadcast/deploy/README.md
+
+[Service]
+Type=simple
+WorkingDirectory=/home/ikhor/code/noadcast
+EnvironmentFile=/home/ikhor/code/noadcast/secrets.env
+# Keep every cache inside the project, as the rest of the repo does.
+Environment=TMPDIR=/home/ikhor/code/noadcast/.cache/tmp
+Environment=HF_HOME=/home/ikhor/code/noadcast/.cache/huggingface
+Environment=XDG_CACHE_HOME=/home/ikhor/code/noadcast/.cache
+Environment=UV_CACHE_DIR=/home/ikhor/code/noadcast/.cache/uv
+# Workers set their own thread counts before importing faster-whisper;
+# this stops OpenBLAS in the parent from starting a thread per core.
+Environment=OPENBLAS_NUM_THREADS=1
+Environment=PYTHONUNBUFFERED=1
+ExecStartPre=/usr/bin/mkdir -p /home/ikhor/code/noadcast/.cache/tmp
+ExecStart=/home/ikhor/code/noadcast/.venv/bin/noadcast serve
+# Binding the tailnet address fails until tailscaled has configured it; a
+# restart loop is the simplest wait (user units cannot order after system units).
+Restart=always
+RestartSec=5
+# SIGTERM goes to the main process only: it drains the scheduler and joins the
+# spawned transcription workers itself. Anything left after TimeoutStopSec is
+# SIGKILLed, children included.
+KillMode=mixed
+KillSignal=SIGTERM
+TimeoutStopSec=90
+LimitNOFILE=8192
+# A busy tiny.en worker peaks near 1.6 GiB RSS (idle ~0.2 GiB), so six busy
+# workers need ~10 GiB; the cap leaves room for the server itself and
+# catches a runaway before the host's OOM killer picks a victim.
+MemoryMax=32G
+
+[Install]
+WantedBy=default.target

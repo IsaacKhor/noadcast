@@ -66,22 +66,3 @@ nonisolated enum AdTimestampSanitizer {
         return (start, end)
     }
 }
-
-nonisolated struct TimestampedTranscriptSegment: Sendable {
-    let startSeconds: Double
-    let endSeconds: Double
-    let text: String
-}
-
-/// Token usage reported by the provider for one audio-analysis call.
-nonisolated struct TokenUsage: Codable, Sendable {
-    var inputTokens: Int
-    var thoughtTokens: Int
-    var outputTokens: Int
-
-    init(inputTokens: Int, thoughtTokens: Int = 0, outputTokens: Int) {
-        self.inputTokens = inputTokens
-        self.thoughtTokens = thoughtTokens
-        self.outputTokens = outputTokens
-    }
-}

@@ -11,8 +11,9 @@ enum EpisodeRowStyle {
 
 /// The single canonical episode row used everywhere. Always shows:
 ///   * episode title
-///   * date · duration · download-status icon · ads-detected count
-///   * a thin progress bar for in-progress processing or partial playback
+///   * date · duration · one glyph per status axis (on this device / on
+///     the server) · ads-detected count
+///   * a thin progress bar for in-progress work or partial playback
 ///   * a trailing affordance supplied by the caller (`StandardEpisodeAction`
 ///     for most lists; Queue / Downloads pass custom ones).
 ///
@@ -23,13 +24,12 @@ struct EpisodeRow<Trailing: View>: View {
     @Environment(\.modelContext) private var context
     @Bindable var episode: Episode
     let style: EpisodeRowStyle
-    /// When `false` (the default), neither the in-progress processing bar
-    /// nor the partial-playback bar is rendered. Crucially, the row also
-    /// won't *read* `processingProgress`, `processingCurrent`,
-    /// `processingTotal`, or `playbackPosition`, so SwiftData's
-    /// Observation doesn't track them — per-byte upload progress and
-    /// 0.5s playback ticks no longer re-render the row. Only
-    /// `DownloadsView` opts in; that's the one place those bars belong.
+    /// When `false` (the default), neither the progress bars nor the job
+    /// status are rendered. Crucially, the row also won't *read*
+    /// `downloadProgress`, `downloadedBytes`, `playbackPosition`, or the
+    /// in-memory job progress, so Observation doesn't subscribe the row to
+    /// them — download bytes, job polls, and 0.25 s playback ticks don't
+    /// re-render every list. Only `DownloadsView` opts in.
     var showProgress: Bool = false
     @ViewBuilder var trailing: () -> Trailing
 
@@ -81,86 +81,96 @@ struct EpisodeRow<Trailing: View>: View {
                 Text("·")
                 Text(TimeFormatting.timestamp(duration)).monospacedDigit()
             }
-            statusBadge
+            deviceBadge
+            serverBadge
             adBadge
         }
         .font(.caption2)
         .foregroundStyle(.secondary)
     }
 
-    /// One-glyph hint for "where is this episode in the pipeline":
-    /// downloaded ✓, downloading ↓ (filled when downloaded-but-not-yet-analyzed),
-    /// failed ⚠, in-progress spinner-y arrow. Nothing for `.new` — the row's
-    /// progress bar fills in the detail there.
+    /// Device axis: on this iPhone ✓, downloading ↓, waiting ⏱, failed ⚠.
     @ViewBuilder
-    private var statusBadge: some View {
-        switch episode.processingState {
-        case .ready:
-            if episode.isMarkedDownloaded {
-                Image(systemName: "checkmark.circle.fill").foregroundStyle(.green)
+    private var deviceBadge: some View {
+        if episode.isMarkedDownloaded {
+            Image(systemName: "checkmark.circle.fill")
+                .foregroundStyle(.green)
+                .accessibilityLabel("Downloaded")
+        } else {
+            switch episode.downloadState {
+            case .downloading:
+                Image(systemName: "arrow.down.circle")
+                    .foregroundStyle(.tint)
+                    .accessibilityLabel("Downloading")
+            case .queued:
+                Image(systemName: "clock")
+                    .accessibilityLabel("Waiting to download")
+            case .failed:
+                Image(systemName: "exclamationmark.circle")
+                    .foregroundStyle(.orange)
+                    .accessibilityLabel("Download failed")
+            case .idle, .downloaded:
+                EmptyView()
             }
-        case .downloaded:
-            Image(systemName: "arrow.down.circle.fill").foregroundStyle(.tint)
-        case .downloading:
-            Image(systemName: "arrow.down.circle").foregroundStyle(.tint)
-        case .detectingAds:
-            Image(systemName: detectingStatusIconName).foregroundStyle(.tint)
-        case .uploading:
-            Image(systemName: "arrow.up.circle").foregroundStyle(.tint)
+        }
+    }
+
+    /// Server axis: fetching, transcribing, analysing, or failed. Nothing
+    /// for resting states — the ad badge covers "ready".
+    @ViewBuilder
+    private var serverBadge: some View {
+        switch episode.serverState {
+        case .downloadPending, .downloading:
+            Image(systemName: "icloud.and.arrow.down")
+                .foregroundStyle(.tint)
+                .accessibilityLabel("Server is fetching the audio")
+        case .transcribePending, .transcribing:
+            Image(systemName: "waveform")
+                .foregroundStyle(.tint)
+                .accessibilityLabel("Server is transcribing")
+        case .classifyPending, .classifying:
+            Image(systemName: "sparkles")
+                .foregroundStyle(.tint)
+                .accessibilityLabel("Server is detecting ads")
         case .failed:
-            Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.red)
-        case .new:
+            Image(systemName: "exclamationmark.triangle.fill")
+                .foregroundStyle(.red)
+                .accessibilityLabel("Server processing failed")
+        case .discovered, .downloaded, .transcribed, .ready, .unknown:
             EmptyView()
         }
     }
 
     @ViewBuilder
     private var adBadge: some View {
-        if episode.processingState == .ready, episode.activeAdMarkerCount > 0 {
+        if episode.activeAdMarkerCount > 0 {
             Text("·")
             Text("\(episode.activeAdMarkerCount) ad\(episode.activeAdMarkerCount == 1 ? "" : "s")")
                 .foregroundStyle(.orange)
         }
     }
 
-    /// Linear progress bar reused for two cases plus an error footer for
-    /// failed jobs:
-    ///   * actively processing (download / upload / ad-detect) — uses
-    ///     `processingProgress` reset to 0 at each stage transition. The
-    ///     stage label + a unit-appropriate detail (`12 MB / 50 MB`,
-    ///     `Chunk 3 of 12`) sits below the bar.
-    ///   * partially played — `playbackPosition / duration`, only when
-    ///     listening is in progress (not played-to-end).
-    ///   * failed — show the error message.
+    /// Linear progress bar reused for:
+    ///   * a download to this device — bytes from `downloadProgress`;
+    ///   * a server job — progress from `/jobs/active` (in memory, never
+    ///     SwiftData), with its status text;
+    ///   * partially played — `playbackPosition / duration`.
+    /// Plus a static error footer for failures on either axis.
     @ViewBuilder
     private var progressLine: some View {
         // Guard each progress branch on `showProgress` *before* it reads
-        // any ticking property — short-circuiting keeps SwiftData
-        // Observation from subscribing the row to those writes outside
-        // the Downloads tab.
-        if showProgress, episode.isInProgress {
-            VStack(alignment: .leading, spacing: 2) {
-                if hasDeterminateProcessingProgress {
-                    ProgressView(value: max(0, min(1, episode.processingProgress)))
-                        .progressViewStyle(.linear)
-                } else {
-                    ProgressView()
-                        .progressViewStyle(.linear)
-                }
-                HStack(spacing: 6) {
-                    Text(processingLabel)
-                    if let detail = TimeFormatting.progressDetail(for: episode) {
-                        Text("·")
-                        Text(detail).monospacedDigit()
-                    }
-                }
-                .font(.caption2)
-                .foregroundStyle(.secondary)
+        // any ticking property — short-circuiting keeps Observation from
+        // subscribing the row to those writes outside the Downloads tab.
+        if showProgress, episode.isBusy {
+            if episode.downloadState.isActive {
+                deviceDownloadProgress
+            } else {
+                serverJobProgress
             }
-        } else if episode.processingState == .failed, let err = episode.processingError {
+        } else if let failure = failureMessage {
             // Static error footer — safe to show in all tabs; it doesn't
             // re-render at frame rate the way the progress bars do.
-            Text(err)
+            Text(failure)
                 .font(.caption2)
                 .foregroundStyle(.red)
                 .lineLimit(3)
@@ -176,42 +186,70 @@ struct EpisodeRow<Trailing: View>: View {
         }
     }
 
-    private var processingLabel: String {
-        if let text = episode.processingStatusText, !text.isEmpty {
-            return text
-        }
-        return switch episode.processingState {
-        case .downloading: "Downloading…"
-        case .uploading: "Uploading…"
-        case .detectingAds: "Analyzing…"
-        default: ""
-        }
-    }
-
-    private var hasDeterminateProcessingProgress: Bool {
-        guard let total = episode.processingTotal, total > 0 else {
-            return false
-        }
-        guard episode.processingCurrent != nil else {
-            return false
-        }
-        switch episode.processingState {
-        case .downloading, .uploading, .detectingAds:
-            return true
-        default:
-            return false
+    @ViewBuilder
+    private var deviceDownloadProgress: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            if episode.downloadState == .downloading, (episode.downloadTotalBytes ?? 0) > 0 {
+                ProgressView(value: max(0, min(1, episode.downloadProgress)))
+                    .progressViewStyle(.linear)
+            } else {
+                ProgressView()
+                    .progressViewStyle(.linear)
+            }
+            HStack(spacing: 6) {
+                Text(deviceDownloadLabel)
+                if let detail = TimeFormatting.progressDetail(for: episode) {
+                    Text("·")
+                    Text(detail).monospacedDigit()
+                }
+            }
+            .font(.caption2)
+            .foregroundStyle(.secondary)
         }
     }
 
-    private var detectingStatusIconName: String {
-        let label = episode.processingStatusText?.lowercased() ?? ""
-        if label.contains("transcrib") {
-            return "waveform"
+    @ViewBuilder
+    private var serverJobProgress: some View {
+        let job = SyncService.shared.activeJobs[episode.serverID]
+        VStack(alignment: .leading, spacing: 2) {
+            if let fraction = job?.fraction {
+                ProgressView(value: fraction)
+                    .progressViewStyle(.linear)
+            } else {
+                ProgressView()
+                    .progressViewStyle(.linear)
+            }
+            HStack(spacing: 6) {
+                Text(job?.statusText ?? episode.serverState.label)
+                if let job, let detail = TimeFormatting.progressDetail(for: job) {
+                    Text("·")
+                    Text(detail).monospacedDigit()
+                }
+            }
+            .font(.caption2)
+            .foregroundStyle(.secondary)
         }
-        if label.contains("gemini") {
-            return "sparkles"
+    }
+
+    private var deviceDownloadLabel: String {
+        switch episode.downloadState {
+        case .queued:
+            episode.audioState.isPresent ? "Waiting to download" : "Waiting for your server…"
+        case .downloading:
+            "Downloading to this iPhone…"
+        case .idle, .downloaded, .failed:
+            ""
         }
-        return "waveform"
+    }
+
+    private var failureMessage: String? {
+        if episode.downloadState == .failed {
+            return episode.downloadError ?? "Download failed."
+        }
+        if episode.serverState == .failed {
+            return episode.serverError ?? "Processing failed on the server."
+        }
+        return nil
     }
 }
 
@@ -226,39 +264,66 @@ extension EpisodeRow where Trailing == StandardEpisodeAction {
     }
 }
 
-/// The trailing affordance for most lists: play (ready), spinner (busy),
-/// retry (failed), or download (anything else).
+/// The trailing affordance for most lists: play (downloaded, streamable, or
+/// preparable on the server), a spinner (in flight), retry (failed),
+/// download (streaming not allowed here), or a disabled glyph (offline).
 struct StandardEpisodeAction: View {
     @Environment(\.modelContext) private var context
     @Bindable var episode: Episode
+    @AppStorage(StreamingPolicy.storageKey) private var streamingPolicy: StreamingPolicy = StreamingPolicy.defaultValue
 
     private let player = PlayerService.shared
-    private let pipeline = ProcessingPipeline.shared
+    private let network = NetworkMonitor.shared
 
     var body: some View {
-        if episode.processingState == .ready, episode.isMarkedDownloaded {
+        switch action {
+        case .play:
             Button(action: play) {
                 Image(systemName: "play.circle.fill").font(.title2)
             }
             .buttonStyle(.plain)
-        } else if pipeline.isProcessing(episodeID: episode.persistentModelID) {
+        case .inProgress:
             ProgressView()
-        } else if episode.processingState == .failed {
-            Button { pipeline.process(episode: episode) } label: {
+        case .retry:
+            Button {
+                SubscriptionService.shared.retry(episode, in: context)
+            } label: {
                 Image(systemName: "arrow.clockwise.circle").font(.title2)
             }
             .buttonStyle(.plain)
-        } else {
-            Button { pipeline.process(episode: episode) } label: {
+        case .download:
+            Button {
+                SubscriptionService.shared.download(episode, in: context)
+            } label: {
                 Image(systemName: "arrow.down.circle").font(.title2)
             }
             .buttonStyle(.plain)
+        case .unavailable:
+            Image(systemName: "icloud.slash")
+                .font(.title2)
+                .foregroundStyle(.tertiary)
+                .accessibilityLabel("Not available offline")
         }
+    }
+
+    private var action: EpisodeRowAction {
+        PlaybackSourceResolver.rowAction(
+            isDownloaded: episode.isMarkedDownloaded,
+            downloadState: episode.downloadState,
+            serverState: episode.serverState,
+            audioState: episode.audioState,
+            isServerConfigured: APIConfiguration.isConfigured,
+            isOnline: network.isOnline,
+            isWiFi: network.isWiFi,
+            streamingPolicy: streamingPolicy
+        )
     }
 
     private func play() {
         let settings = AppSettings.current(in: context)
-        player.load(episode: episode, settings: settings)
-        player.play()
+        let target = episode
+        Task {
+            await player.load(episode: target, settings: settings, autoPlay: true)
+        }
     }
 }

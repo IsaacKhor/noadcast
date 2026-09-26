@@ -1,9 +1,10 @@
 import SwiftUI
 import SwiftData
 
-/// Tab showing every episode currently being processed (downloading,
-/// uploading, or having ads detected) and every episode whose audio is
-/// still on disk. Failed jobs surface here too with a retry affordance.
+/// Tab showing every episode with work in flight — on the server (fetch,
+/// transcribe, analyse) or on the way to this device — every failure on
+/// either axis with a retry, and every episode whose audio is on this
+/// device.
 struct DownloadsView: View {
     @Environment(\.modelContext) private var context
     @State private var showCancelAllConfirm = false
@@ -12,19 +13,22 @@ struct DownloadsView: View {
     @State private var downloadedEpisodes: [Episode] = []
     @State private var totalBytes: Int64 = 0
 
-    // One SwiftData query covers the whole tab. The previous three live
-    // `Episode` queries all invalidated on processing updates, which made
-    // download progress noisier than it needed to be while scrolling.
+    // One SwiftData query covers the whole tab. `isBusy` is the denormalized
+    // "server job active OR device download active" flag, so the predicate
+    // stays a plain SQL `WHERE`.
     @Query(
         filter: #Predicate<Episode> {
-            $0.isInProgress || $0.processingStateRaw == "failed" || $0.localFilename != nil
+            $0.isBusy
+                || $0.serverStateRaw == "failed"
+                || $0.downloadStateRaw == "failed"
+                || $0.localFilename != nil
         },
         sort: \.publishedAt,
         order: .reverse
     )
     private var visibleEpisodes: [Episode]
 
-    private var pipeline = ProcessingPipeline.shared
+    private let sync = SyncService.shared
 
     var body: some View {
         NavigationStack {
@@ -33,7 +37,7 @@ struct DownloadsView: View {
                     ContentUnavailableView {
                         Label("Nothing downloaded", systemImage: "arrow.down.circle")
                     } description: {
-                        Text("Queued episodes are downloaded automatically. Analysis follows your download settings.")
+                        Text("Queued episodes are downloaded automatically, following your download settings. Your server's work on new episodes also shows up here.")
                     }
                 } else {
                     List {
@@ -41,17 +45,19 @@ struct DownloadsView: View {
                             Section("In progress") {
                                 ForEach(inProgressEpisodes) { episode in
                                     EpisodeRow(episode: episode, style: .withPodcast, showProgress: true) {
-                                        Button {
-                                            pipeline.cancel(
-                                                episodeID: episode.persistentModelID,
-                                                episodeGUID: episode.guid
-                                            )
-                                        } label: {
-                                            Image(systemName: "xmark.circle.fill")
-                                                .foregroundStyle(.secondary)
-                                                .font(.title3)
+                                        if episode.downloadState.isActive {
+                                            Button {
+                                                SubscriptionService.shared.cancelDownload(episode)
+                                            } label: {
+                                                Image(systemName: "xmark.circle.fill")
+                                                    .foregroundStyle(.secondary)
+                                                    .font(.title3)
+                                            }
+                                            .buttonStyle(.plain)
+                                            .accessibilityLabel("Cancel download")
+                                        } else {
+                                            StandardEpisodeAction(episode: episode)
                                         }
-                                        .buttonStyle(.plain)
                                     }
                                     .listRowInsets(.init(top: 8, leading: 16, bottom: 8, trailing: 16))
                                 }
@@ -63,12 +69,13 @@ struct DownloadsView: View {
                                 ForEach(failedEpisodes) { episode in
                                     EpisodeRow(episode: episode, style: .withPodcast, showProgress: true) {
                                         Button {
-                                            pipeline.process(episode: episode)
+                                            SubscriptionService.shared.retry(episode, in: context)
                                         } label: {
                                             Image(systemName: "arrow.clockwise.circle")
                                                 .font(.title2)
                                         }
                                         .buttonStyle(.plain)
+                                        .accessibilityLabel("Retry")
                                     }
                                     .listRowInsets(.init(top: 8, leading: 16, bottom: 8, trailing: 16))
                                 }
@@ -77,7 +84,7 @@ struct DownloadsView: View {
 
                         Section {
                             HStack {
-                                Text("Total")
+                                Text("On this iPhone")
                                 Spacer()
                                 Text(TimeFormatting.fileSize(totalBytes))
                                     .foregroundStyle(.secondary)
@@ -105,10 +112,20 @@ struct DownloadsView: View {
             }
             .navigationTitle("Downloads")
             .navigationBarTitleDisplayMode(.inline)
-            .onAppear { refreshSections() }
+            .refreshable {
+                await sync.syncNow(.pullToRefresh)
+            }
+            .onAppear {
+                refreshSections()
+                // 2 s job-progress polling while this tab is on screen.
+                sync.setDownloadsTabVisible(true)
+            }
+            .onDisappear {
+                sync.setDownloadsTabVisible(false)
+            }
             .onChange(of: visibleEpisodes) { _, _ in refreshSections() }
             .toolbar {
-                if !inProgressEpisodes.isEmpty {
+                if inProgressEpisodes.contains(where: { $0.downloadState.isActive }) {
                     ToolbarItem(placement: .topBarTrailing) {
                         Button("Cancel All", role: .destructive) {
                             showCancelAllConfirm = true
@@ -117,31 +134,34 @@ struct DownloadsView: View {
                 }
             }
             .confirmationDialog(
-                "Cancel \(inProgressEpisodes.count) in-progress download\(inProgressEpisodes.count == 1 ? "" : "s")?",
+                "Cancel \(activeDeviceDownloads.count) download\(activeDeviceDownloads.count == 1 ? "" : "s") to this iPhone?",
                 isPresented: $showCancelAllConfirm,
                 titleVisibility: .visible
             ) {
-                Button("Cancel All", role: .destructive) { cancelAllInProgress() }
+                Button("Cancel All", role: .destructive) { cancelAllDownloads() }
                 Button("Keep Going", role: .cancel) { }
             }
         }
     }
 
+    private var activeDeviceDownloads: [Episode] {
+        inProgressEpisodes.filter { $0.downloadState.isActive }
+    }
+
     private func refreshSections() {
-        inProgressEpisodes = visibleEpisodes.filter(\.isInProgress)
-        failedEpisodes = visibleEpisodes.filter { $0.processingState == .failed }
+        inProgressEpisodes = visibleEpisodes.filter(\.isBusy)
+        failedEpisodes = visibleEpisodes.filter { episode in
+            !episode.isBusy && (episode.downloadState == .failed || episode.serverState == .failed)
+        }
         downloadedEpisodes = visibleEpisodes
             .filter(\.isMarkedDownloaded)
             .sorted { ($0.fileSizeBytes ?? 0) > ($1.fileSizeBytes ?? 0) }
         totalBytes = downloadedEpisodes.reduce(0) { $0 + ($1.fileSizeBytes ?? 0) }
     }
 
-    private func cancelAllInProgress() {
-        for episode in inProgressEpisodes {
-            pipeline.cancel(
-                episodeID: episode.persistentModelID,
-                episodeGUID: episode.guid
-            )
+    private func cancelAllDownloads() {
+        for episode in activeDeviceDownloads {
+            SubscriptionService.shared.cancelDownload(episode)
         }
     }
 

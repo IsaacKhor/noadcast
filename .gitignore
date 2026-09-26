@@ -11,6 +11,34 @@ wheels/
 .cache/
 vendor/
 
-# Downloaded benchmark inputs, models, and generated transcripts
+# Server runtime data (database, audio, models) and secrets
+data/
+secrets.env
+
+# Benchmark inputs, models, run directories, and full transcripts are large
+# and regenerable; reports, manifests, the feed snapshot, and small eval
+# fixtures are tracked so results stay reproducible.
 benchmarks/*
-vendor/
+!benchmarks/tal/
+benchmarks/tal/*
+!benchmarks/tal/*.md
+!benchmarks/tal/*.csv
+!benchmarks/tal/*.json
+!benchmarks/tal/feed.xml
+!benchmarks/tal/requirements.txt
+!benchmarks/tal/pcm/
+benchmarks/tal/pcm/*
+!benchmarks/tal/pcm/manifest.json
+!benchmarks/ads/
+benchmarks/ads/*
+!benchmarks/ads/*.json
+!benchmarks/ads/*.md
+!benchmarks/ads/feeds/
+!benchmarks/top10/
+benchmarks/top10/*
+!benchmarks/top10/*.json
+!benchmarks/top10/*.md
+!benchmarks/top10/feeds/
+!benchmarks/top10/chart/
+!benchmarks/evals/
+benchmarks/evals/**/*.wav

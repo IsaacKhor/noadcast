@@ -1,0 +1,70 @@
+{
+  "episode_title": "206: Somewhere in the Arabian Sea",
+  "description": "Claude answer missing required fields, then a valid answer to the repair nudge (attempts == 2).",
+  "responses": [
+    {
+      "format": "claude",
+      "status": 200,
+      "body": {
+        "id": "msg_fixture",
+        "type": "message",
+        "role": "assistant",
+        "model": "claude-sonnet-5",
+        "content": [
+          {
+            "type": "thinking",
+            "thinking": "",
+            "signature": "fixture-signature"
+          },
+          {
+            "type": "text",
+            "text": "{\"segments\": [{\"start\": 0, \"end\": 55, \"label\": \"intro\"}]}"
+          }
+        ],
+        "stop_reason": "end_turn",
+        "stop_sequence": null,
+        "usage": {
+          "input_tokens": 24816,
+          "output_tokens": 1290,
+          "cache_creation_input_tokens": 0,
+          "cache_read_input_tokens": 0,
+          "output_tokens_details": {
+            "thinking_tokens": 1102
+          }
+        }
+      }
+    },
+    {
+      "format": "claude",
+      "status": 200,
+      "body": {
+        "id": "msg_fixture",
+        "type": "message",
+        "role": "assistant",
+        "model": "claude-sonnet-5",
+        "content": [
+          {
+            "type": "thinking",
+            "thinking": "",
+            "signature": "fixture-signature"
+          },
+          {
+            "type": "text",
+            "text": "{\"segments\": [{\"startSeconds\": 0.0, \"endSeconds\": 55.0, \"summary\": \"Show billboard and theme music\", \"kind\": \"intro\"}, {\"startSeconds\": 3502.0, \"endSeconds\": 3566.86, \"summary\": \"Credits, funding credits, and next week's teaser\", \"kind\": \"outro\"}]}"
+          }
+        ],
+        "stop_reason": "end_turn",
+        "stop_sequence": null,
+        "usage": {
+          "input_tokens": 24851,
+          "output_tokens": 1335,
+          "cache_creation_input_tokens": 0,
+          "cache_read_input_tokens": 0,
+          "output_tokens_details": {
+            "thinking_tokens": 1120
+          }
+        }
+      }
+    }
+  ]
+}

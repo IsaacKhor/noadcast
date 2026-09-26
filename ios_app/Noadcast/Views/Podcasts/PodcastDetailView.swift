@@ -6,15 +6,17 @@ struct PodcastDetailView: View {
     @Bindable var podcast: Podcast
     @Query private var sortedEpisodes: [Episode]
     @State private var defaultSpeed: Double = 1.0
+    @State private var toggleError: String?
 
     init(podcast: Podcast) {
         self.podcast = podcast
         // SwiftData translates this predicate to a SQL `WHERE` + `ORDER BY`,
         // so a 500-episode archive doesn't fault every row's `publishedAt`
-        // through main-thread accessors just to sort the list.
-        let feedURL = podcast.feedURL
+        // through main-thread accessors just to sort the list. The scalar
+        // `podcastServerID` avoids a relationship join.
+        let podcastServerID = podcast.serverID
         self._sortedEpisodes = Query(
-            filter: #Predicate<Episode> { $0.podcast?.feedURL == feedURL },
+            filter: #Predicate<Episode> { $0.podcastServerID == podcastServerID },
             sort: \Episode.publishedAt,
             order: .reverse
         )
@@ -44,6 +46,12 @@ struct PodcastDetailView: View {
                                     .font(.caption2)
                                     .foregroundStyle(.tertiary)
                             }
+                            if let fetchError = podcast.lastFetchError, !fetchError.isEmpty {
+                                Text("Last fetch failed: \(fetchError)")
+                                    .font(.caption2)
+                                    .foregroundStyle(.red)
+                                    .lineLimit(2)
+                            }
                         }
                         Spacer(minLength: 0)
                     }
@@ -57,8 +65,9 @@ struct PodcastDetailView: View {
             Section {
                 Toggle("Auto-download new episodes", isOn: $podcast.autoDownloadEnabled)
                     .listRowInsets(.init(top: 6, leading: 16, bottom: 6, trailing: 16))
-                Toggle("Detect & skip ads", isOn: $podcast.aiProcessingEnabled)
+                Toggle("Detect & skip ads", isOn: adAnalysisBinding)
                     .listRowInsets(.init(top: 6, leading: 16, bottom: 6, trailing: 16))
+                    .disabled(!APIConfiguration.isConfigured)
                 HStack {
                     Text("Playback speed")
                     Spacer()
@@ -74,7 +83,7 @@ struct PodcastDetailView: View {
             } header: {
                 Text("Settings")
             } footer: {
-                Text("The global Settings download-analysis toggle must also be on. When either toggle is off, this podcast's new episodes are downloaded but not analyzed.")
+                Text("Ad detection runs on your server; the global Detect & skip ads switch in Settings must also be on. Auto-download adds newly published episodes to your Queue and downloads them to this iPhone under your download settings.")
             }
 
             Section("Episodes") {
@@ -89,6 +98,16 @@ struct PodcastDetailView: View {
                             }
                             .tint(.blue)
                         }
+                        .swipeActions(edge: .trailing) {
+                            if !episode.isMarkedDownloaded {
+                                Button {
+                                    SubscriptionService.shared.download(episode, in: context)
+                                } label: {
+                                    Label("Download", systemImage: "arrow.down.circle")
+                                }
+                                .tint(.green)
+                            }
+                        }
                 }
             }
         }
@@ -97,9 +116,31 @@ struct PodcastDetailView: View {
         .navigationBarTitleDisplayMode(.inline)
         .onAppear { refreshSettingsSnapshot() }
         .refreshable {
-            try? await SubscriptionService.shared.refresh(podcast: podcast, in: context)
+            await SubscriptionService.shared.refresh(podcast: podcast, in: context)
             refreshSettingsSnapshot()
         }
+        .alert("Couldn't change ad detection", isPresented: .constant(toggleError != nil), actions: {
+            Button("OK") { toggleError = nil }
+        }, message: {
+            Text(toggleError ?? "")
+        })
+    }
+
+    /// Server-owned: applied optimistically, rolled back if the PATCH fails.
+    private var adAnalysisBinding: Binding<Bool> {
+        Binding(
+            get: { podcast.adAnalysisEnabled },
+            set: { enabled in
+                let target = podcast
+                Task {
+                    do {
+                        try await SyncService.shared.setPodcastAdAnalysis(target, enabled: enabled)
+                    } catch {
+                        toggleError = error.localizedDescription
+                    }
+                }
+            }
+        )
     }
 
     private func refreshSettingsSnapshot() {

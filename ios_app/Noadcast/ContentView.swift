@@ -4,9 +4,13 @@ import os
 
 struct ContentView: View {
     @Environment(\.modelContext) private var context
+    @Environment(\.scenePhase) private var scenePhase
     @State private var showFullPlayer = false
+    @State private var showServerSetup = false
+    @AppStorage("ServerSetupPromptDismissed") private var serverSetupPromptDismissed = false
 
     private let player = PlayerService.shared
+    private let sync = SyncService.shared
 
     var body: some View {
         TabView {
@@ -33,6 +37,35 @@ struct ContentView: View {
         .sheet(isPresented: $showFullPlayer) {
             NowPlayingView()
         }
+        .sheet(isPresented: $showServerSetup, onDismiss: {
+            serverSetupPromptDismissed = true
+        }) {
+            NavigationStack {
+                ServerSetupView()
+                    .toolbar {
+                        ToolbarItem(placement: .confirmationAction) {
+                            Button("Done") { showServerSetup = false }
+                        }
+                    }
+            }
+        }
+        .overlay(alignment: .top) {
+            if sync.authFailed {
+                authBanner
+            }
+        }
+        .onChange(of: scenePhase) { _, phase in
+            switch phase {
+            case .active:
+                sync.appDidBecomeActive()
+            case .background:
+                sync.appDidEnterBackground()
+            case .inactive:
+                break
+            @unknown default:
+                break
+            }
+        }
         .task {
             let taskState = Log.signposter.beginInterval("ContentView.task")
             defer { Log.signposter.endInterval("ContentView.task", taskState) }
@@ -41,23 +74,35 @@ struct ContentView: View {
             }
             PlayerService.shared.restoreLastPlayedEpisode(context: context)
 
-            // Backfill denormalized podcast/episode metadata for rows that
-            // pre-date those fields. Runs on a background `@ModelActor` so
-            // relationship walks don't land on the scrolling path.
-            let container = context.container
-            Task.detached(priority: .background) {
-                let backfiller = MetadataBackfillActor(modelContainer: container)
-                await backfiller.backfillLatestEpisodeDates()
+            if !APIConfiguration.isConfigured, !serverSetupPromptDismissed {
+                showServerSetup = true
             }
 
-            // Backfill artwork for podcasts that were subscribed before the
-            // local-cache feature shipped (or whose previous cache attempt
-            // failed). `cache(for:)` is a no-op when the file is already on
-            // disk, so this is cheap to call against the whole library.
+            // Backfill artwork for podcasts whose cache is missing (or whose
+            // previous attempt failed). `cache(for:)` is a no-op when the file
+            // is already on disk, so this is cheap against the whole library.
             Task {
                 await ArtworkService.shared.backfillAllPodcasts(context: context)
             }
         }
+    }
+
+    /// Shown while the server rejects the token (401); polling and sync
+    /// stop until the token is fixed, so there is no retry storm.
+    private var authBanner: some View {
+        Button {
+            showServerSetup = true
+        } label: {
+            Label("Server rejected the access token. Tap to update it.", systemImage: "exclamationmark.triangle.fill")
+                .font(.footnote.weight(.semibold))
+                .foregroundStyle(.white)
+                .padding(.horizontal, 14)
+                .padding(.vertical, 8)
+                .background(Color.red.opacity(0.9), in: Capsule())
+        }
+        .buttonStyle(.plain)
+        .padding(.top, 4)
+        .transition(.move(edge: .top).combined(with: .opacity))
     }
 }
 
@@ -66,6 +111,6 @@ struct ContentView: View {
         .modelContainer(for: [
             Podcast.self, Episode.self, AdMarker.self,
             QueueItem.self, AppSettings.self,
-            UsageHistoryDay.self, TokenUsageRecord.self
+            UsageHistoryDay.self, SyncCursor.self
         ], inMemory: true)
 }

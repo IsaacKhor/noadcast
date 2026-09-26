@@ -13,6 +13,7 @@ struct PodcastsView: View {
     @State private var sortedPodcasts: [Podcast] = []
     @State private var sortMode: PodcastSortMode = .latestEpisode
     @State private var lastGlobalRefreshAt: Date?
+    @State private var unsubscribeError: String?
 
     private var visiblePodcasts: [Podcast] {
         let source = sortedPodcasts.isEmpty && !podcasts.isEmpty ? podcasts : sortedPodcasts
@@ -40,10 +41,18 @@ struct PodcastsView: View {
         NavigationStack {
             Group {
                 if podcasts.isEmpty {
-                    ContentUnavailableView {
-                        Label("No podcasts yet", systemImage: "rectangle.stack.badge.plus")
-                    } description: {
-                        Text("Tap + to add a podcast by feed URL or search the iTunes directory.")
+                    if APIConfiguration.isConfigured {
+                        ContentUnavailableView {
+                            Label("No podcasts yet", systemImage: "rectangle.stack.badge.plus")
+                        } description: {
+                            Text("Tap + to add a podcast by feed URL or search the iTunes directory. Your server fetches and processes new episodes.")
+                        }
+                    } else {
+                        ContentUnavailableView {
+                            Label("Not connected", systemImage: "server.rack")
+                        } description: {
+                            Text("Connect to your Noadcast server in Settings → Server to see your podcasts.")
+                        }
                     }
                 } else if visiblePodcasts.isEmpty {
                     ContentUnavailableView.search(text: searchText)
@@ -88,6 +97,7 @@ struct PodcastsView: View {
                     } label: {
                         Image(systemName: "plus")
                     }
+                    .disabled(!APIConfiguration.isConfigured)
                 }
             }
             .sheet(isPresented: $showAdd) {
@@ -100,6 +110,11 @@ struct PodcastsView: View {
             .onAppear { refreshSettingsSnapshot() }
             .onChange(of: podcasts) { _, _ in refreshSort() }
             .onChange(of: sortMode) { _, _ in refreshSort() }
+            .alert("Couldn't unsubscribe", isPresented: .constant(unsubscribeError != nil), actions: {
+                Button("OK") { unsubscribeError = nil }
+            }, message: {
+                Text(unsubscribeError ?? "")
+            })
         }
     }
 
@@ -131,10 +146,18 @@ struct PodcastsView: View {
         }
     }
 
+    /// Unsubscribing goes to the server first (`DELETE /podcasts/{id}`);
+    /// the row disappears once the server confirms.
     private func deletePodcasts(at offsets: IndexSet) {
         let toDelete = offsets.map { visiblePodcasts[$0] }
-        for podcast in toDelete {
-            try? SubscriptionService.shared.unsubscribe(podcast, in: context)
+        Task {
+            for podcast in toDelete {
+                do {
+                    try await SubscriptionService.shared.unsubscribe(podcast, in: context)
+                } catch {
+                    unsubscribeError = error.localizedDescription
+                }
+            }
         }
     }
 }

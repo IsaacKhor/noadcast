@@ -1,0 +1,532 @@
+{
+  "verified": true,
+  "shared_inputs": {
+    "manifest": "benchmarks/tal/manifest.json",
+    "manifest_sha256": "0119fef3038b32b23a564d077b475ad16da772a7cb5d387aa4c40a7659eac003",
+    "pcm_manifest": "benchmarks/tal/pcm/manifest.json",
+    "pcm_manifest_sha256": "44b7976afe06e1bf551efd35276b53d32b13a9ff116dddc41d787f6f5d0834ea",
+    "episodes": [
+      {
+        "index": 1,
+        "mp3": "benchmarks/tal/audio/01-646.mp3",
+        "mp3_sha256": "b9489445cc15440d12d9e4398d16d1f9b91e63f6e2e7c6901c2a0bc68bdd3235",
+        "pcm": "benchmarks/tal/pcm/01-646.wav",
+        "pcm_sha256": "7c6194adc7d5fe5e33cc64eb92b95175951bae1b68d584054a05067d82984978",
+        "hashes_verified": true
+      },
+      {
+        "index": 2,
+        "mp3": "benchmarks/tal/audio/02-449.mp3",
+        "mp3_sha256": "d4e718ad27194e5c5068a0523bcd1850d550f4c05480f9e725d184c2141d322b",
+        "pcm": "benchmarks/tal/pcm/02-449.wav",
+        "pcm_sha256": "6f2442f3f04bca02a13ae260706197b7587a78321773e46fe0c0607a42a78605",
+        "hashes_verified": true
+      },
+      {
+        "index": 3,
+        "mp3": "benchmarks/tal/audio/03-896.mp3",
+        "mp3_sha256": "11194974436eb864720ac2d21d54c07d8d43e65f9d68b74f5ddbc407191ddddd",
+        "pcm": "benchmarks/tal/pcm/03-896.wav",
+        "pcm_sha256": "6984da741371b0cccf978b25dee9b7827a65464f0a24545bfa79bf369e976d6c",
+        "hashes_verified": true
+      },
+      {
+        "index": 4,
+        "mp3": "benchmarks/tal/audio/04-206.mp3",
+        "mp3_sha256": "9fe0b3fab310f3690cbc3ed9cc35c19d16c66224cc68b6b67687725554dbebb8",
+        "pcm": "benchmarks/tal/pcm/04-206.wav",
+        "pcm_sha256": "13b1b5d77d4daade859552ec2c470999151ce40312a273e149dae29e6f73847d",
+        "hashes_verified": true
+      },
+      {
+        "index": 5,
+        "mp3": "benchmarks/tal/audio/05-895.mp3",
+        "mp3_sha256": "6fdd6aca23473faade65d5783c42dc747d4e3676afccadc7be557faf6404c72d",
+        "pcm": "benchmarks/tal/pcm/05-895.wav",
+        "pcm_sha256": "2134b2cd4eefd6b7980284fed4e864f0bfe1077a011b9b44c9c5b69bb7aad842",
+        "hashes_verified": true
+      },
+      {
+        "index": 6,
+        "mp3": "benchmarks/tal/audio/06-894.mp3",
+        "mp3_sha256": "6f2b571502180f7d52702bff3d9e00546798885f1a8909e972ee70069203317d",
+        "pcm": "benchmarks/tal/pcm/06-894.wav",
+        "pcm_sha256": "6e7cd200bbef97e1a3376040b081e9cf2395f49ef09cd281a85e4287eaf6826c",
+        "hashes_verified": true
+      },
+      {
+        "index": 7,
+        "mp3": "benchmarks/tal/audio/07-893.mp3",
+        "mp3_sha256": "d6997f0e5e8d7d160fdbbca473b0716263bc32b8214d70777ab4b659e356c87f",
+        "pcm": "benchmarks/tal/pcm/07-893.wav",
+        "pcm_sha256": "f4bab9fed155744c6fb772fb9a2e184a45d045a4c91c387031563ad4d152943c",
+        "hashes_verified": true
+      },
+      {
+        "index": 8,
+        "mp3": "benchmarks/tal/audio/08-892.mp3",
+        "mp3_sha256": "dbfcbd52c48c69893d49e21d094523fa1c06c5f8ce6c94f592469bf245001aea",
+        "pcm": "benchmarks/tal/pcm/08-892.wav",
+        "pcm_sha256": "dfb5673d1872bbc17413f91d675a6bc5057d7842fcb4550a94d15ff61fe9fa34",
+        "hashes_verified": true
+      },
+      {
+        "index": 9,
+        "mp3": "benchmarks/tal/audio/09-891.mp3",
+        "mp3_sha256": "039a5127d785970542f46fd350ef7919ddd04d3072f424aab260d15a8554c653",
+        "pcm": "benchmarks/tal/pcm/09-891.wav",
+        "pcm_sha256": "bcdcf078a856572e05be8f2d7fb4c579276a16adec385f67bf1d087f65408428",
+        "hashes_verified": true
+      },
+      {
+        "index": 10,
+        "mp3": "benchmarks/tal/audio/10-890.mp3",
+        "mp3_sha256": "d0e81fb084cf85eaa7be58cbfb3976a6535e29d9875199aaec86adf6193de6ad",
+        "pcm": "benchmarks/tal/pcm/10-890.wav",
+        "pcm_sha256": "a5e9f6ad9c8d5b2bb0f443942adbf4480a3057aa985cec8db957a1206db32c7c",
+        "hashes_verified": true
+      }
+    ]
+  },
+  "runs": [
+    {
+      "results": "benchmarks/tal/results.json",
+      "complete_full_corpus": true,
+      "exact_episode_set_verified": true,
+      "source_hashes_verified": true,
+      "durations_verified": true,
+      "transcripts_verified": [
+        {
+          "index": 1,
+          "json": "benchmarks/tal/transcripts/01-646.json",
+          "text": "benchmarks/tal/transcripts/01-646.txt",
+          "item_count": 122,
+          "nonempty": true
+        },
+        {
+          "index": 2,
+          "json": "benchmarks/tal/transcripts/02-449.json",
+          "text": "benchmarks/tal/transcripts/02-449.txt",
+          "item_count": 121,
+          "nonempty": true
+        },
+        {
+          "index": 3,
+          "json": "benchmarks/tal/transcripts/03-896.json",
+          "text": "benchmarks/tal/transcripts/03-896.txt",
+          "item_count": 133,
+          "nonempty": true
+        },
+        {
+          "index": 4,
+          "json": "benchmarks/tal/transcripts/04-206.json",
+          "text": "benchmarks/tal/transcripts/04-206.txt",
+          "item_count": 115,
+          "nonempty": true
+        },
+        {
+          "index": 5,
+          "json": "benchmarks/tal/transcripts/05-895.json",
+          "text": "benchmarks/tal/transcripts/05-895.txt",
+          "item_count": 107,
+          "nonempty": true
+        },
+        {
+          "index": 6,
+          "json": "benchmarks/tal/transcripts/06-894.json",
+          "text": "benchmarks/tal/transcripts/06-894.txt",
+          "item_count": 119,
+          "nonempty": true
+        },
+        {
+          "index": 7,
+          "json": "benchmarks/tal/transcripts/07-893.json",
+          "text": "benchmarks/tal/transcripts/07-893.txt",
+          "item_count": 117,
+          "nonempty": true
+        },
+        {
+          "index": 8,
+          "json": "benchmarks/tal/transcripts/08-892.json",
+          "text": "benchmarks/tal/transcripts/08-892.txt",
+          "item_count": 120,
+          "nonempty": true
+        },
+        {
+          "index": 9,
+          "json": "benchmarks/tal/transcripts/09-891.json",
+          "text": "benchmarks/tal/transcripts/09-891.txt",
+          "item_count": 139,
+          "nonempty": true
+        },
+        {
+          "index": 10,
+          "json": "benchmarks/tal/transcripts/10-890.json",
+          "text": "benchmarks/tal/transcripts/10-890.txt",
+          "item_count": 102,
+          "nonempty": true
+        }
+      ],
+      "summary_arithmetic_verified": true,
+      "parallel_throughput_denominator": "suite_wall_seconds",
+      "model_hash_verified": true,
+      "model_sha256": "62b2a45b05ee59acb4a5341b33ee35e041395d378d418a18acfe4c9e768ee37a",
+      "model_revision": "d1d751a5f8271d482d14ca55d9e2deeebbae577f",
+      "normalized_configuration": {
+        "engine": "faster-whisper",
+        "engine_revision": null,
+        "model": "Systran/faster-whisper-small.en",
+        "decoder": "whisper beam 5",
+        "quantization": "int8",
+        "workers": 1,
+        "threads_per_worker": 16,
+        "batch_size": 8,
+        "chunk_seconds": null,
+        "chunk_overlap_seconds": null,
+        "sample_seconds": 0,
+        "sample_limit": null,
+        "sample_rate": null,
+        "input_format": "mp3",
+        "decoded_input_manifest_sha256": null
+      },
+      "model_path": "benchmarks/tal/models/small.en/model.bin"
+    },
+    {
+      "results": "benchmarks/tal/runs/tiny-en-full-10x2/results.json",
+      "complete_full_corpus": true,
+      "exact_episode_set_verified": true,
+      "source_hashes_verified": true,
+      "durations_verified": true,
+      "transcripts_verified": [
+        {
+          "index": 1,
+          "json": "benchmarks/tal/runs/tiny-en-full-10x2/transcripts/01-646.json",
+          "text": "benchmarks/tal/runs/tiny-en-full-10x2/transcripts/01-646.txt",
+          "item_count": 122,
+          "nonempty": true
+        },
+        {
+          "index": 2,
+          "json": "benchmarks/tal/runs/tiny-en-full-10x2/transcripts/02-449.json",
+          "text": "benchmarks/tal/runs/tiny-en-full-10x2/transcripts/02-449.txt",
+          "item_count": 121,
+          "nonempty": true
+        },
+        {
+          "index": 3,
+          "json": "benchmarks/tal/runs/tiny-en-full-10x2/transcripts/03-896.json",
+          "text": "benchmarks/tal/runs/tiny-en-full-10x2/transcripts/03-896.txt",
+          "item_count": 133,
+          "nonempty": true
+        },
+        {
+          "index": 4,
+          "json": "benchmarks/tal/runs/tiny-en-full-10x2/transcripts/04-206.json",
+          "text": "benchmarks/tal/runs/tiny-en-full-10x2/transcripts/04-206.txt",
+          "item_count": 115,
+          "nonempty": true
+        },
+        {
+          "index": 5,
+          "json": "benchmarks/tal/runs/tiny-en-full-10x2/transcripts/05-895.json",
+          "text": "benchmarks/tal/runs/tiny-en-full-10x2/transcripts/05-895.txt",
+          "item_count": 107,
+          "nonempty": true
+        },
+        {
+          "index": 6,
+          "json": "benchmarks/tal/runs/tiny-en-full-10x2/transcripts/06-894.json",
+          "text": "benchmarks/tal/runs/tiny-en-full-10x2/transcripts/06-894.txt",
+          "item_count": 119,
+          "nonempty": true
+        },
+        {
+          "index": 7,
+          "json": "benchmarks/tal/runs/tiny-en-full-10x2/transcripts/07-893.json",
+          "text": "benchmarks/tal/runs/tiny-en-full-10x2/transcripts/07-893.txt",
+          "item_count": 117,
+          "nonempty": true
+        },
+        {
+          "index": 8,
+          "json": "benchmarks/tal/runs/tiny-en-full-10x2/transcripts/08-892.json",
+          "text": "benchmarks/tal/runs/tiny-en-full-10x2/transcripts/08-892.txt",
+          "item_count": 120,
+          "nonempty": true
+        },
+        {
+          "index": 9,
+          "json": "benchmarks/tal/runs/tiny-en-full-10x2/transcripts/09-891.json",
+          "text": "benchmarks/tal/runs/tiny-en-full-10x2/transcripts/09-891.txt",
+          "item_count": 139,
+          "nonempty": true
+        },
+        {
+          "index": 10,
+          "json": "benchmarks/tal/runs/tiny-en-full-10x2/transcripts/10-890.json",
+          "text": "benchmarks/tal/runs/tiny-en-full-10x2/transcripts/10-890.txt",
+          "item_count": 102,
+          "nonempty": true
+        }
+      ],
+      "summary_arithmetic_verified": true,
+      "parallel_throughput_denominator": "suite_wall_seconds",
+      "model_hash_verified": true,
+      "model_sha256": "1a5afae06a4db91c975c9a9d78be5cc110ee4ea022ad57d55492e4550e936b2a",
+      "model_revision": "0d3d19a32d3338f10357c0889762bd8d64bbdeba",
+      "normalized_configuration": {
+        "engine": "faster-whisper",
+        "engine_revision": null,
+        "model": "Systran/faster-whisper-tiny.en",
+        "decoder": "whisper beam 5",
+        "quantization": "int8",
+        "workers": 10,
+        "threads_per_worker": 2,
+        "batch_size": 8,
+        "chunk_seconds": null,
+        "chunk_overlap_seconds": null,
+        "sample_seconds": 0,
+        "sample_limit": null,
+        "sample_rate": null,
+        "input_format": "pcm",
+        "decoded_input_manifest_sha256": "44b7976afe06e1bf551efd35276b53d32b13a9ff116dddc41d787f6f5d0834ea"
+      },
+      "model_path": "benchmarks/tal/models/tiny.en/model.bin"
+    },
+    {
+      "results": "benchmarks/tal/runs/parakeet-tdt-110m-full-10x2/results.json",
+      "complete_full_corpus": true,
+      "exact_episode_set_verified": true,
+      "source_hashes_verified": true,
+      "durations_verified": true,
+      "transcripts_verified": [
+        {
+          "index": 1,
+          "json": "benchmarks/tal/runs/parakeet-tdt-110m-full-10x2/transcripts/01-646.json",
+          "text": "benchmarks/tal/runs/parakeet-tdt-110m-full-10x2/transcripts/01-646.txt",
+          "item_count": 131,
+          "nonempty": true
+        },
+        {
+          "index": 2,
+          "json": "benchmarks/tal/runs/parakeet-tdt-110m-full-10x2/transcripts/02-449.json",
+          "text": "benchmarks/tal/runs/parakeet-tdt-110m-full-10x2/transcripts/02-449.txt",
+          "item_count": 119,
+          "nonempty": true
+        },
+        {
+          "index": 3,
+          "json": "benchmarks/tal/runs/parakeet-tdt-110m-full-10x2/transcripts/03-896.json",
+          "text": "benchmarks/tal/runs/parakeet-tdt-110m-full-10x2/transcripts/03-896.txt",
+          "item_count": 133,
+          "nonempty": true
+        },
+        {
+          "index": 4,
+          "json": "benchmarks/tal/runs/parakeet-tdt-110m-full-10x2/transcripts/04-206.json",
+          "text": "benchmarks/tal/runs/parakeet-tdt-110m-full-10x2/transcripts/04-206.txt",
+          "item_count": 119,
+          "nonempty": true
+        },
+        {
+          "index": 5,
+          "json": "benchmarks/tal/runs/parakeet-tdt-110m-full-10x2/transcripts/05-895.json",
+          "text": "benchmarks/tal/runs/parakeet-tdt-110m-full-10x2/transcripts/05-895.txt",
+          "item_count": 116,
+          "nonempty": true
+        },
+        {
+          "index": 6,
+          "json": "benchmarks/tal/runs/parakeet-tdt-110m-full-10x2/transcripts/06-894.json",
+          "text": "benchmarks/tal/runs/parakeet-tdt-110m-full-10x2/transcripts/06-894.txt",
+          "item_count": 119,
+          "nonempty": true
+        },
+        {
+          "index": 7,
+          "json": "benchmarks/tal/runs/parakeet-tdt-110m-full-10x2/transcripts/07-893.json",
+          "text": "benchmarks/tal/runs/parakeet-tdt-110m-full-10x2/transcripts/07-893.txt",
+          "item_count": 121,
+          "nonempty": true
+        },
+        {
+          "index": 8,
+          "json": "benchmarks/tal/runs/parakeet-tdt-110m-full-10x2/transcripts/08-892.json",
+          "text": "benchmarks/tal/runs/parakeet-tdt-110m-full-10x2/transcripts/08-892.txt",
+          "item_count": 122,
+          "nonempty": true
+        },
+        {
+          "index": 9,
+          "json": "benchmarks/tal/runs/parakeet-tdt-110m-full-10x2/transcripts/09-891.json",
+          "text": "benchmarks/tal/runs/parakeet-tdt-110m-full-10x2/transcripts/09-891.txt",
+          "item_count": 141,
+          "nonempty": true
+        },
+        {
+          "index": 10,
+          "json": "benchmarks/tal/runs/parakeet-tdt-110m-full-10x2/transcripts/10-890.json",
+          "text": "benchmarks/tal/runs/parakeet-tdt-110m-full-10x2/transcripts/10-890.txt",
+          "item_count": 109,
+          "nonempty": true
+        }
+      ],
+      "summary_arithmetic_verified": true,
+      "parallel_throughput_denominator": "suite_wall_seconds",
+      "model_hash_verified": true,
+      "model_sha256": "614feee3a990cf0e672b0314f4da0c80ae8da9094507f5ccb7c42e43b5fc5a12",
+      "model_revision": "431a349f3051ab85c22b9b7a2741b5fe77065665",
+      "normalized_configuration": {
+        "engine": "parakeet.cpp",
+        "engine_revision": "e75de9b6b9b688fd293aa22f7e27aa724ea286f8",
+        "model": "nvidia/parakeet-tdt_ctc-110m",
+        "decoder": "tdt",
+        "quantization": "q8_0",
+        "workers": 10,
+        "threads_per_worker": 2,
+        "batch_size": 8,
+        "chunk_seconds": 30,
+        "chunk_overlap_seconds": 0,
+        "sample_seconds": 0,
+        "sample_limit": 0,
+        "sample_rate": 16000,
+        "input_format": "pcm",
+        "decoded_input_manifest_sha256": "44b7976afe06e1bf551efd35276b53d32b13a9ff116dddc41d787f6f5d0834ea"
+      },
+      "model_path": "benchmarks/tal/models/parakeet-tdt_ctc-110m-q8_0.gguf"
+    },
+    {
+      "results": "benchmarks/tal/runs/parakeet-ctc-110m-full-10x2/results.json",
+      "complete_full_corpus": true,
+      "exact_episode_set_verified": true,
+      "source_hashes_verified": true,
+      "durations_verified": true,
+      "transcripts_verified": [
+        {
+          "index": 1,
+          "json": "benchmarks/tal/runs/parakeet-ctc-110m-full-10x2/transcripts/01-646.json",
+          "text": "benchmarks/tal/runs/parakeet-ctc-110m-full-10x2/transcripts/01-646.txt",
+          "item_count": 131,
+          "nonempty": true
+        },
+        {
+          "index": 2,
+          "json": "benchmarks/tal/runs/parakeet-ctc-110m-full-10x2/transcripts/02-449.json",
+          "text": "benchmarks/tal/runs/parakeet-ctc-110m-full-10x2/transcripts/02-449.txt",
+          "item_count": 119,
+          "nonempty": true
+        },
+        {
+          "index": 3,
+          "json": "benchmarks/tal/runs/parakeet-ctc-110m-full-10x2/transcripts/03-896.json",
+          "text": "benchmarks/tal/runs/parakeet-ctc-110m-full-10x2/transcripts/03-896.txt",
+          "item_count": 133,
+          "nonempty": true
+        },
+        {
+          "index": 4,
+          "json": "benchmarks/tal/runs/parakeet-ctc-110m-full-10x2/transcripts/04-206.json",
+          "text": "benchmarks/tal/runs/parakeet-ctc-110m-full-10x2/transcripts/04-206.txt",
+          "item_count": 119,
+          "nonempty": true
+        },
+        {
+          "index": 5,
+          "json": "benchmarks/tal/runs/parakeet-ctc-110m-full-10x2/transcripts/05-895.json",
+          "text": "benchmarks/tal/runs/parakeet-ctc-110m-full-10x2/transcripts/05-895.txt",
+          "item_count": 116,
+          "nonempty": true
+        },
+        {
+          "index": 6,
+          "json": "benchmarks/tal/runs/parakeet-ctc-110m-full-10x2/transcripts/06-894.json",
+          "text": "benchmarks/tal/runs/parakeet-ctc-110m-full-10x2/transcripts/06-894.txt",
+          "item_count": 119,
+          "nonempty": true
+        },
+        {
+          "index": 7,
+          "json": "benchmarks/tal/runs/parakeet-ctc-110m-full-10x2/transcripts/07-893.json",
+          "text": "benchmarks/tal/runs/parakeet-ctc-110m-full-10x2/transcripts/07-893.txt",
+          "item_count": 121,
+          "nonempty": true
+        },
+        {
+          "index": 8,
+          "json": "benchmarks/tal/runs/parakeet-ctc-110m-full-10x2/transcripts/08-892.json",
+          "text": "benchmarks/tal/runs/parakeet-ctc-110m-full-10x2/transcripts/08-892.txt",
+          "item_count": 122,
+          "nonempty": true
+        },
+        {
+          "index": 9,
+          "json": "benchmarks/tal/runs/parakeet-ctc-110m-full-10x2/transcripts/09-891.json",
+          "text": "benchmarks/tal/runs/parakeet-ctc-110m-full-10x2/transcripts/09-891.txt",
+          "item_count": 141,
+          "nonempty": true
+        },
+        {
+          "index": 10,
+          "json": "benchmarks/tal/runs/parakeet-ctc-110m-full-10x2/transcripts/10-890.json",
+          "text": "benchmarks/tal/runs/parakeet-ctc-110m-full-10x2/transcripts/10-890.txt",
+          "item_count": 109,
+          "nonempty": true
+        }
+      ],
+      "summary_arithmetic_verified": true,
+      "parallel_throughput_denominator": "suite_wall_seconds",
+      "model_hash_verified": true,
+      "model_sha256": "614feee3a990cf0e672b0314f4da0c80ae8da9094507f5ccb7c42e43b5fc5a12",
+      "model_revision": "431a349f3051ab85c22b9b7a2741b5fe77065665",
+      "normalized_configuration": {
+        "engine": "parakeet.cpp",
+        "engine_revision": "e75de9b6b9b688fd293aa22f7e27aa724ea286f8",
+        "model": "nvidia/parakeet-tdt_ctc-110m",
+        "decoder": "ctc",
+        "quantization": "q8_0",
+        "workers": 10,
+        "threads_per_worker": 2,
+        "batch_size": 8,
+        "chunk_seconds": 30,
+        "chunk_overlap_seconds": 0,
+        "sample_seconds": 0,
+        "sample_limit": 0,
+        "sample_rate": 16000,
+        "input_format": "pcm",
+        "decoded_input_manifest_sha256": "44b7976afe06e1bf551efd35276b53d32b13a9ff116dddc41d787f6f5d0834ea"
+      },
+      "model_path": "benchmarks/tal/models/parakeet-tdt_ctc-110m-q8_0.gguf"
+    }
+  ],
+  "comparison": {
+    "headline_denominator": "suite_wall_seconds",
+    "full_corpus_only": true,
+    "one_run_per_configuration": true,
+    "accuracy_evaluated": false,
+    "parakeet_decoder_pair": {
+      "verified": true,
+      "decoders": [
+        "tdt",
+        "ctc"
+      ],
+      "equal_fields": {
+        "model_sha256": "614feee3a990cf0e672b0314f4da0c80ae8da9094507f5ccb7c42e43b5fc5a12",
+        "decoded_input_manifest_sha256": "44b7976afe06e1bf551efd35276b53d32b13a9ff116dddc41d787f6f5d0834ea",
+        "workers": 10,
+        "threads_per_worker": 2,
+        "batch_size": 8,
+        "chunk_seconds": 30,
+        "chunk_overlap_seconds": 0,
+        "sample_seconds": 0,
+        "sample_limit": 0,
+        "sample_rate": 16000,
+        "engine_revision": "e75de9b6b9b688fd293aa22f7e27aa724ea286f8"
+      },
+      "differing_field": "decoder"
+    },
+    "outputs": [
+      "benchmarks/tal/COMPARISON.md",
+      "benchmarks/tal/comparison.csv"
+    ]
+  }
+}

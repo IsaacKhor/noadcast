@@ -284,6 +284,12 @@ def worker_main(worker_id, affinity, config, warmup_path, task_queue, result_que
     finally:
         if ctx:
             lib.parakeet_capi_free(ctx)
+    # ggml-cuda's static destructors run after the CUDA driver has begun
+    # tearing down and abort ("driver shutting down"). Flush the queue's feeder
+    # thread, then skip interpreter/library teardown; the CPU build is unaffected.
+    result_queue.close()
+    result_queue.join_thread()
+    os._exit(0)
 
 
 def get_message(result_queue, processes):
@@ -365,7 +371,9 @@ def main() -> int:
     config = {
         "engine": "parakeet.cpp", "model": "nvidia/parakeet-tdt_ctc-110m",
         "model_path": str(args.model_path.resolve()), "library_path": str(args.library_path.resolve()),
-        "device": "cpu",
+        # parakeet.cpp auto-selects the first GPU when built with one, unless PARAKEET_DEVICE=cpu.
+        "device": ("cuda" if any(args.library_path.resolve().parent.rglob("libggml-cuda.so"))
+                   and os.environ.get("PARAKEET_DEVICE", "").lower() != "cpu" else "cpu"),
         "quantization": "q8_0" if "q8_0" in args.model_path.name else "f16" if "f16" in args.model_path.name else "unknown",
         "decoder": args.decoder,
         "decoder_id": DECODERS[args.decoder], "workers": args.workers,
@@ -400,6 +408,10 @@ def main() -> int:
             "parent_affinity": sorted(os.sched_getaffinity(0)), "worker_affinities": affinities,
             "lscpu": command_output(["lscpu"]), "memory": command_output(["free", "-b"]),
             "load_start": os.getloadavg(),
+            # A GPU build (e.g. build-cuda) picks the first GPU itself; PARAKEET_DEVICE=cpu overrides.
+            "parakeet_device_env": os.environ.get("PARAKEET_DEVICE"),
+            "gpu": command_output(["nvidia-smi", "--query-gpu=name,driver_version,memory.total,compute_cap",
+                                   "--format=csv,noheader"]),
         },
         "workers": [], "episodes": [],
     }

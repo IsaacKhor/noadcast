@@ -2,20 +2,21 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
+	<key>BGTaskSchedulerPermittedIdentifiers</key>
+	<array>
+		<string>com.isaackhor.Noadcast.refresh</string>
+	</array>
 	<key>NSAppTransportSecurity</key>
 	<dict>
 		<key>NSAllowsArbitraryLoads</key>
 		<true/>
 	</dict>
 	<key>NSLocalNetworkUsageDescription</key>
-	<string>Noadcast connects to your configured local ad-detection server.</string>
-	<key>NSSpeechRecognitionUsageDescription</key>
-	<string>Noadcast uses on-device transcription to analyze downloaded episodes for ad detection.</string>
+	<string>Noadcast connects to your Noadcast server when it is on your local network.</string>
 	<key>UIBackgroundModes</key>
 	<array>
 		<string>audio</string>
 		<string>fetch</string>
-		<string>processing</string>
 	</array>
 </dict>
 </plist>

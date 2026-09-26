@@ -1,5 +1,153 @@
 # noadcast
 
+A self-hosted podcast system that skips ads, intros, and outros. A Python
+server polls RSS feeds, downloads each episode once, transcribes it locally
+with faster-whisper `tiny.en` using word-level timestamps joined into
+sentences, and asks a cloud model (Gemini or Claude) to find the skippable
+segments from the transcript text alone — audio never leaves the machine
+except to the phone. The iOS app is a thin client: it syncs podcasts,
+episodes, and skip markers from the server, and streams or downloads the
+audio the server stores.
+
+```
+            RSS feeds                       Gemini / Claude
+                │                         (transcript text only)
+                ▼                                   ▲
+ ┌──────────────────────────── laurel ──────────────┼──────────────┐
+ │ refresh ─▶ download ─▶ transcribe ─▶ join ─▶ classify ─▶ markers │
+ │ (SQLite job table, asyncio scheduler, spawned whisper workers)   │
+ │                  HTTP API + Range audio                          │
+ └──────────────────────────────┬───────────────────────────────────┘
+                                │ Tailscale
+                                ▼
+                     iOS app (SwiftData mirror,
+                     stream or download, skip)
+```
+
+- Server code: `src/noadcast/` (see `docs/API.md` for the wire contract).
+- iOS app: `ios_app/` (see `AGENTS.md` for app conventions).
+- Design record: the transcription benchmarks below, plus
+  `benchmarks/tal/WORD_TIMESTAMPS.md` for the cost of word timestamps.
+
+## Server
+
+The server runs on `laurel`, reachable from the phone over Tailscale at
+`http://laurel.turkey-galaxy.ts.net:8765`. One process owns everything: an
+asyncio scheduler over a SQLite job table (refresh, download, transcribe,
+classify, evict), a pool of spawned faster-whisper workers, and the HTTP API.
+Configuration lives in `secrets.env` (see `secrets.env.example` and
+`src/noadcast/config.py`); API keys never leave the server.
+
+```bash
+export UV_CACHE_DIR="$PWD/.cache/uv" TMPDIR="$PWD/.cache/tmp"
+uv pip install --python .venv/bin/python -e .
+cp secrets.env.example secrets.env && chmod 600 secrets.env
+.venv/bin/noadcast token        # paste into NOADCAST_API_TOKEN; add GEMINI_API_KEY / ANTHROPIC_API_KEY
+.venv/bin/noadcast models link benchmarks/tal/models/tiny.en   # or: noadcast models fetch
+.venv/bin/noadcast migrate
+.venv/bin/noadcast serve
+```
+
+To run it as a systemd user service, and for day-to-day operation (status,
+logs, reprocessing, backups), see [deploy/README.md](deploy/README.md).
+
+How an episode flows:
+
+1. **Refresh** polls each feed every ~30 minutes with conditional GETs. A new
+   subscription admits only its newest episode; later, only genuinely new
+   episodes are admitted, so an archive is never processed wholesale.
+2. **Download** fetches the audio once, resumably, and serves it back to
+   the phone with HTTP Range, so streaming and offline copies are the same
+   bytes the markers were computed on.
+3. **Transcribe** runs faster-whisper `tiny.en` on the GPU (CUDA, float16,
+   4 workers × batch 32; ~950× real time on a TITAN V, see
+   `benchmarks/tal/GPU.md`) with word timestamps; words are joined into sentences
+   (`src/noadcast/transcribe/joiner.py`) and stored along with the words.
+4. **Classify** joins pause and length fragments through their next punctuation
+   boundary, then sends lines such as `[22.24-23.88] A complete sentence.`
+   to Gemini or Claude. Each returned intro, ad, or outro has start and end
+   timestamps and a summary of its content. The server sanitises boundaries
+   against the transcript and true audio length, then exposes the segments
+   as episode markers for the app.
+   Every classification is kept, so providers and prompts can be compared
+   on identical transcripts.
+5. **Retention**: when the app reports an episode played, the server
+   deletes its audio but keeps the transcript and markers. Age and
+   free-space sweeps bound disk for episodes that are never played.
+
+## iOS app
+
+Open `ios_app/Noadcast.xcodeproj` in Xcode on a Mac (the app targets
+iOS 26), build, and in **Settings → Server** enter the server URL and the
+token from `secrets.env`, then **Test connection**. The app mirrors the
+server's podcasts, episodes, and markers into SwiftData for offline use,
+streams episodes that aren't downloaded, and keeps playback position,
+played state, and queue order on the device. `docs/API.md` is the contract
+between the two halves; `AGENTS.md` describes the app's conventions.
+
+## Development
+
+```bash
+export TMPDIR="$PWD/.cache/tmp" HF_HOME="$PWD/.cache/huggingface" XDG_CACHE_HOME="$PWD/.cache"
+.venv/bin/python -m unittest discover -s tests -t .
+```
+
+The suite runs in about 35 seconds with the network, transcription pool,
+and LLMs faked; `tests/e2e/test_tal_offline.py` drives the real HTTP API
+against a local copy of the This American Life feed. Set
+`NOADCAST_E2E_REAL_ASR=1` to run one episode through the real
+transcription pool as well.
+
+## Evaluation
+
+Experiment A measured the cost of faster-whisper word timestamps with four
+sequential full-corpus `tiny.en` runs in OFF, ON, ON, OFF order (10 workers ×
+2 threads, PCM, 250 ms memory sampling). Word timestamps took **1.124×** the
+pooled suite wall time (1.129× and 1.118× pairwise) and 1.115× the summed
+worker CPU, with no detectable aggregate peak-PSS increase and
+**byte-identical transcript text** on all ten episodes, so they are accepted;
+segment bounds become word-derived. See
+[the word-timestamp report](benchmarks/tal/WORD_TIMESTAMPS.md). Rerun with
+`scripts/run_word_timestamps_crossover.sh <tag>` and regenerate with
+`.venv/bin/python scripts/report_word_timestamps.py` (pass the four new run
+directories in execution order; the default is the 20260922 runs).
+
+Experiment B asks whether `tiny.en` transcripts give the classifier the same
+skip segments as `small.en`, measured against the LLM's own repeat-to-repeat
+noise; no human labels exist, so it reports agreement, not accuracy. The
+`small.en` arm is `benchmarks/tal/runs/small-en-words-20260922`, produced by
+`.venv/bin/python -u scripts/benchmark_whisper_parallel.py --workers 4
+--threads-per-worker 2 --input-format pcm --model-path
+benchmarks/tal/models/small.en --model-id Systran/faster-whisper-small.en
+--model-revision d1d751a5f8271d482d14ca55d9e2deeebbae577f --word-timestamps
+--run-id small-en-words-20260922` on a shared host, so its timings are not a
+benchmark. **It has not been run yet: it needs `GEMINI_API_KEY` (and
+`ANTHROPIC_API_KEY` for `--arm claude:claude-sonnet-5`) in `secrets.env`.**
+Record once, then score and report offline:
+
+```bash
+.venv/bin/python scripts/eval_ad_segments.py --eval-id tal-asr-v1 --record
+.venv/bin/python scripts/eval_ad_segments.py --eval-id tal-asr-v1   # replay only
+.venv/bin/python scripts/score_ad_eval.py --eval-id tal-asr-v1
+.venv/bin/python scripts/report_ad_eval.py --eval-id tal-asr-v1
+```
+
+Everything lands in `benchmarks/evals/tal-asr-v1/` (`config.json` pins,
+cassettes, prompts, `AD_EVAL.md`, `ad-eval-verification.json`,
+`ad-eval.csv`). TAL contains no third-party ads, so that eval measures
+intro/outro agreement only. The ad-heavy corpus in `benchmarks/ads/` (8
+dynamic-ad-insertion episodes from 4 feeds, 6.98 hours) is fetched with
+`.venv/bin/python scripts/download_ads_corpus.py`, which reuses the saved
+feed snapshots (`--refresh-feeds` refetches and changes the corpus). It has
+been transcribed with both models (`benchmarks/ads/runs/ads-{tiny,small}-en-words-20260923`,
+via `benchmark_whisper_parallel.py --corpus benchmarks/ads --input-format mp3`);
+run the same eval over it with `--eval-id ads-asr-v1 --corpus benchmarks/ads
+--variant tiny.en=benchmarks/ads/runs/ads-tiny-en-words-20260923 --variant
+small.en=benchmarks/ads/runs/ads-small-en-words-20260923`. Harness tests:
+`.venv/bin/python -m unittest discover -s tests -t . -p 'test_eval_*.py'`.
+
+## Transcription benchmarks
+
 Local transcription speed benchmark of the latest ten This American Life feed
 releases, downloaded on 2026-09-20. The corpus contains 10 hours 13 minutes of
 audio (595 MB). Feed releases include reruns; selection is by publication date,

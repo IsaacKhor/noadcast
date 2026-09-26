@@ -5,6 +5,9 @@ struct AdMarkerTimeline: View {
     let currentTime: Double
     let duration: Double
     let adRegions: [AdRegion]
+    /// Loaded ranges of a streamed item, drawn as a faint band under the
+    /// track. Empty for local files.
+    var bufferedRanges: [ClosedRange<Double>] = []
     let onSeek: (Double) -> Void
 
     @State private var dragValue: Double?
@@ -26,6 +29,20 @@ struct AdMarkerTimeline: View {
                         .frame(width: width, height: Self.trackHeight)
 
                     if duration > 0 {
+                        // Buffered ranges of a stream, behind everything else.
+                        ForEach(Array(bufferedRanges.enumerated()), id: \.offset) { _, range in
+                            let start = max(0, min(1, range.lowerBound / duration))
+                            let end = max(0, min(1, range.upperBound / duration))
+                            let bandWidth = max(0, (end - start) * width)
+                            Capsule()
+                                .fill(Color.secondary.opacity(0.35))
+                                .frame(width: bandWidth, height: Self.trackHeight)
+                                .position(
+                                    x: start * width + bandWidth / 2,
+                                    y: geo.size.height / 2
+                                )
+                        }
+
                         // Ad regions: taller than the track so they bracket
                         // the playhead. Bright fill + faint top/bottom border
                         // so they read clearly against both the unfilled and
@@ -84,7 +101,7 @@ struct AdMarkerTimeline: View {
                         }
                 )
             }
-            .frame(height: Self.adHeight)
+            .frame(height: 44)
 
             HStack {
                 Text(TimeFormatting.timestamp(displayedTime))

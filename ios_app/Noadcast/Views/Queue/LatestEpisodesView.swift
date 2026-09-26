@@ -36,6 +36,16 @@ struct LatestEpisodesView: View {
                                 }
                                 .tint(.blue)
                             }
+                            .swipeActions(edge: .trailing) {
+                                if !episode.isMarkedDownloaded {
+                                    Button {
+                                        SubscriptionService.shared.download(episode, in: context)
+                                    } label: {
+                                        Label("Download", systemImage: "arrow.down.circle")
+                                    }
+                                    .tint(.green)
+                                }
+                            }
                     }
                 }
                 .listStyle(.plain)

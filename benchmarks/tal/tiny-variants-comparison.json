@@ -1,0 +1,1127 @@
+{
+  "verified": true,
+  "scope": "English TAL corpus with language=en forced",
+  "accuracy_evaluated": false,
+  "chinese_runtime_evaluated": false,
+  "shared_inputs": {
+    "manifest": "benchmarks/tal/manifest.json",
+    "manifest_sha256": "0119fef3038b32b23a564d077b475ad16da772a7cb5d387aa4c40a7659eac003",
+    "pcm_manifest": "benchmarks/tal/pcm/manifest.json",
+    "pcm_manifest_sha256": "44b7976afe06e1bf551efd35276b53d32b13a9ff116dddc41d787f6f5d0834ea",
+    "episodes": [
+      {
+        "index": 1,
+        "mp3": "benchmarks/tal/audio/01-646.mp3",
+        "mp3_sha256": "b9489445cc15440d12d9e4398d16d1f9b91e63f6e2e7c6901c2a0bc68bdd3235",
+        "pcm": "benchmarks/tal/pcm/01-646.wav",
+        "pcm_sha256": "7c6194adc7d5fe5e33cc64eb92b95175951bae1b68d584054a05067d82984978",
+        "hashes_verified": true
+      },
+      {
+        "index": 2,
+        "mp3": "benchmarks/tal/audio/02-449.mp3",
+        "mp3_sha256": "d4e718ad27194e5c5068a0523bcd1850d550f4c05480f9e725d184c2141d322b",
+        "pcm": "benchmarks/tal/pcm/02-449.wav",
+        "pcm_sha256": "6f2442f3f04bca02a13ae260706197b7587a78321773e46fe0c0607a42a78605",
+        "hashes_verified": true
+      },
+      {
+        "index": 3,
+        "mp3": "benchmarks/tal/audio/03-896.mp3",
+        "mp3_sha256": "11194974436eb864720ac2d21d54c07d8d43e65f9d68b74f5ddbc407191ddddd",
+        "pcm": "benchmarks/tal/pcm/03-896.wav",
+        "pcm_sha256": "6984da741371b0cccf978b25dee9b7827a65464f0a24545bfa79bf369e976d6c",
+        "hashes_verified": true
+      },
+      {
+        "index": 4,
+        "mp3": "benchmarks/tal/audio/04-206.mp3",
+        "mp3_sha256": "9fe0b3fab310f3690cbc3ed9cc35c19d16c66224cc68b6b67687725554dbebb8",
+        "pcm": "benchmarks/tal/pcm/04-206.wav",
+        "pcm_sha256": "13b1b5d77d4daade859552ec2c470999151ce40312a273e149dae29e6f73847d",
+        "hashes_verified": true
+      },
+      {
+        "index": 5,
+        "mp3": "benchmarks/tal/audio/05-895.mp3",
+        "mp3_sha256": "6fdd6aca23473faade65d5783c42dc747d4e3676afccadc7be557faf6404c72d",
+        "pcm": "benchmarks/tal/pcm/05-895.wav",
+        "pcm_sha256": "2134b2cd4eefd6b7980284fed4e864f0bfe1077a011b9b44c9c5b69bb7aad842",
+        "hashes_verified": true
+      },
+      {
+        "index": 6,
+        "mp3": "benchmarks/tal/audio/06-894.mp3",
+        "mp3_sha256": "6f2b571502180f7d52702bff3d9e00546798885f1a8909e972ee70069203317d",
+        "pcm": "benchmarks/tal/pcm/06-894.wav",
+        "pcm_sha256": "6e7cd200bbef97e1a3376040b081e9cf2395f49ef09cd281a85e4287eaf6826c",
+        "hashes_verified": true
+      },
+      {
+        "index": 7,
+        "mp3": "benchmarks/tal/audio/07-893.mp3",
+        "mp3_sha256": "d6997f0e5e8d7d160fdbbca473b0716263bc32b8214d70777ab4b659e356c87f",
+        "pcm": "benchmarks/tal/pcm/07-893.wav",
+        "pcm_sha256": "f4bab9fed155744c6fb772fb9a2e184a45d045a4c91c387031563ad4d152943c",
+        "hashes_verified": true
+      },
+      {
+        "index": 8,
+        "mp3": "benchmarks/tal/audio/08-892.mp3",
+        "mp3_sha256": "dbfcbd52c48c69893d49e21d094523fa1c06c5f8ce6c94f592469bf245001aea",
+        "pcm": "benchmarks/tal/pcm/08-892.wav",
+        "pcm_sha256": "dfb5673d1872bbc17413f91d675a6bc5057d7842fcb4550a94d15ff61fe9fa34",
+        "hashes_verified": true
+      },
+      {
+        "index": 9,
+        "mp3": "benchmarks/tal/audio/09-891.mp3",
+        "mp3_sha256": "039a5127d785970542f46fd350ef7919ddd04d3072f424aab260d15a8554c653",
+        "pcm": "benchmarks/tal/pcm/09-891.wav",
+        "pcm_sha256": "bcdcf078a856572e05be8f2d7fb4c579276a16adec385f67bf1d087f65408428",
+        "hashes_verified": true
+      },
+      {
+        "index": 10,
+        "mp3": "benchmarks/tal/audio/10-890.mp3",
+        "mp3_sha256": "d0e81fb084cf85eaa7be58cbfb3976a6535e29d9875199aaec86adf6193de6ad",
+        "pcm": "benchmarks/tal/pcm/10-890.wav",
+        "pcm_sha256": "a5e9f6ad9c8d5b2bb0f443942adbf4480a3057aa985cec8db957a1206db32c7c",
+        "hashes_verified": true
+      }
+    ]
+  },
+  "matched_pair": {
+    "verified": true,
+    "different_field": "model variant",
+    "equal_configuration": {
+      "engine": "faster-whisper",
+      "device": "cpu",
+      "compute_type": "int8",
+      "workers": 10,
+      "cpu_threads": 2,
+      "physical_cores": 16,
+      "pin_workers": false,
+      "input_format": "pcm",
+      "batch_size": 8,
+      "beam_size": 5,
+      "language": "en",
+      "vad_filter": true,
+      "condition_on_previous_text": false,
+      "word_timestamps": false,
+      "warmup_audio_seconds": 30,
+      "sample_seconds": 0,
+      "memory_interval_ms": 250,
+      "decoded_input_manifest_sha256": "44b7976afe06e1bf551efd35276b53d32b13a9ff116dddc41d787f6f5d0834ea",
+      "platform": "Linux-7.0.0-31-generic-x86_64-with-glibc2.43",
+      "parent_affinity": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11,
+        12,
+        13,
+        14,
+        15,
+        16,
+        17,
+        18,
+        19,
+        20,
+        21,
+        22,
+        23,
+        24,
+        25,
+        26,
+        27,
+        28,
+        29,
+        30,
+        31
+      ],
+      "versions": {
+        "faster-whisper": "1.2.1",
+        "ctranslate2": "4.8.2",
+        "av": "18.1.0",
+        "numpy": "2.5.3",
+        "onnxruntime": "1.30.0"
+      }
+    },
+    "source_model_hashes": {
+      "tiny.en": "1a5afae06a4db91c975c9a9d78be5cc110ee4ea022ad57d55492e4550e936b2a",
+      "tiny (multilingual)": "dcb76c6586fc06cbdac6dd21f14cfd129cc4cdd9dce19bf4ffa62e59cbe6e6d1"
+    }
+  },
+  "runs": [
+    {
+      "run": "tiny-en-memory-20260921",
+      "engine": "faster-whisper",
+      "model": "Systran/faster-whisper-tiny.en",
+      "model_sha256": "1a5afae06a4db91c975c9a9d78be5cc110ee4ea022ad57d55492e4550e936b2a",
+      "model_revision": "0d3d19a32d3338f10357c0889762bd8d64bbdeba",
+      "input_format": "pcm",
+      "workers": 10,
+      "threads_per_worker": 2,
+      "quantization": "int8",
+      "decoder": "whisper beam 5",
+      "batch_size": 8,
+      "chunk_seconds": null,
+      "chunk_overlap_seconds": null,
+      "sample_seconds": 0,
+      "sample_limit": null,
+      "sample_rate": null,
+      "engine_revision": null,
+      "decoded_input_manifest_sha256": "44b7976afe06e1bf551efd35276b53d32b13a9ff116dddc41d787f6f5d0834ea",
+      "audio_seconds": 36783.7780625,
+      "suite_wall_seconds": 664.3103280600626,
+      "wall_speed_x": 55.37137766609321,
+      "wall_rtf": 0.018059872124372885,
+      "sum_worker_process_seconds": 5618.029962522909,
+      "sum_worker_speed_x": 6.547451385606597,
+      "decode_seconds": 14.390228145755827,
+      "summed_episode_latency_seconds": 5632.642427706625,
+      "cumulative_worker_peak_rss_mib": 13088.28515625,
+      "episodes": [
+        {
+          "index": 1,
+          "title": "646: The Secret of My Death",
+          "audio_seconds": 3918.9420625,
+          "process_seconds": 495.00103722396307,
+          "latency_seconds": 496.635743312072,
+          "worker_id": 7
+        },
+        {
+          "index": 2,
+          "title": "449: Middle School",
+          "audio_seconds": 3566.5501875,
+          "process_seconds": 662.9264860390685,
+          "latency_seconds": 664.2400664291345,
+          "worker_id": 9
+        },
+        {
+          "index": 3,
+          "title": "896: I Know What You Need",
+          "audio_seconds": 3984.1959375,
+          "process_seconds": 611.9689963040873,
+          "latency_seconds": 614.2238768220413,
+          "worker_id": 5
+        },
+        {
+          "index": 4,
+          "title": "206: Somewhere in the Arabian Sea",
+          "audio_seconds": 3566.8636875,
+          "process_seconds": 624.9090311489999,
+          "latency_seconds": 626.4235086711124,
+          "worker_id": 4
+        },
+        {
+          "index": 5,
+          "title": "895: Label Maker!",
+          "audio_seconds": 3464.3853125,
+          "process_seconds": 524.6365102389827,
+          "latency_seconds": 525.400164457038,
+          "worker_id": 0
+        },
+        {
+          "index": 6,
+          "title": "894: I Couldn't Help but Notice",
+          "audio_seconds": 3543.170625,
+          "process_seconds": 602.566663200967,
+          "latency_seconds": 604.1642225349788,
+          "worker_id": 8
+        },
+        {
+          "index": 7,
+          "title": "893: Testosterone",
+          "audio_seconds": 3618.40325,
+          "process_seconds": 493.55665846704505,
+          "latency_seconds": 494.8420416871086,
+          "worker_id": 2
+        },
+        {
+          "index": 8,
+          "title": "892: Trapped on a Bus",
+          "audio_seconds": 3652.4146875,
+          "process_seconds": 531.4691471548285,
+          "latency_seconds": 533.2604998820461,
+          "worker_id": 1
+        },
+        {
+          "index": 9,
+          "title": "891: The Test Case",
+          "audio_seconds": 4218.5665625,
+          "process_seconds": 652.1384811529424,
+          "latency_seconds": 653.603157301899,
+          "worker_id": 3
+        },
+        {
+          "index": 10,
+          "title": "890: Maximal Americanness",
+          "audio_seconds": 3250.28575,
+          "process_seconds": 418.8569515920244,
+          "latency_seconds": 419.8491466091946,
+          "worker_id": 6
+        }
+      ],
+      "results": "benchmarks/tal/runs/tiny-en-memory-20260921/results.json",
+      "variant": "tiny.en",
+      "model_bytes": 75537502,
+      "memory": {
+        "interval_ms": 250.0,
+        "source": "/proc/PID/smaps_rollup",
+        "scope": "sum of worker processes sampled in each sweep; parent excluded",
+        "samples_path": "benchmarks/tal/runs/tiny-en-memory-20260921/memory-samples.json",
+        "all": {
+          "samples": 2039,
+          "peak_rss_mib": 10744.1640625,
+          "peak_pss_mib": 10126.916015625,
+          "peak_pss_workers_observed": 10,
+          "cadence_seconds": {
+            "gap_count": 2038,
+            "mean": 0.3344661556373938,
+            "median": 0.25500271504279226,
+            "max": 0.9208281110040843
+          },
+          "collection_seconds": {
+            "mean": 0.28661970856193913,
+            "median": 0.24445390584878623,
+            "max": 0.9208008400164545
+          }
+        },
+        "startup": {
+          "samples": 69,
+          "peak_rss_mib": 4594.8671875,
+          "peak_pss_mib": 3982.7958984375,
+          "peak_pss_workers_observed": 10,
+          "cadence_seconds": {
+            "gap_count": 68,
+            "mean": 0.2531176074579194,
+            "median": 0.2509996820008382,
+            "max": 0.28615518705919385
+          },
+          "collection_seconds": {
+            "mean": 0.1426316943505536,
+            "median": 0.12695687590166926,
+            "max": 0.2861408260650933
+          }
+        },
+        "suite": {
+          "samples": 1970,
+          "peak_rss_mib": 10744.1640625,
+          "peak_pss_mib": 10126.916015625,
+          "peak_pss_workers_observed": 10,
+          "cadence_seconds": {
+            "gap_count": 1969,
+            "mean": 0.33731840410456154,
+            "median": 0.2560068399179727,
+            "max": 0.9208281110040843
+          },
+          "collection_seconds": {
+            "mean": 0.2916629435774648,
+            "median": 0.2512176313903183,
+            "max": 0.9208008400164545
+          }
+        }
+      },
+      "sum_episode_cpu_seconds": 3620.864000249,
+      "worker_cumulative_peak_rss_mib": {
+        "0": 1251.77734375,
+        "1": 1359.36328125,
+        "2": 1281.66796875,
+        "3": 1408.765625,
+        "4": 1276.95703125,
+        "5": 1293.03515625,
+        "6": 1256.25390625,
+        "7": 1397.8515625,
+        "8": 1273.0703125,
+        "9": 1289.54296875
+      },
+      "episode_peak_rss_mib": {
+        "1": 1397.8515625,
+        "2": 1289.54296875,
+        "3": 1293.03515625,
+        "4": 1276.95703125,
+        "5": 1251.77734375,
+        "6": 1273.0703125,
+        "7": 1281.66796875,
+        "8": 1359.36328125,
+        "9": 1408.765625,
+        "10": 1256.25390625
+      },
+      "median_episode_peak_rss_mib": 1285.60546875,
+      "load_start": [
+        38.0078125,
+        19.46923828125,
+        9.041015625
+      ],
+      "load_end": [
+        49.1142578125,
+        52.48095703125,
+        34.6083984375
+      ],
+      "matched_config": {
+        "engine": "faster-whisper",
+        "device": "cpu",
+        "compute_type": "int8",
+        "workers": 10,
+        "cpu_threads": 2,
+        "physical_cores": 16,
+        "pin_workers": false,
+        "input_format": "pcm",
+        "batch_size": 8,
+        "beam_size": 5,
+        "language": "en",
+        "vad_filter": true,
+        "condition_on_previous_text": false,
+        "word_timestamps": false,
+        "warmup_audio_seconds": 30,
+        "sample_seconds": 0,
+        "memory_interval_ms": 250,
+        "decoded_input_manifest_sha256": "44b7976afe06e1bf551efd35276b53d32b13a9ff116dddc41d787f6f5d0834ea",
+        "platform": "Linux-7.0.0-31-generic-x86_64-with-glibc2.43",
+        "parent_affinity": [
+          0,
+          1,
+          2,
+          3,
+          4,
+          5,
+          6,
+          7,
+          8,
+          9,
+          10,
+          11,
+          12,
+          13,
+          14,
+          15,
+          16,
+          17,
+          18,
+          19,
+          20,
+          21,
+          22,
+          23,
+          24,
+          25,
+          26,
+          27,
+          28,
+          29,
+          30,
+          31
+        ],
+        "versions": {
+          "faster-whisper": "1.2.1",
+          "ctranslate2": "4.8.2",
+          "av": "18.1.0",
+          "numpy": "2.5.3",
+          "onnxruntime": "1.30.0"
+        }
+      }
+    },
+    {
+      "run": "tiny-multilingual-memory-20260921",
+      "engine": "faster-whisper",
+      "model": "Systran/faster-whisper-tiny",
+      "model_sha256": "dcb76c6586fc06cbdac6dd21f14cfd129cc4cdd9dce19bf4ffa62e59cbe6e6d1",
+      "model_revision": "d90ca5fe260221311c53c58e660288d3deb8d356",
+      "input_format": "pcm",
+      "workers": 10,
+      "threads_per_worker": 2,
+      "quantization": "int8",
+      "decoder": "whisper beam 5",
+      "batch_size": 8,
+      "chunk_seconds": null,
+      "chunk_overlap_seconds": null,
+      "sample_seconds": 0,
+      "sample_limit": null,
+      "sample_rate": null,
+      "engine_revision": null,
+      "decoded_input_manifest_sha256": "44b7976afe06e1bf551efd35276b53d32b13a9ff116dddc41d787f6f5d0834ea",
+      "audio_seconds": 36783.7780625,
+      "suite_wall_seconds": 453.1130411149934,
+      "wall_speed_x": 81.1801354734454,
+      "wall_rtf": 0.012318284444439083,
+      "sum_worker_process_seconds": 4358.406946163857,
+      "sum_worker_speed_x": 8.439730047437633,
+      "decode_seconds": 13.009851830545813,
+      "summed_episode_latency_seconds": 4371.489700118313,
+      "cumulative_worker_peak_rss_mib": 13379.58203125,
+      "episodes": [
+        {
+          "index": 1,
+          "title": "646: The Secret of My Death",
+          "audio_seconds": 3918.9420625,
+          "process_seconds": 444.53728917310946,
+          "latency_seconds": 445.6887592219282,
+          "worker_id": 7
+        },
+        {
+          "index": 2,
+          "title": "449: Middle School",
+          "audio_seconds": 3566.5501875,
+          "process_seconds": 451.51771463803016,
+          "latency_seconds": 453.0865013930015,
+          "worker_id": 8
+        },
+        {
+          "index": 3,
+          "title": "896: I Know What You Need",
+          "audio_seconds": 3984.1959375,
+          "process_seconds": 451.40039376704954,
+          "latency_seconds": 452.68190879910253,
+          "worker_id": 5
+        },
+        {
+          "index": 4,
+          "title": "206: Somewhere in the Arabian Sea",
+          "audio_seconds": 3566.8636875,
+          "process_seconds": 430.9333418319002,
+          "latency_seconds": 432.32224410795607,
+          "worker_id": 0
+        },
+        {
+          "index": 5,
+          "title": "895: Label Maker!",
+          "audio_seconds": 3464.3853125,
+          "process_seconds": 420.7905648078304,
+          "latency_seconds": 421.70447894604877,
+          "worker_id": 3
+        },
+        {
+          "index": 6,
+          "title": "894: I Couldn't Help but Notice",
+          "audio_seconds": 3543.170625,
+          "process_seconds": 434.91943539399654,
+          "latency_seconds": 436.6718567670323,
+          "worker_id": 4
+        },
+        {
+          "index": 7,
+          "title": "893: Testosterone",
+          "audio_seconds": 3618.40325,
+          "process_seconds": 425.56162864202634,
+          "latency_seconds": 427.15067867795005,
+          "worker_id": 2
+        },
+        {
+          "index": 8,
+          "title": "892: Trapped on a Bus",
+          "audio_seconds": 3652.4146875,
+          "process_seconds": 437.61468293285,
+          "latency_seconds": 438.72601909702644,
+          "worker_id": 6
+        },
+        {
+          "index": 9,
+          "title": "891: The Test Case",
+          "audio_seconds": 4218.5665625,
+          "process_seconds": 428.4728905491065,
+          "latency_seconds": 429.49664246011525,
+          "worker_id": 1
+        },
+        {
+          "index": 10,
+          "title": "890: Maximal Americanness",
+          "audio_seconds": 3250.28575,
+          "process_seconds": 432.6590044279583,
+          "latency_seconds": 433.9606106481515,
+          "worker_id": 9
+        }
+      ],
+      "results": "benchmarks/tal/runs/tiny-multilingual-memory-20260921/results.json",
+      "variant": "tiny (multilingual)",
+      "model_bytes": 75538270,
+      "memory": {
+        "interval_ms": 250.0,
+        "source": "/proc/PID/smaps_rollup",
+        "scope": "sum of worker processes sampled in each sweep; parent excluded",
+        "samples_path": "benchmarks/tal/runs/tiny-multilingual-memory-20260921/memory-samples.json",
+        "all": {
+          "samples": 1393,
+          "peak_rss_mib": 11237.8046875,
+          "peak_pss_mib": 10611.5166015625,
+          "peak_pss_workers_observed": 10,
+          "cadence_seconds": {
+            "gap_count": 1392,
+            "mean": 0.33785253992098807,
+            "median": 0.25938483455684036,
+            "max": 1.1160570359788835
+          },
+          "collection_seconds": {
+            "mean": 0.30529455588435206,
+            "median": 0.2593441081698984,
+            "max": 1.1160406949929893
+          }
+        },
+        "startup": {
+          "samples": 66,
+          "peak_rss_mib": 4573.74609375,
+          "peak_pss_mib": 3961.3115234375,
+          "peak_pss_workers_observed": 10,
+          "cadence_seconds": {
+            "gap_count": 65,
+            "mean": 0.2611133998797204,
+            "median": 0.2519220819231123,
+            "max": 0.3377412830013782
+          },
+          "collection_seconds": {
+            "mean": 0.18921219078104265,
+            "median": 0.1950972155900672,
+            "max": 0.33772452315315604
+          }
+        },
+        "suite": {
+          "samples": 1327,
+          "peak_rss_mib": 11237.8046875,
+          "peak_pss_mib": 10611.5166015625,
+          "peak_pss_workers_observed": 10,
+          "cadence_seconds": {
+            "gap_count": 1326,
+            "mean": 0.341674766108551,
+            "median": 0.2631199788302183,
+            "max": 1.1160570359788835
+          },
+          "collection_seconds": {
+            "mean": 0.3110680570876817,
+            "median": 0.2630990578327328,
+            "max": 1.1160406949929893
+          }
+        }
+      },
+      "sum_episode_cpu_seconds": 3281.137891458,
+      "worker_cumulative_peak_rss_mib": {
+        "0": 1450.88671875,
+        "1": 1538.82421875,
+        "2": 1279.671875,
+        "3": 1431.25,
+        "4": 1220.484375,
+        "5": 1358.37890625,
+        "6": 1342.078125,
+        "7": 1392.546875,
+        "8": 1225.76953125,
+        "9": 1139.69140625
+      },
+      "episode_peak_rss_mib": {
+        "1": 1392.546875,
+        "2": 1225.76953125,
+        "3": 1358.37890625,
+        "4": 1450.88671875,
+        "5": 1431.25,
+        "6": 1220.484375,
+        "7": 1279.671875,
+        "8": 1342.078125,
+        "9": 1538.82421875,
+        "10": 1139.69140625
+      },
+      "median_episode_peak_rss_mib": 1350.228515625,
+      "load_start": [
+        48.16748046875,
+        52.16796875,
+        34.69873046875
+      ],
+      "load_end": [
+        35.54248046875,
+        51.81640625,
+        42.6552734375
+      ],
+      "matched_config": {
+        "engine": "faster-whisper",
+        "device": "cpu",
+        "compute_type": "int8",
+        "workers": 10,
+        "cpu_threads": 2,
+        "physical_cores": 16,
+        "pin_workers": false,
+        "input_format": "pcm",
+        "batch_size": 8,
+        "beam_size": 5,
+        "language": "en",
+        "vad_filter": true,
+        "condition_on_previous_text": false,
+        "word_timestamps": false,
+        "warmup_audio_seconds": 30,
+        "sample_seconds": 0,
+        "memory_interval_ms": 250,
+        "decoded_input_manifest_sha256": "44b7976afe06e1bf551efd35276b53d32b13a9ff116dddc41d787f6f5d0834ea",
+        "platform": "Linux-7.0.0-31-generic-x86_64-with-glibc2.43",
+        "parent_affinity": [
+          0,
+          1,
+          2,
+          3,
+          4,
+          5,
+          6,
+          7,
+          8,
+          9,
+          10,
+          11,
+          12,
+          13,
+          14,
+          15,
+          16,
+          17,
+          18,
+          19,
+          20,
+          21,
+          22,
+          23,
+          24,
+          25,
+          26,
+          27,
+          28,
+          29,
+          30,
+          31
+        ],
+        "versions": {
+          "faster-whisper": "1.2.1",
+          "ctranslate2": "4.8.2",
+          "av": "18.1.0",
+          "numpy": "2.5.3",
+          "onnxruntime": "1.30.0"
+        }
+      }
+    }
+  ],
+  "run_verification": [
+    {
+      "results": "benchmarks/tal/runs/tiny-en-memory-20260921/results.json",
+      "complete_full_corpus": true,
+      "exact_episode_set_verified": true,
+      "source_hashes_verified": true,
+      "durations_verified": true,
+      "transcripts_verified": [
+        {
+          "index": 1,
+          "json": "benchmarks/tal/runs/tiny-en-memory-20260921/transcripts/01-646.json",
+          "text": "benchmarks/tal/runs/tiny-en-memory-20260921/transcripts/01-646.txt",
+          "item_count": 122,
+          "nonempty": true
+        },
+        {
+          "index": 2,
+          "json": "benchmarks/tal/runs/tiny-en-memory-20260921/transcripts/02-449.json",
+          "text": "benchmarks/tal/runs/tiny-en-memory-20260921/transcripts/02-449.txt",
+          "item_count": 121,
+          "nonempty": true
+        },
+        {
+          "index": 3,
+          "json": "benchmarks/tal/runs/tiny-en-memory-20260921/transcripts/03-896.json",
+          "text": "benchmarks/tal/runs/tiny-en-memory-20260921/transcripts/03-896.txt",
+          "item_count": 133,
+          "nonempty": true
+        },
+        {
+          "index": 4,
+          "json": "benchmarks/tal/runs/tiny-en-memory-20260921/transcripts/04-206.json",
+          "text": "benchmarks/tal/runs/tiny-en-memory-20260921/transcripts/04-206.txt",
+          "item_count": 115,
+          "nonempty": true
+        },
+        {
+          "index": 5,
+          "json": "benchmarks/tal/runs/tiny-en-memory-20260921/transcripts/05-895.json",
+          "text": "benchmarks/tal/runs/tiny-en-memory-20260921/transcripts/05-895.txt",
+          "item_count": 107,
+          "nonempty": true
+        },
+        {
+          "index": 6,
+          "json": "benchmarks/tal/runs/tiny-en-memory-20260921/transcripts/06-894.json",
+          "text": "benchmarks/tal/runs/tiny-en-memory-20260921/transcripts/06-894.txt",
+          "item_count": 119,
+          "nonempty": true
+        },
+        {
+          "index": 7,
+          "json": "benchmarks/tal/runs/tiny-en-memory-20260921/transcripts/07-893.json",
+          "text": "benchmarks/tal/runs/tiny-en-memory-20260921/transcripts/07-893.txt",
+          "item_count": 117,
+          "nonempty": true
+        },
+        {
+          "index": 8,
+          "json": "benchmarks/tal/runs/tiny-en-memory-20260921/transcripts/08-892.json",
+          "text": "benchmarks/tal/runs/tiny-en-memory-20260921/transcripts/08-892.txt",
+          "item_count": 120,
+          "nonempty": true
+        },
+        {
+          "index": 9,
+          "json": "benchmarks/tal/runs/tiny-en-memory-20260921/transcripts/09-891.json",
+          "text": "benchmarks/tal/runs/tiny-en-memory-20260921/transcripts/09-891.txt",
+          "item_count": 139,
+          "nonempty": true
+        },
+        {
+          "index": 10,
+          "json": "benchmarks/tal/runs/tiny-en-memory-20260921/transcripts/10-890.json",
+          "text": "benchmarks/tal/runs/tiny-en-memory-20260921/transcripts/10-890.txt",
+          "item_count": 102,
+          "nonempty": true
+        }
+      ],
+      "summary_arithmetic_verified": true,
+      "parallel_throughput_denominator": "suite_wall_seconds",
+      "model_hash_verified": true,
+      "model_sha256": "1a5afae06a4db91c975c9a9d78be5cc110ee4ea022ad57d55492e4550e936b2a",
+      "model_revision": "0d3d19a32d3338f10357c0889762bd8d64bbdeba",
+      "normalized_configuration": {
+        "engine": "faster-whisper",
+        "engine_revision": null,
+        "model": "Systran/faster-whisper-tiny.en",
+        "decoder": "whisper beam 5",
+        "quantization": "int8",
+        "workers": 10,
+        "threads_per_worker": 2,
+        "batch_size": 8,
+        "chunk_seconds": null,
+        "chunk_overlap_seconds": null,
+        "sample_seconds": 0,
+        "sample_limit": null,
+        "sample_rate": null,
+        "input_format": "pcm",
+        "decoded_input_manifest_sha256": "44b7976afe06e1bf551efd35276b53d32b13a9ff116dddc41d787f6f5d0834ea"
+      },
+      "model_path": "benchmarks/tal/models/tiny.en/model.bin",
+      "variant": "tiny.en",
+      "forced_language_en_verified": true,
+      "memory": {
+        "sample_count_verified": true,
+        "monotonic_timestamps_verified": true,
+        "phase_counts_verified": true,
+        "sampled_peaks_verified": true,
+        "workers_observed_bounds_verified": true,
+        "errors": [],
+        "all_workers_observed_during_suite": true
+      },
+      "transcript_coverage": [
+        {
+          "index": 1,
+          "segment_count": 122,
+          "last_segment_end": 3909.14,
+          "audio_seconds": 3918.9420625,
+          "tail_seconds": 9.80206249999992,
+          "coverage_verified": true
+        },
+        {
+          "index": 2,
+          "segment_count": 121,
+          "last_segment_end": 3559.12,
+          "audio_seconds": 3566.5501875,
+          "tail_seconds": 7.430187500000102,
+          "coverage_verified": true
+        },
+        {
+          "index": 3,
+          "segment_count": 133,
+          "last_segment_end": 3961.1,
+          "audio_seconds": 3984.1959375,
+          "tail_seconds": 23.09593750000022,
+          "coverage_verified": true
+        },
+        {
+          "index": 4,
+          "segment_count": 115,
+          "last_segment_end": 3556.37,
+          "audio_seconds": 3566.8636875,
+          "tail_seconds": 10.493687500000306,
+          "coverage_verified": true
+        },
+        {
+          "index": 5,
+          "segment_count": 107,
+          "last_segment_end": 3454.61,
+          "audio_seconds": 3464.3853125,
+          "tail_seconds": 9.775312499999927,
+          "coverage_verified": true
+        },
+        {
+          "index": 6,
+          "segment_count": 119,
+          "last_segment_end": 3504.14,
+          "audio_seconds": 3543.170625,
+          "tail_seconds": 39.03062500000033,
+          "coverage_verified": true
+        },
+        {
+          "index": 7,
+          "segment_count": 117,
+          "last_segment_end": 3608.5,
+          "audio_seconds": 3618.40325,
+          "tail_seconds": 9.903249999999844,
+          "coverage_verified": true
+        },
+        {
+          "index": 8,
+          "segment_count": 120,
+          "last_segment_end": 3627.31,
+          "audio_seconds": 3652.4146875,
+          "tail_seconds": 25.104687500000182,
+          "coverage_verified": true
+        },
+        {
+          "index": 9,
+          "segment_count": 139,
+          "last_segment_end": 4209.14,
+          "audio_seconds": 4218.5665625,
+          "tail_seconds": 9.426562499999818,
+          "coverage_verified": true
+        },
+        {
+          "index": 10,
+          "segment_count": 102,
+          "last_segment_end": 3226.51,
+          "audio_seconds": 3250.28575,
+          "tail_seconds": 23.77574999999979,
+          "coverage_verified": true
+        }
+      ],
+      "model_bytes_verified": true
+    },
+    {
+      "results": "benchmarks/tal/runs/tiny-multilingual-memory-20260921/results.json",
+      "complete_full_corpus": true,
+      "exact_episode_set_verified": true,
+      "source_hashes_verified": true,
+      "durations_verified": true,
+      "transcripts_verified": [
+        {
+          "index": 1,
+          "json": "benchmarks/tal/runs/tiny-multilingual-memory-20260921/transcripts/01-646.json",
+          "text": "benchmarks/tal/runs/tiny-multilingual-memory-20260921/transcripts/01-646.txt",
+          "item_count": 122,
+          "nonempty": true
+        },
+        {
+          "index": 2,
+          "json": "benchmarks/tal/runs/tiny-multilingual-memory-20260921/transcripts/02-449.json",
+          "text": "benchmarks/tal/runs/tiny-multilingual-memory-20260921/transcripts/02-449.txt",
+          "item_count": 121,
+          "nonempty": true
+        },
+        {
+          "index": 3,
+          "json": "benchmarks/tal/runs/tiny-multilingual-memory-20260921/transcripts/03-896.json",
+          "text": "benchmarks/tal/runs/tiny-multilingual-memory-20260921/transcripts/03-896.txt",
+          "item_count": 133,
+          "nonempty": true
+        },
+        {
+          "index": 4,
+          "json": "benchmarks/tal/runs/tiny-multilingual-memory-20260921/transcripts/04-206.json",
+          "text": "benchmarks/tal/runs/tiny-multilingual-memory-20260921/transcripts/04-206.txt",
+          "item_count": 115,
+          "nonempty": true
+        },
+        {
+          "index": 5,
+          "json": "benchmarks/tal/runs/tiny-multilingual-memory-20260921/transcripts/05-895.json",
+          "text": "benchmarks/tal/runs/tiny-multilingual-memory-20260921/transcripts/05-895.txt",
+          "item_count": 107,
+          "nonempty": true
+        },
+        {
+          "index": 6,
+          "json": "benchmarks/tal/runs/tiny-multilingual-memory-20260921/transcripts/06-894.json",
+          "text": "benchmarks/tal/runs/tiny-multilingual-memory-20260921/transcripts/06-894.txt",
+          "item_count": 119,
+          "nonempty": true
+        },
+        {
+          "index": 7,
+          "json": "benchmarks/tal/runs/tiny-multilingual-memory-20260921/transcripts/07-893.json",
+          "text": "benchmarks/tal/runs/tiny-multilingual-memory-20260921/transcripts/07-893.txt",
+          "item_count": 117,
+          "nonempty": true
+        },
+        {
+          "index": 8,
+          "json": "benchmarks/tal/runs/tiny-multilingual-memory-20260921/transcripts/08-892.json",
+          "text": "benchmarks/tal/runs/tiny-multilingual-memory-20260921/transcripts/08-892.txt",
+          "item_count": 120,
+          "nonempty": true
+        },
+        {
+          "index": 9,
+          "json": "benchmarks/tal/runs/tiny-multilingual-memory-20260921/transcripts/09-891.json",
+          "text": "benchmarks/tal/runs/tiny-multilingual-memory-20260921/transcripts/09-891.txt",
+          "item_count": 139,
+          "nonempty": true
+        },
+        {
+          "index": 10,
+          "json": "benchmarks/tal/runs/tiny-multilingual-memory-20260921/transcripts/10-890.json",
+          "text": "benchmarks/tal/runs/tiny-multilingual-memory-20260921/transcripts/10-890.txt",
+          "item_count": 102,
+          "nonempty": true
+        }
+      ],
+      "summary_arithmetic_verified": true,
+      "parallel_throughput_denominator": "suite_wall_seconds",
+      "model_hash_verified": true,
+      "model_sha256": "dcb76c6586fc06cbdac6dd21f14cfd129cc4cdd9dce19bf4ffa62e59cbe6e6d1",
+      "model_revision": "d90ca5fe260221311c53c58e660288d3deb8d356",
+      "normalized_configuration": {
+        "engine": "faster-whisper",
+        "engine_revision": null,
+        "model": "Systran/faster-whisper-tiny",
+        "decoder": "whisper beam 5",
+        "quantization": "int8",
+        "workers": 10,
+        "threads_per_worker": 2,
+        "batch_size": 8,
+        "chunk_seconds": null,
+        "chunk_overlap_seconds": null,
+        "sample_seconds": 0,
+        "sample_limit": null,
+        "sample_rate": null,
+        "input_format": "pcm",
+        "decoded_input_manifest_sha256": "44b7976afe06e1bf551efd35276b53d32b13a9ff116dddc41d787f6f5d0834ea"
+      },
+      "model_path": "benchmarks/tal/models/tiny/model.bin",
+      "variant": "tiny (multilingual)",
+      "forced_language_en_verified": true,
+      "memory": {
+        "sample_count_verified": true,
+        "monotonic_timestamps_verified": true,
+        "phase_counts_verified": true,
+        "sampled_peaks_verified": true,
+        "workers_observed_bounds_verified": true,
+        "errors": [],
+        "all_workers_observed_during_suite": true
+      },
+      "transcript_coverage": [
+        {
+          "index": 1,
+          "segment_count": 122,
+          "last_segment_end": 3909.14,
+          "audio_seconds": 3918.9420625,
+          "tail_seconds": 9.80206249999992,
+          "coverage_verified": true
+        },
+        {
+          "index": 2,
+          "segment_count": 121,
+          "last_segment_end": 3559.12,
+          "audio_seconds": 3566.5501875,
+          "tail_seconds": 7.430187500000102,
+          "coverage_verified": true
+        },
+        {
+          "index": 3,
+          "segment_count": 133,
+          "last_segment_end": 3961.1,
+          "audio_seconds": 3984.1959375,
+          "tail_seconds": 23.09593750000022,
+          "coverage_verified": true
+        },
+        {
+          "index": 4,
+          "segment_count": 115,
+          "last_segment_end": 3556.37,
+          "audio_seconds": 3566.8636875,
+          "tail_seconds": 10.493687500000306,
+          "coverage_verified": true
+        },
+        {
+          "index": 5,
+          "segment_count": 107,
+          "last_segment_end": 3454.61,
+          "audio_seconds": 3464.3853125,
+          "tail_seconds": 9.775312499999927,
+          "coverage_verified": true
+        },
+        {
+          "index": 6,
+          "segment_count": 119,
+          "last_segment_end": 3504.14,
+          "audio_seconds": 3543.170625,
+          "tail_seconds": 39.03062500000033,
+          "coverage_verified": true
+        },
+        {
+          "index": 7,
+          "segment_count": 117,
+          "last_segment_end": 3608.5,
+          "audio_seconds": 3618.40325,
+          "tail_seconds": 9.903249999999844,
+          "coverage_verified": true
+        },
+        {
+          "index": 8,
+          "segment_count": 120,
+          "last_segment_end": 3627.31,
+          "audio_seconds": 3652.4146875,
+          "tail_seconds": 25.104687500000182,
+          "coverage_verified": true
+        },
+        {
+          "index": 9,
+          "segment_count": 139,
+          "last_segment_end": 4209.14,
+          "audio_seconds": 4218.5665625,
+          "tail_seconds": 9.426562499999818,
+          "coverage_verified": true
+        },
+        {
+          "index": 10,
+          "segment_count": 102,
+          "last_segment_end": 3226.51,
+          "audio_seconds": 3250.28575,
+          "tail_seconds": 23.77574999999979,
+          "coverage_verified": true
+        }
+      ],
+      "model_bytes_verified": true
+    }
+  ],
+  "comparison": {
+    "multilingual_to_tiny_en_suite_wall_ratio": 0.6820803801713976,
+    "multilingual_to_tiny_en_cpu_seconds_ratio": 0.9061754021229083,
+    "multilingual_minus_tiny_en_peak_pss_mib": 484.6005859375,
+    "tiny_en_to_multilingual_wall_throughput_ratio": 0.6820803801713977,
+    "multilingual_to_tiny_en_model_size_ratio": 1.0000101671352595,
+    "multilingual_to_tiny_en_all_peak_pss_ratio": 1.0478527308007493,
+    "multilingual_to_tiny_en_suite_peak_pss_ratio": 1.0478527308007493,
+    "multilingual_to_tiny_en_all_peak_rss_ratio": 1.0459450006653321,
+    "multilingual_to_tiny_en_suite_peak_rss_ratio": 1.0459450006653321,
+    "multilingual_to_tiny_en_median_episode_peak_rss_ratio": 1.0502666241283443,
+    "paired_episode_peak_rss_ratios": {
+      "1": 0.9962051138745285,
+      "2": 0.950545705691515,
+      "3": 1.0505351688886069,
+      "4": 1.1362063744069306,
+      "5": 1.143374264717355,
+      "6": 0.9586936110412205,
+      "7": 0.9984425812311227,
+      "8": 0.9872843731411478,
+      "9": 1.092320959173035,
+      "10": 0.9072142188612597
+    },
+    "median_paired_episode_peak_rss_ratio": 0.9973238475528257
+  },
+  "outputs": [
+    "benchmarks/tal/TINY_VARIANTS.md",
+    "benchmarks/tal/tiny-variants-comparison.csv"
+  ]
+}

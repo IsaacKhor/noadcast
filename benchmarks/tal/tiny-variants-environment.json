@@ -1,0 +1,9 @@
+{
+  "observed_at": "2026-09-21T02:50:11.963571+00:00",
+  "loadavg": [
+    "59.64",
+    "33.77",
+    "15.59"
+  ],
+  "observation": "Host process inspection showed dozens of CPU-active cdn-cache-sim processes and unrelated Python workers during the fresh tiny.en baseline. Other workloads were left running. Fresh wall times describe a contended machine, not an isolated model-only speed comparison."
+}

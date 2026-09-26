@@ -6,54 +6,61 @@ import os
 struct NoadcastApp: App {
     @UIApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
 
-    let sharedModelContainer: ModelContainer = {
-        Log.signposter.withIntervalSignpost("ModelContainer.init") {
-            let schema = Schema([
-                Podcast.self,
-                Episode.self,
-                AdMarker.self,
-                QueueItem.self,
-                AppSettings.self,
-                UsageHistoryDay.self,
-                TokenUsageRecord.self
-            ])
-            let configuration = ModelConfiguration(schema: schema, isStoredInMemoryOnly: false)
-            do {
-                return try ModelContainer(for: schema, configurations: [configuration])
-            } catch {
-                fatalError("Could not create ModelContainer: \(error)")
-            }
-        }
-    }()
+    let sharedModelContainer: ModelContainer
 
     init() {
-        Log.signposter.withIntervalSignpost("NoadcastApp.init") {
-            Log.signposter.withIntervalSignpost("Wire.PlayerService") {
-                PlayerService.shared.setModelContainer(sharedModelContainer)
-            }
-            Log.signposter.withIntervalSignpost("Wire.ProcessingPipeline") {
-                ProcessingPipeline.shared.setModelContainer(sharedModelContainer)
-            }
-            Log.signposter.withIntervalSignpost("Wire.NetworkMonitor") {
-                _ = NetworkMonitor.shared
-            }
+        #if DEBUG
+        if ProcessInfo.processInfo.arguments.contains("--ui-test-queue") {
+            sharedModelContainer = QueueUITestFixture.makeContainer()
+            PlayerService.shared.setModelContainer(sharedModelContainer)
+            return
         }
-        // Repair duplicate rows before restart recovery. Older builds could
-        // leave duplicate episodes / queue items behind after an interrupted
-        // refresh or pipeline run, and recovery should only restart the
-        // canonical rows.
-        let container = sharedModelContainer
+        #endif
+        // Order matters: the generation-1 store must be exported and moved
+        // aside before the generation-2 container opens on the same path.
+        Log.signposter.withIntervalSignpost("LocalStoreGeneration.prepare") {
+            LocalStoreGeneration.prepare()
+        }
+        let container = Log.signposter.withIntervalSignpost("ModelContainer.init") {
+            LocalStoreGeneration.makeContainer()
+        }
+        sharedModelContainer = container
+
+        Log.signposter.withIntervalSignpost("NoadcastApp.wire") {
+            // Singletons created before any query touches the store, so a
+            // concurrent context never races the main context to insert them.
+            _ = AppSettings.current(in: container.mainContext)
+            _ = SyncCursor.current(in: container.mainContext)
+            PlayerService.shared.setModelContainer(container)
+            // Creates the background URLSession early: a background relaunch
+            // delivers download events as soon as it exists.
+            DownloadManager.shared.configure(container: container)
+            DeviceStateRestoreService.shared.configure(container: container)
+            SyncService.shared.configure(container: container)
+            _ = NetworkMonitor.shared
+        }
+
         Task {
-            let maintenance = DatabaseMaintenanceActor(modelContainer: container)
-            _ = await maintenance.cleanupDuplicates()
-            await ProcessingPipeline.shared.recoverPendingEpisodes()
+            await DownloadManager.shared.reconcile()
+            await SyncService.shared.launch()
         }
     }
 
     var body: some Scene {
         WindowGroup {
+            #if DEBUG
+            if ProcessInfo.processInfo.arguments.contains("--ui-test-queue") {
+                QueueView()
+            } else {
+                ContentView()
+            }
+            #else
             ContentView()
+            #endif
         }
         .modelContainer(sharedModelContainer)
+        .backgroundTask(.appRefresh(SyncService.backgroundRefreshTaskIdentifier)) {
+            await SyncService.shared.performBackgroundRefresh()
+        }
     }
 }

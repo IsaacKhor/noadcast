@@ -6,24 +6,63 @@ struct SettingsView: View {
     @Environment(\.modelContext) private var context
     @Query private var settingsList: [AppSettings]
 
+    /// Device-local preference in `UserDefaults` (not `AppSettings`, whose
+    /// writes invalidate every settings query).
+    @AppStorage(StreamingPolicy.storageKey) private var streamingPolicy: StreamingPolicy = StreamingPolicy.defaultValue
+    /// The raw `APIConfiguration.baseURLString`. Read through `@AppStorage`
+    /// so the Server row updates as soon as the setup screen saves a new
+    /// address; `APIConfiguration` itself is not observable.
+    @AppStorage(APIConfiguration.baseURLDefaultsKey) private var storedServerAddress: String?
+
     @State private var showOPMLPicker = false
-    @State private var opmlMessage: String?
-    @State private var showResetTokenStatsConfirmation = false
+    @State private var isImportingOPML = false
+    @State private var alertTitle = ""
+    @State private var alertMessage: String?
+    /// The ad-detection value just picked, shown until the server call
+    /// settles. `setGlobalAdAnalysis` writes its optimistic value on a later
+    /// main-actor turn, so without this the switch would bounce for a frame.
+    @State private var pendingAdAnalysis: Bool?
+    /// Only the latest toggle request clears `pendingAdAnalysis`.
+    @State private var adAnalysisRequestCount = 0
 
     private var settings: AppSettings? { settingsList.first }
+
+    /// Same normalisation as `APIConfiguration.baseURL`.
+    private var serverURL: URL? {
+        storedServerAddress.flatMap { APIConfiguration.normalizedBaseURL(from: $0) }
+    }
+
+    private var isConfigured: Bool { serverURL != nil }
+
+    /// `host[:port][/prefix]` of the configured server.
+    private var serverDisplayAddress: String? {
+        guard let url = serverURL else { return nil }
+        guard let components = URLComponents(url: url, resolvingAgainstBaseURL: false),
+              let host = components.host, !host.isEmpty
+        else { return url.absoluteString }
+        var display = host
+        if let port = components.port {
+            display += ":\(port)"
+        }
+        display += components.path
+        return display
+    }
 
     var body: some View {
         NavigationStack {
             Form {
+                serverSection
                 if let s = settings {
                     timeSavedSection(settings: s)
                     usageHistorySection
                     playbackSection(settings: s)
                     skippingSection(settings: s)
-                    downloadsSection(settings: s)
-                    adProviderSection(settings: s)
-                    importSection
                 }
+                streamingSection
+                if let s = settings {
+                    downloadsSection(settings: s)
+                }
+                importSection
             }
             .navigationTitle("Settings")
             .navigationBarTitleDisplayMode(.inline)
@@ -33,23 +72,77 @@ struct SettingsView: View {
             ) { result in
                 Task { await handleOPMLImport(result: result) }
             }
-            .alert("Import", isPresented: .constant(opmlMessage != nil), actions: {
-                Button("OK") { opmlMessage = nil }
+            .alert(alertTitle, isPresented: .constant(alertMessage != nil), actions: {
+                Button("OK") { alertMessage = nil }
             }, message: {
-                Text(opmlMessage ?? "")
+                Text(alertMessage ?? "")
             })
-            .confirmationDialog(
-                "Reset token usage statistics?",
-                isPresented: $showResetTokenStatsConfirmation,
-                titleVisibility: .visible
-            ) {
-                Button("Reset Statistics", role: .destructive) {
-                    resetTokenUsageStatistics()
+        }
+    }
+
+    // MARK: - Server
+
+    @ViewBuilder
+    private var serverSection: some View {
+        Section {
+            NavigationLink {
+                ServerSetupView()
+            } label: {
+                Label(serverDisplayAddress ?? "Not connected", systemImage: "server.rack")
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+            }
+            ServerStatusRow(isConfigured: isConfigured)
+            if let migrationStatus = DeviceStateRestoreService.shared.statusLine {
+                Text(migrationStatus)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        } header: {
+            Text("Server")
+        }
+    }
+
+    /// One-line sync status under the Server row. A separate view so sync
+    /// state changes (`isSyncing` flips on every sync) re-render only this row.
+    private struct ServerStatusRow: View {
+        let isConfigured: Bool
+
+        var body: some View {
+            let sync = SyncService.shared
+            if !isConfigured {
+                Text("Add your server's address to sync your library.")
+                    .foregroundStyle(.secondary)
+            } else if sync.authFailed {
+                Label("Token rejected — update it", systemImage: "exclamationmark.triangle.fill")
+                    .foregroundStyle(.red)
+            } else if sync.isSyncing {
+                HStack(spacing: 8) {
+                    ProgressView()
+                    Text("Syncing…")
+                        .foregroundStyle(.secondary)
                 }
-                Button("Cancel", role: .cancel) {}
+            } else if let lastError = sync.lastError {
+                Label {
+                    Text(verbatim: "Sync failed: \(lastError)")
+                } icon: {
+                    Image(systemName: "exclamationmark.circle")
+                }
+                .foregroundStyle(.red)
+            } else if let lastSyncAt = sync.lastSyncAt {
+                // Re-rendered every minute so the relative part stays true.
+                TimelineView(.everyMinute) { _ in
+                    Text(verbatim: "Synced \(TimeFormatting.refreshTimestamp(lastSyncAt))")
+                        .foregroundStyle(.secondary)
+                }
+            } else {
+                Text("Not synced yet")
+                    .foregroundStyle(.secondary)
             }
         }
     }
+
+    // MARK: - Listening
 
     @ViewBuilder
     private func timeSavedSection(settings: AppSettings) -> some View {
@@ -86,6 +179,8 @@ struct SettingsView: View {
             }
         }
     }
+
+    // MARK: - Playback
 
     @ViewBuilder
     private func playbackSection(settings: AppSettings) -> some View {
@@ -127,232 +222,129 @@ struct SettingsView: View {
         }
     }
 
+    // MARK: - Streaming
+
+    @ViewBuilder
+    private var streamingSection: some View {
+        Section {
+            Picker("Stream episodes that aren't downloaded", selection: $streamingPolicy) {
+                ForEach(StreamingPolicy.allCases, id: \.self) { policy in
+                    Text(policy.label).tag(policy)
+                }
+            }
+        } header: {
+            Text("Streaming")
+        } footer: {
+            Text("Downloaded episodes always play from the device. This only decides whether other episodes may stream from your server instead.")
+        }
+    }
+
+    // MARK: - Downloads & ad detection
+
     @ViewBuilder
     private func downloadsSection(settings: AppSettings) -> some View {
-        @Bindable var s = settings
         Section {
             Picker("Auto-download", selection: Binding(
-                get: { s.autoDownloadPolicy },
-                set: { s.autoDownloadPolicy = $0 }
+                get: { settings.autoDownloadPolicy },
+                set: { settings.autoDownloadPolicy = $0 }
             )) {
                 ForEach(AutoDownloadPolicy.allCases, id: \.self) { p in
                     Text(p.label).tag(p)
                 }
             }
-            Toggle("Analyze downloaded episodes", isOn: $s.adAnalysisEnabled)
+            // Server mirror: SyncService applies the change optimistically
+            // and rolls it back if the server refuses.
+            Toggle("Detect & skip ads", isOn: Binding(
+                get: { pendingAdAnalysis ?? settings.adAnalysisEnabled },
+                set: { enabled in updateGlobalAdAnalysis(enabled) }
+            ))
+            .disabled(!isConfigured)
         } header: {
             Text("Downloads")
         } footer: {
-            Text("When off, downloads skip ad analysis for every podcast, even when a podcast's Detect & skip ads toggle is on.")
-        }
-    }
-
-    @ViewBuilder
-    private func adProviderSection(settings: AppSettings) -> some View {
-        @Bindable var s = settings
-        let provider = s.adDetectionProvider
-        let backend = s.adDetectionBackend
-        Section {
-            Picker("Backend", selection: Binding(
-                get: { s.adDetectionBackend },
-                set: { s.adDetectionBackend = $0 }
-            )) {
-                ForEach(AdDetectionBackend.allCases, id: \.self) { backend in
-                    Text(backend.label).tag(backend)
-                }
-            }
-            Picker("Model", selection: Binding(
-                get: { s.adDetectionProvider },
-                set: { s.adDetectionProvider = $0 }
-            )) {
-                ForEach(AdDetectionProvider.allCases, id: \.self) { p in
-                    Text(p.label).tag(p)
-                }
-            }
-            if provider.supportsThinkingLevel {
-                Picker("Thinking level", selection: Binding(
-                    get: { s.adDetectionThinkingLevel },
-                    set: { s.adDetectionThinkingLevel = $0 }
-                )) {
-                    ForEach(provider.thinkingLevelOptions, id: \.self) { level in
-                        Text(level.label).tag(level)
-                    }
-                }
-                .pickerStyle(.menu)
-            }
-            if backend == .openRouter {
-                SecureField(
-                    "OpenRouter API key",
-                    text: Binding(
-                        get: { s.openRouterAPIKey ?? "" },
-                        set: { s.openRouterAPIKey = $0.isEmpty ? nil : $0 }
-                    )
-                )
-                .textContentType(.password)
-                .autocorrectionDisabled()
-                .textInputAutocapitalization(.never)
-            } else {
-                SecureField(
-                    "Google AI API key",
-                    text: Binding(
-                        get: { s.googleAPIKey ?? "" },
-                        set: { s.googleAPIKey = $0.isEmpty ? nil : $0 }
-                    )
-                )
-                .textContentType(.password)
-                .autocorrectionDisabled()
-                .textInputAutocapitalization(.never)
-            }
-            if backend == .whisperServer {
-                TextField("Server URL", text: $s.adDetectionServerHost)
-                    .textContentType(.URL)
-                    .keyboardType(.URL)
-                    .autocorrectionDisabled()
-                    .textInputAutocapitalization(.never)
-                TextField("Port", value: $s.adDetectionServerPort, format: .number)
-                    .keyboardType(.numberPad)
-            }
-            if backend == .geminiFiles || backend == .openRouter {
-                Toggle("Downsample audio before upload", isOn: $s.downsampleAudioBeforeUpload)
-            }
-            Button(role: .destructive) {
-                showResetTokenStatsConfirmation = true
-            } label: {
-                Label("Reset Token Usage Statistics", systemImage: "arrow.counterclockwise")
-            }
-        } header: {
-            Text("Detection model")
-        } footer: {
             VStack(alignment: .leading, spacing: 4) {
-                Text(providerFooter(settings: settings))
-                Text(tokenCostLine(
-                    label: "Input tokens",
-                    tokens: settings.lifetimeAdDetectionInputTokens,
-                    cost: settings.lifetimeAdDetectionInputCostUSD
-                ))
-                Text(tokenCostLine(
-                    label: "Thought tokens",
-                    tokens: settings.lifetimeAdDetectionThoughtTokens,
-                    cost: settings.lifetimeAdDetectionThoughtCostUSD
-                ))
-                Text(tokenCostLine(
-                    label: "Output tokens",
-                    tokens: settings.lifetimeAdDetectionOutputTokens,
-                    cost: settings.lifetimeAdDetectionOutputCostUSD
-                ))
+                Text("Ad detection runs on your server, not on this device. When this is off, the server analyzes no podcast; when it's on, each podcast's own Detect & skip ads toggle still applies.")
+                if let classifier = Self.serverClassifierDescription(settings: settings) {
+                    Text(verbatim: "Server classifier: \(classifier)")
+                }
+                if !isConfigured {
+                    Text("Connect to your server to change this.")
+                }
             }
         }
     }
 
-    private func providerFooter(settings: AppSettings) -> String {
-        switch settings.adDetectionBackend {
-        case .geminiFiles:
-            "Uploads episode audio to Google AI Studio and receives back only skip segments with timestamps and summaries. Downsampling uses a temporary 32 kbps, 16 kHz mono copy."
-        case .openRouter:
-            "Sends episode audio to the selected Gemini model through OpenRouter and receives skip segments. Audio is embedded in the request; downsampling uses a temporary 32 kbps, 16 kHz mono copy to reduce its size."
-        case .whisperServer:
-            "Uploads episode audio to the configured server. The server transcribes with whisper.cpp, sends only the timestamped transcript to Gemini, and returns skip segments. The saved Google key is sent with the request; if it is blank, the server must provide GEMINI_API_KEY."
-        case .appleSpeech:
-            "Transcribes downloaded audio locally with Apple's on-device transcription, sends only the timestamped transcript to Gemini, and receives back skip segments."
+    /// `classifier · model` from the server's settings mirror, or `nil`
+    /// when the server hasn't reported either.
+    private static func serverClassifierDescription(settings: AppSettings) -> String? {
+        let parts = [settings.serverClassifier, settings.serverClassifierModel]
+            .compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+        return parts.isEmpty ? nil : parts.joined(separator: " · ")
+    }
+
+    private func updateGlobalAdAnalysis(_ enabled: Bool) {
+        let request = adAnalysisRequestCount + 1
+        adAnalysisRequestCount = request
+        pendingAdAnalysis = enabled
+        Task {
+            do {
+                try await SyncService.shared.setGlobalAdAnalysis(enabled)
+            } catch {
+                // SyncService has already rolled the mirror back.
+                showAlert(title: "Couldn't Change Ad Detection", message: error.localizedDescription)
+            }
+            if adAnalysisRequestCount == request {
+                pendingAdAnalysis = nil
+            }
         }
     }
 
-    /// Compact running totals shown under the provider footer so the user
-    /// can keep an eye on API spend. Summed across providers.
-    private func tokenCostLine(label: String, tokens: Int, cost: Double) -> String {
-        "\(label): \(Self.formatTokens(tokens)) · ~\(Self.formatCost(cost))"
-    }
-
-    private func resetTokenUsageStatistics() {
-        guard let settings else { return }
-        settings.resetAdDetectionUsageStatistics()
-        TokenUsageRecord.resetAll(in: context)
-        try? context.save()
-    }
-
-    private static func formatTokens(_ count: Int) -> String {
-        if count >= 1_000_000 {
-            return String(format: "%.1fM", Double(count) / 1_000_000)
-        }
-        if count >= 1_000 {
-            return String(format: "%.1fK", Double(count) / 1_000)
-        }
-        return count.formatted()
-    }
-
-    /// Costs are typically pennies; show fractions of a cent precisely
-    /// rather than rounding to $0.00 and looking broken.
-    private static func formatCost(_ amount: Double) -> String {
-        if amount >= 1 {
-            return String(format: "$%.2f", amount)
-        }
-        if amount >= 0.01 {
-            return String(format: "$%.3f", amount)
-        }
-        if amount > 0 {
-            return String(format: "$%.4f", amount)
-        }
-        return "$0"
-    }
+    // MARK: - Import
 
     @ViewBuilder
     private var importSection: some View {
-        Section("Import") {
+        Section {
             Button {
                 showOPMLPicker = true
             } label: {
-                Label("Import OPML", systemImage: "square.and.arrow.down")
+                HStack {
+                    Label("Import OPML", systemImage: "square.and.arrow.down")
+                    if isImportingOPML {
+                        Spacer()
+                        ProgressView()
+                    }
+                }
+            }
+            .disabled(!isConfigured || isImportingOPML)
+        } header: {
+            Text("Import")
+        } footer: {
+            if !isConfigured {
+                Text("Connect to your server to import subscriptions.")
             }
         }
-    }
-
-    private static func opmlSummary(added: Int, skipped: Int, failed: Int) -> String {
-        if added == 0 && skipped == 0 && failed == 0 {
-            return "No podcast feeds were found in the OPML file."
-        }
-        var parts: [String] = []
-        parts.append("Added \(added).")
-        if skipped > 0 {
-            parts.append("Skipped \(skipped) already subscribed.")
-        }
-        if failed > 0 {
-            parts.append("\(failed) couldn't be fetched.")
-        }
-        return parts.joined(separator: " ")
     }
 
     private func handleOPMLImport(result: Result<URL, Error>) async {
         switch result {
-        case .failure(let err):
-            opmlMessage = err.localizedDescription
+        case .failure(let error):
+            showAlert(title: "Import", message: error.localizedDescription)
         case .success(let url):
-            let didStart = url.startAccessingSecurityScopedResource()
-            defer { if didStart { url.stopAccessingSecurityScopedResource() } }
+            // `importOPML` opens the security-scoped resource itself.
+            isImportingOPML = true
+            defer { isImportingOPML = false }
             do {
-                let entries = try await OPMLService.shared.parse(url: url)
-                var added = 0
-                var skipped = 0
-                var failed = 0
-                for entry in entries {
-                    let feedURL = entry.feedURL
-                    let existing = (try? context.fetch(
-                        FetchDescriptor<Podcast>(predicate: #Predicate { $0.feedURL == feedURL })
-                    ))?.first
-                    if existing != nil {
-                        skipped += 1
-                        continue
-                    }
-                    do {
-                        _ = try await SubscriptionService.shared.subscribe(feedURL: feedURL, in: context)
-                        added += 1
-                    } catch {
-                        failed += 1
-                    }
-                }
-                opmlMessage = Self.opmlSummary(added: added, skipped: skipped, failed: failed)
+                let summary = try await SubscriptionService.shared.importOPML(from: url, in: context)
+                showAlert(title: "Import", message: summary.message)
             } catch {
-                opmlMessage = error.localizedDescription
+                showAlert(title: "Import", message: error.localizedDescription)
             }
         }
+    }
+
+    private func showAlert(title: String, message: String) {
+        alertTitle = title
+        alertMessage = message
     }
 }

@@ -1,0 +1,54 @@
+{
+  "episode_title": "449: Middle School",
+  "description": "Gemini 429 RESOURCE_EXHAUSTED with Retry-After: 0, then a normal answer: exercises in-call retry (attempts == 2).",
+  "responses": [
+    {
+      "format": "gemini",
+      "status": 429,
+      "headers": {
+        "Retry-After": "0"
+      },
+      "body": {
+        "error": {
+          "code": 429,
+          "message": "Resource has been exhausted (e.g. check quota).",
+          "status": "RESOURCE_EXHAUSTED"
+        }
+      }
+    },
+    {
+      "format": "gemini",
+      "status": 200,
+      "body": {
+        "candidates": [
+          {
+            "content": {
+              "role": "model",
+              "parts": [
+                {
+                  "text": "{\"segments\": [{\"startSeconds\": 0.0, \"endSeconds\": 58.0, \"summary\": \"Show billboard and theme music\", \"kind\": \"intro\"}, {\"startSeconds\": 3508.0, \"endSeconds\": 3566.55, \"summary\": \"Credits, funding credits, and next week's teaser\", \"kind\": \"outro\"}]}"
+                }
+              ]
+            },
+            "finishReason": "STOP",
+            "index": 0
+          }
+        ],
+        "usageMetadata": {
+          "promptTokenCount": 18733,
+          "candidatesTokenCount": 187,
+          "thoughtsTokenCount": 1412,
+          "totalTokenCount": 20332,
+          "promptTokensDetails": [
+            {
+              "modality": "TEXT",
+              "tokenCount": 18733
+            }
+          ]
+        },
+        "modelVersion": "gemini-3.5-flash",
+        "responseId": "fixture-response"
+      }
+    }
+  ]
+}

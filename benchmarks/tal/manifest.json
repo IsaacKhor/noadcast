@@ -1,0 +1,106 @@
+{
+  "feed": "https://www.thisamericanlife.org/podcast/rss.xml",
+  "retrieved_at": "2026-09-20T16:57:58.839923+00:00",
+  "episodes": [
+    {
+      "index": 1,
+      "title": "646: The Secret of My Death",
+      "published": "Sun, 13 Sep 2026 20:00:00 -0400",
+      "url": "https://pfx.vpixl.com/6qj4J/dts.podtrac.com/redirect.mp/pdst.fm/e/prefix.up.audio/s/npr.simplecastaudio.com/d3081dd9-fcaf-445a-977c-4f56c28f5a6e/episodes/431ed1d9-35aa-4f85-9ee5-f7e060ce6083/audio/128/default.mp3?awCollectionId=d3081dd9-fcaf-445a-977c-4f56c28f5a6e&awEpisodeId=431ed1d9-35aa-4f85-9ee5-f7e060ce6083&nocache",
+      "path": "audio/01-646.mp3",
+      "duration_seconds": 3918.942,
+      "bytes": 63346363,
+      "sha256": "b9489445cc15440d12d9e4398d16d1f9b91e63f6e2e7c6901c2a0bc68bdd3235"
+    },
+    {
+      "index": 2,
+      "title": "449: Middle School",
+      "published": "Sun, 06 Sep 2026 20:00:00 -0400",
+      "url": "https://pfx.vpixl.com/6qj4J/dts.podtrac.com/redirect.mp/pdst.fm/e/prefix.up.audio/s/npr.simplecastaudio.com/d3081dd9-fcaf-445a-977c-4f56c28f5a6e/episodes/a631bda2-b83f-4e2c-99c5-8344e637a322/audio/128/default.mp3?awCollectionId=d3081dd9-fcaf-445a-977c-4f56c28f5a6e&awEpisodeId=a631bda2-b83f-4e2c-99c5-8344e637a322&nocache",
+      "path": "audio/02-449.mp3",
+      "duration_seconds": 3566.550189,
+      "bytes": 57704635,
+      "sha256": "d4e718ad27194e5c5068a0523bcd1850d550f4c05480f9e725d184c2141d322b"
+    },
+    {
+      "index": 3,
+      "title": "896: I Know What You Need",
+      "published": "Sun, 30 Aug 2026 20:00:00 -0400",
+      "url": "https://pfx.vpixl.com/6qj4J/dts.podtrac.com/redirect.mp/pdst.fm/e/prefix.up.audio/s/npr.simplecastaudio.com/d3081dd9-fcaf-445a-977c-4f56c28f5a6e/episodes/caceec36-6b90-47bf-82f3-0913de8f51ee/audio/128/default.mp3?awCollectionId=d3081dd9-fcaf-445a-977c-4f56c28f5a6e&awEpisodeId=caceec36-6b90-47bf-82f3-0913de8f51ee&nocache",
+      "path": "audio/03-896.mp3",
+      "duration_seconds": 3984.195878,
+      "bytes": 64386961,
+      "sha256": "11194974436eb864720ac2d21d54c07d8d43e65f9d68b74f5ddbc407191ddddd"
+    },
+    {
+      "index": 4,
+      "title": "206: Somewhere in the Arabian Sea",
+      "published": "Sun, 23 Aug 2026 20:00:00 -0400",
+      "url": "https://pfx.vpixl.com/6qj4J/dts.podtrac.com/redirect.mp/pdst.fm/e/prefix.up.audio/s/npr.simplecastaudio.com/d3081dd9-fcaf-445a-977c-4f56c28f5a6e/episodes/dcc04146-548e-4a57-826b-d653088ec4e2/audio/128/default.mp3?awCollectionId=d3081dd9-fcaf-445a-977c-4f56c28f5a6e&awEpisodeId=dcc04146-548e-4a57-826b-d653088ec4e2&nocache",
+      "path": "audio/04-206.mp3",
+      "duration_seconds": 3566.863625,
+      "bytes": 57721490,
+      "sha256": "9fe0b3fab310f3690cbc3ed9cc35c19d16c66224cc68b6b67687725554dbebb8"
+    },
+    {
+      "index": 5,
+      "title": "895: Label Maker!",
+      "published": "Sun, 16 Aug 2026 20:00:00 -0400",
+      "url": "https://pfx.vpixl.com/6qj4J/dts.podtrac.com/redirect.mp/pdst.fm/e/prefix.up.audio/s/npr.simplecastaudio.com/d3081dd9-fcaf-445a-977c-4f56c28f5a6e/episodes/15103000-90c9-465f-8a0d-0dff5fb2f403/audio/128/default.mp3?awCollectionId=d3081dd9-fcaf-445a-977c-4f56c28f5a6e&awEpisodeId=15103000-90c9-465f-8a0d-0dff5fb2f403&nocache",
+      "path": "audio/05-895.mp3",
+      "duration_seconds": 3464.385256,
+      "bytes": 56081514,
+      "sha256": "6fdd6aca23473faade65d5783c42dc747d4e3676afccadc7be557faf6404c72d"
+    },
+    {
+      "index": 6,
+      "title": "894: I Couldn't Help but Notice",
+      "published": "Sun, 02 Aug 2026 20:00:00 -0400",
+      "url": "https://pfx.vpixl.com/6qj4J/dts.podtrac.com/redirect.mp/pdst.fm/e/prefix.up.audio/s/npr.simplecastaudio.com/d3081dd9-fcaf-445a-977c-4f56c28f5a6e/episodes/0e3cd2c7-87b9-4122-a3fd-38d95bfda0e9/audio/128/default.mp3?awCollectionId=d3081dd9-fcaf-445a-977c-4f56c28f5a6e&awEpisodeId=0e3cd2c7-87b9-4122-a3fd-38d95bfda0e9&nocache",
+      "path": "audio/06-894.mp3",
+      "duration_seconds": 3543.170567,
+      "bytes": 57338645,
+      "sha256": "6f2b571502180f7d52702bff3d9e00546798885f1a8909e972ee70069203317d"
+    },
+    {
+      "index": 7,
+      "title": "893: Testosterone",
+      "published": "Sun, 26 Jul 2026 20:00:00 -0400",
+      "url": "https://pfx.vpixl.com/6qj4J/dts.podtrac.com/redirect.mp/pdst.fm/e/prefix.up.audio/s/npr.simplecastaudio.com/d3081dd9-fcaf-445a-977c-4f56c28f5a6e/episodes/2e938939-638b-4300-8602-68b010d9b98f/audio/128/default.mp3?awCollectionId=d3081dd9-fcaf-445a-977c-4f56c28f5a6e&awEpisodeId=2e938939-638b-4300-8602-68b010d9b98f&nocache",
+      "path": "audio/07-893.mp3",
+      "duration_seconds": 3618.403256,
+      "bytes": 58542355,
+      "sha256": "d6997f0e5e8d7d160fdbbca473b0716263bc32b8214d70777ab4b659e356c87f"
+    },
+    {
+      "index": 8,
+      "title": "892: Trapped on a Bus",
+      "published": "Sun, 19 Jul 2026 20:00:00 -0400",
+      "url": "https://pfx.vpixl.com/6qj4J/dts.podtrac.com/redirect.mp/pdst.fm/e/prefix.up.audio/s/npr.simplecastaudio.com/d3081dd9-fcaf-445a-977c-4f56c28f5a6e/episodes/8e5b0ae5-8cc7-4178-a41a-46b344dc784e/audio/128/default.mp3?awCollectionId=d3081dd9-fcaf-445a-977c-4f56c28f5a6e&awEpisodeId=8e5b0ae5-8cc7-4178-a41a-46b344dc784e&nocache",
+      "path": "audio/08-892.mp3",
+      "duration_seconds": 3652.414689,
+      "bytes": 59078458,
+      "sha256": "dbfcbd52c48c69893d49e21d094523fa1c06c5f8ce6c94f592469bf245001aea"
+    },
+    {
+      "index": 9,
+      "title": "891: The Test Case",
+      "published": "Sun, 12 Jul 2026 20:00:00 -0400",
+      "url": "https://pfx.vpixl.com/6qj4J/dts.podtrac.com/redirect.mp/pdst.fm/e/prefix.up.audio/s/npr.simplecastaudio.com/d3081dd9-fcaf-445a-977c-4f56c28f5a6e/episodes/54b46113-a17b-4f3e-ac3f-d525e0106fab/audio/128/default.mp3?awCollectionId=d3081dd9-fcaf-445a-977c-4f56c28f5a6e&awEpisodeId=54b46113-a17b-4f3e-ac3f-d525e0106fab&nocache",
+      "path": "audio/09-891.mp3",
+      "duration_seconds": 4218.5665,
+      "bytes": 68163240,
+      "sha256": "039a5127d785970542f46fd350ef7919ddd04d3072f424aab260d15a8554c653"
+    },
+    {
+      "index": 10,
+      "title": "890: Maximal Americanness",
+      "published": "Sun, 05 Jul 2026 20:00:00 -0400",
+      "url": "https://pfx.vpixl.com/6qj4J/dts.podtrac.com/redirect.mp/pdst.fm/e/prefix.up.audio/s/npr.simplecastaudio.com/d3081dd9-fcaf-445a-977c-4f56c28f5a6e/episodes/5066d1f0-f8af-484d-a5a6-aea3a4966cf8/audio/128/default.mp3?awCollectionId=d3081dd9-fcaf-445a-977c-4f56c28f5a6e&awEpisodeId=5066d1f0-f8af-484d-a5a6-aea3a4966cf8&nocache",
+      "path": "audio/10-890.mp3",
+      "duration_seconds": 3250.285689,
+      "bytes": 52691427,
+      "sha256": "d0e81fb084cf85eaa7be58cbfb3976a6535e29d9875199aaec86adf6193de6ad"
+    }
+  ]
+}

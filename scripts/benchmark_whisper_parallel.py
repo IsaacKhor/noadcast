@@ -210,19 +210,24 @@ def worker_main(worker_id, affinity, config, warmup_path, task_queue, result_que
         if affinity and hasattr(os, "sched_setaffinity"):
             os.sched_setaffinity(0, affinity)
 
+        if config["device"] == "cuda":
+            # The server worker's loader for the pip cuBLAS/cuDNN wheels (no LD_LIBRARY_PATH needed).
+            from noadcast.transcribe.worker import preload_cuda_libraries
+            preload_cuda_libraries()
         from faster_whisper import BatchedInferencePipeline, WhisperModel
-        from faster_whisper.audio import decode_audio
+        # The server's decoder: faster-whisper's stops at the first corrupt packet (DAI splices).
+        from noadcast.transcribe.audio import decode_audio
 
         load_start = time.perf_counter()
         model = WhisperModel(
-            config["model_path"], device="cpu", compute_type=config["compute_type"],
+            config["model_path"], device=config["device"], compute_type=config["compute_type"],
             cpu_threads=config["cpu_threads"], num_workers=1, local_files_only=True,
         )
         pipeline = BatchedInferencePipeline(model)
         model_load_seconds = time.perf_counter() - load_start
 
         decode_start = time.perf_counter()
-        warm_audio = decode_audio(warmup_path)[: config["warmup_audio_seconds"] * 16000]
+        warm_audio = decode_audio(warmup_path)[0][: config["warmup_audio_seconds"] * 16000]
         warmup_decode_seconds = time.perf_counter() - decode_start
         warmup_start = time.perf_counter()
         segments, _ = pipeline.transcribe(
@@ -252,7 +257,7 @@ def worker_main(worker_id, affinity, config, warmup_path, task_queue, result_que
             episode = task["episode"]
             episode_start = time.perf_counter()
             decode_start = time.perf_counter()
-            audio = decode_audio(task["audio_path"])
+            audio, decode_skipped_packets = decode_audio(task["audio_path"])
             full_decoded_audio_seconds = len(audio) / 16000
             decode_seconds = time.perf_counter() - decode_start
             if config["sample_seconds"]:
@@ -288,6 +293,7 @@ def worker_main(worker_id, affinity, config, warmup_path, task_queue, result_que
                 "full_decoded_audio_seconds": full_decoded_audio_seconds,
                 "benchmark_audio_seconds": benchmark_audio_seconds,
                 "decode_seconds": decode_seconds,
+                "decode_skipped_packets": decode_skipped_packets,
                 "transcribe_seconds": transcribe_seconds,
                 "cpu_seconds": cpu_seconds,
                 "end_to_end_seconds": time.perf_counter() - episode_start,
@@ -295,6 +301,8 @@ def worker_main(worker_id, affinity, config, warmup_path, task_queue, result_que
                 "speed_x": benchmark_audio_seconds / transcribe_seconds,
                 "speech_seconds_after_vad": info.duration_after_vad,
                 "segment_count": len(rows), "last_segment_end": rows[-1]["end"],
+                "word_count": sum(len(row["words"] or []) for row in rows),
+                "last_word_end": next((row["words"][-1]["end"] for row in reversed(rows) if row["words"]), None),
                 "peak_process_rss_mib": resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024,
                 "transcript_json": str(transcript_json.relative_to(Path(task["run_dir"]))),
                 "transcript_text": str(transcript_txt.relative_to(Path(task["run_dir"]))),
@@ -370,7 +378,7 @@ def main() -> int:
     parser.add_argument("--sample-seconds", type=int, default=0,
                         help="inference prefix per selected episode; 0 transcribes full files")
     parser.add_argument("--episodes", type=parse_episode_indexes,
-                        help="manifest indexes, comma separated (default: all ten)")
+                        help="manifest indexes, comma separated (default: every manifest episode)")
     parser.add_argument("--model-path", type=Path, default=DEFAULT_MODEL)
     parser.add_argument("--model-id", help="model repository identifier recorded in results")
     parser.add_argument("--memory-interval-ms", type=int, default=0,
@@ -379,19 +387,28 @@ def main() -> int:
                         help="decode corpus MP3s or matching pcm/<stem>.wav files (default: mp3)")
     parser.add_argument("--model-revision", help="revision ID if absent from local HF metadata")
     parser.add_argument("--run-id", help="unique output directory name (default: timestamp plus nonce)")
+    parser.add_argument("--corpus", type=Path, default=TAL_ROOT,
+                        help="corpus directory with manifest.json, optional pcm/, and runs/ (default: benchmarks/tal)")
+    parser.add_argument("--device", choices=("cpu", "cuda"), default="cpu",
+                        help="CTranslate2 device; cuda workers share the GPU (default: cpu)")
+    parser.add_argument("--compute-type", default="int8",
+                        help="CTranslate2 compute type, e.g. int8, float16, int8_float16 (default: int8)")
+    parser.add_argument("--word-timestamps", action="store_true",
+                        help="emit cross-attention word alignments (Word.start/end/probability)")
     args = parser.parse_args()
     if args.workers < 1 or args.threads_per_worker < 1 or args.batch_size < 1 or args.sample_seconds < 0:
         parser.error("worker, thread, and batch counts must be positive; sample seconds cannot be negative")
     if args.memory_interval_ms and args.memory_interval_ms < 100:
         parser.error("memory sampling interval must be 0 or at least 100 ms")
 
-    manifest_path = TAL_ROOT / "manifest.json"
+    corpus = args.corpus.resolve()
+    manifest_path = corpus / "manifest.json"
     manifest = json.loads(manifest_path.read_text())
-    pcm_manifest_path = TAL_ROOT / "pcm" / "manifest.json"
+    pcm_manifest_path = corpus / "pcm" / "manifest.json"
     pcm_manifest = json.loads(pcm_manifest_path.read_text()) if args.input_format == "pcm" and pcm_manifest_path.is_file() else None
     pcm_by_index = {episode["index"]: episode for episode in pcm_manifest["episodes"]} if pcm_manifest else {}
     by_index = {episode["index"]: episode for episode in manifest["episodes"]}
-    selected_indexes = args.episodes or list(by_index)[:10]
+    selected_indexes = args.episodes or list(by_index)
     unknown = sorted(set(selected_indexes) - set(by_index))
     if unknown:
         parser.error(f"episode indexes absent from manifest: {unknown}")
@@ -401,8 +418,8 @@ def main() -> int:
             pcm_episode = pcm_by_index.get(episode["index"])
             if not pcm_episode:
                 parser.error(f"episode {episode['index']} is absent from {pcm_manifest_path}")
-            return TAL_ROOT / pcm_episode["pcm_path"]
-        return TAL_ROOT / episode["path"]
+            return corpus / pcm_episode["pcm_path"]
+        return corpus / episode["path"]
 
     def decoded_input_sha256(episode):
         if args.input_format == "pcm":
@@ -419,7 +436,7 @@ def main() -> int:
         run_id = make_run_id(args.run_id)
     except ValueError as error:
         parser.error(str(error))
-    run_dir = TAL_ROOT / "runs" / run_id
+    run_dir = corpus / "runs" / run_id
     try:
         run_dir.mkdir(parents=True, exist_ok=False)
     except FileExistsError:
@@ -430,12 +447,12 @@ def main() -> int:
     invocation = [sys.executable, *sys.argv]
     config = {
         "engine": "faster-whisper", "model": args.model_id or f"Systran/faster-whisper-{args.model_path.name}",
-        "model_path": str(args.model_path.resolve()), "device": "cpu", "compute_type": "int8",
+        "model_path": str(args.model_path.resolve()), "device": args.device, "compute_type": args.compute_type,
         "workers": args.workers, "cpu_threads": args.threads_per_worker,
         "physical_cores": args.physical_cores, "pin_workers": args.pin_workers,
         "input_format": args.input_format, "batch_size": args.batch_size,
         "beam_size": 5, "language": "en", "vad_filter": True,
-        "condition_on_previous_text": False, "word_timestamps": False,
+        "condition_on_previous_text": False, "word_timestamps": args.word_timestamps,
         "warmup_audio_seconds": 30, "sample_seconds": args.sample_seconds,
         "memory_interval_ms": args.memory_interval_ms,
     }
@@ -461,6 +478,8 @@ def main() -> int:
             "worker_affinities": affinities, "lscpu": command_output(["lscpu"]),
             "memory": command_output(["free", "-b"]), "load_start": os.getloadavg(),
             "versions": package_versions(),
+            "gpu": command_output(["nvidia-smi", "--query-gpu=name,driver_version,memory.total,compute_cap",
+                                   "--format=csv,noheader"]) if args.device == "cuda" else None,
         },
         "workers": [], "episodes": [],
     }

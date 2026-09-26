@@ -1,102 +1,58 @@
 import Foundation
 import SwiftData
 
+/// Singleton row of device preferences, lifetime listening stats, and a
+/// small mirror of the server's global settings.
+///
+/// Every write to this row invalidates every live `@Query<AppSettings>`, so
+/// sync writes to the mirrored fields are write-if-changed, and the server
+/// address/token live outside SwiftData (`APIConfiguration`).
 @Model
 final class AppSettings {
     var defaultPlaybackSpeed: Double
     var autoDownloadPolicyRaw: String
-    /// Global master switch for episode ad analysis. When off, downloads skip
-    /// analysis even if an individual podcast's setting is on.
-    var adAnalysisEnabled: Bool = false
+    /// Server mirror of the global ad-analysis switch (`GET /settings`).
+    /// Changed through an optimistic `PATCH /api/v1/settings`. When off, the
+    /// server skips analysis even if an individual podcast's setting is on.
+    var adAnalysisEnabled: Bool = true
     var autoDeleteAfterPlayed: Bool
     var podcastSortModeRaw: String = PodcastSortMode.latestEpisode.rawValue
 
-    /// `Episode.guid` of the episode that was loaded into the player when the
-    /// app was last foregrounded. Restored on launch so Now Playing comes back
-    /// pre-loaded (paused) and ready to resume.
-    var lastPlayedEpisodeGUID: String?
+    /// `Episode.serverID` of the episode that was loaded into the player when
+    /// the app was last foregrounded. Restored on launch so Now Playing comes
+    /// back pre-loaded (paused) and ready to resume.
+    var lastPlayedEpisodeServerID: Int?
 
-    /// Last time `refreshAll` finished. Surfaced on the Podcasts list.
+    /// Last time a pull-to-refresh of every feed finished. Surfaced on the
+    /// Podcasts list.
     var lastGlobalRefreshAt: Date?
 
     /// Lifetime cumulative seconds skipped because an `AdMarker` was hit
-    /// during playback. Updated by `PlayerService.maybeSkipAd()`.
+    /// during playback. Updated by `PlayerService`.
     var lifetimeAdSkipSeconds: Double = 0
     /// Lifetime cumulative audio-seconds actually played back (counts both
     /// content and the parts of ads that played before being skipped).
-    /// Sum with `lifetimeAdSkipSeconds` to get the total audio "consumed".
     var lifetimePlayedSeconds: Double = 0
 
-    /// Skip detected mid-episode ads during playback. Defaults on (it's the
-    /// whole point of the app). Off lets you hear ads if you want — markers
-    /// are still rendered on the timeline and in the skip-segments sheet.
+    /// Skip detected mid-episode ads during playback. Off lets you hear ads
+    /// if you want — markers are still rendered on the timeline and in the
+    /// skip-segments sheet.
     var skipAds: Bool = true
-    /// Skip detected intros and outros during playback. Defaults on.
+    /// Skip detected intros and outros during playback.
     var skipIntrosAndOutros: Bool = true
     /// When the player skips a segment, it then peeks ahead by this many
     /// seconds for another segment to chain-skip. Set to 0 to disable.
     var chainSkipGapSeconds: Int = 5
 
-    /// Lifetime cumulative input/thought/output tokens billed to the user's API
-    /// key for ad-detection calls. Summed across models so changing providers doesn't reset the
-    /// counter. Updated by `ProcessingPipeline` after each successful call.
-    var lifetimeAdDetectionInputTokens: Int = 0
-    var lifetimeAdDetectionThoughtTokens: Int = 0
-    var lifetimeAdDetectionOutputTokens: Int = 0
-
-    /// Running cost estimates in USD, accumulated as each call completes
-    /// using whatever per-token rates the provider was on at the time. These
-    /// are historical records, not re-computations — so changes to the
-    /// pricing constants in `AdDetectionProvider` only affect new calls.
-    var lifetimeAdDetectionInputCostUSD: Double = 0
-    var lifetimeAdDetectionThoughtCostUSD: Double = 0
-    var lifetimeAdDetectionOutputCostUSD: Double = 0
-    /// Combined total for quick summary display and debugging.
-    var lifetimeAdDetectionCostUSD: Double = 0
-
-    /// Where audio analysis runs. Direct cloud backends send episode audio to
-    /// Gemini or OpenRouter; transcript backends send only timestamped text
-    /// for segment classification.
-    var adDetectionBackendRaw: String = AdDetectionBackend.geminiFiles.rawValue
-    /// Which cloud model performs ad detection. See `AdDetectionProvider`.
-    var adDetectionProviderRaw: String = AdDetectionProvider.gemini35Flash.rawValue
-    /// Optional thinking level for Gemini models whose API accepts
-    /// `thinkingConfig.thinkingLevel`. Unsupported models ignore this.
-    var adDetectionThinkingLevelRaw: String = AdDetectionThinkingLevel.automatic.rawValue
-    /// If enabled, uploads a temporary low-bitrate copy to Gemini instead of
-    /// the local playback file.
-    var downsampleAudioBeforeUpload: Bool = false
-    /// API key for Google AI Studio (Gemini providers). Stored unencrypted in
-    /// the app's SwiftData store — fine for a personal-use app; move to
-    /// Keychain if this ever ships to multiple users.
-    var googleAPIKey: String?
-    /// API key for direct OpenRouter analysis. Kept separate from the Google
-    /// key so changing backends never sends one provider another's secret.
-    var openRouterAPIKey: String?
-    /// Hostname/base URL for the local whisper.cpp analysis server.
-    var adDetectionServerHost: String = "http://127.0.0.1"
-    /// TCP port for the local whisper.cpp analysis server.
-    var adDetectionServerPort: Int = 8765
-
-    var adDetectionBackend: AdDetectionBackend {
-        get { AdDetectionBackend(rawValue: adDetectionBackendRaw) ?? .geminiFiles }
-        set { adDetectionBackendRaw = newValue.rawValue }
-    }
-
-    var adDetectionProvider: AdDetectionProvider {
-        get { AdDetectionProvider(rawValue: adDetectionProviderRaw) ?? .gemini35Flash }
-        set { adDetectionProviderRaw = newValue.rawValue }
-    }
-
-    var adDetectionThinkingLevel: AdDetectionThinkingLevel {
-        get { AdDetectionThinkingLevel(rawValue: adDetectionThinkingLevelRaw) ?? .automatic }
-        set { adDetectionThinkingLevelRaw = newValue.rawValue }
-    }
+    /// Server mirror (read-only in the UI).
+    var serverAutoProcessEnabled: Bool = true
+    var serverClassifier: String?
+    var serverClassifierModel: String?
 
     init(
         defaultPlaybackSpeed: Double = 1.0,
         autoDownloadPolicy: AutoDownloadPolicy = .wifiOnly,
-        adAnalysisEnabled: Bool = false,
+        adAnalysisEnabled: Bool = true,
         autoDeleteAfterPlayed: Bool = true
     ) {
         self.defaultPlaybackSpeed = defaultPlaybackSpeed
@@ -115,26 +71,23 @@ final class AppSettings {
         set { podcastSortModeRaw = newValue.rawValue }
     }
 
-    func resetAdDetectionUsageStatistics() {
-        lifetimeAdDetectionInputTokens = 0
-        lifetimeAdDetectionThoughtTokens = 0
-        lifetimeAdDetectionOutputTokens = 0
-        lifetimeAdDetectionInputCostUSD = 0
-        lifetimeAdDetectionThoughtCostUSD = 0
-        lifetimeAdDetectionOutputCostUSD = 0
-        lifetimeAdDetectionCostUSD = 0
-    }
-
     func resetPlaybackHistoryStatistics() {
         lifetimePlayedSeconds = 0
         lifetimeAdSkipSeconds = 0
     }
 
-    /// Fetches the singleton settings row, creating it if missing.
+    /// Fetches the singleton settings row, creating it if missing. Also
+    /// collapses accidental duplicates (two contexts racing the insert).
     static func current(in context: ModelContext) -> AppSettings {
-        let descriptor = FetchDescriptor<AppSettings>()
-        if let existing = try? context.fetch(descriptor).first {
-            return existing
+        let existing = (try? context.fetch(FetchDescriptor<AppSettings>())) ?? []
+        if let first = existing.first {
+            if existing.count > 1 {
+                for duplicate in existing.dropFirst() {
+                    context.delete(duplicate)
+                }
+                try? context.save()
+            }
+            return first
         }
         let new = AppSettings()
         context.insert(new)

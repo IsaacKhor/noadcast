@@ -22,13 +22,7 @@ struct SkipSegmentsView: View {
                 } else {
                     List {
                         ForEach(sortedAds) { ad in
-                            Section {
-                                Text("Tap to jump to the start of this segment.")
-                                    .font(.subheadline)
-                                    .foregroundStyle(.secondary)
-                            } header: {
-                                AdHeader(ad: ad, onSeek: onSeek)
-                            }
+                            SegmentRow(ad: ad, onSeek: onSeek)
                         }
                     }
                 }
@@ -39,7 +33,7 @@ struct SkipSegmentsView: View {
     }
 }
 
-private struct AdHeader: View {
+private struct SegmentRow: View {
     let ad: AdMarker
     let onSeek: (Double) -> Void
 
@@ -55,25 +49,30 @@ private struct AdHeader: View {
         Button {
             onSeek(ad.startSeconds)
         } label: {
-            HStack(alignment: .firstTextBaseline, spacing: 6) {
-                Image(systemName: "speaker.slash.fill")
-                    .foregroundStyle(ad.kind.tint)
-                Text(ad.kind.label.uppercased())
-                    .font(.caption2.bold())
-                    .foregroundStyle(.white)
-                    .padding(.horizontal, 5)
-                    .padding(.vertical, 1)
-                    .background(ad.kind.tint, in: Capsule())
+            VStack(alignment: .leading, spacing: 7) {
+                HStack(spacing: 8) {
+                    Text(ad.kind.label.uppercased())
+                        .font(.caption2.bold())
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 7)
+                        .padding(.vertical, 3)
+                        .background(ad.kind.tint, in: Capsule())
+                    Text("\(TimeFormatting.timestamp(ad.startSeconds))–\(TimeFormatting.timestamp(ad.endSeconds))")
+                        .font(.caption.monospacedDigit())
+                        .foregroundStyle(.secondary)
+                    Spacer()
+                    Image(systemName: "play.fill")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
                 Text(ad.summary.isEmpty ? fallbackTitle : ad.summary)
-                    .font(.subheadline.bold())
+                    .font(.subheadline)
                     .foregroundStyle(.primary)
-                Spacer()
-                Text("\(TimeFormatting.timestamp(ad.startSeconds))–\(TimeFormatting.timestamp(ad.endSeconds))")
-                    .font(.caption.monospacedDigit())
-                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
-            .textCase(nil)
+            .padding(.vertical, 4)
         }
         .buttonStyle(.plain)
+        .accessibilityHint("Seek to segment")
     }
 }

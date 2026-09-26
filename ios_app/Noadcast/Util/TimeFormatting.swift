@@ -22,39 +22,55 @@ enum TimeFormatting {
         return formatter.string(fromByteCount: bytes)
     }
 
-    /// Stage-specific detail string rendered next to the progress bar while
-    /// an episode is being processed. Returns `nil` when there's nothing
-    /// meaningful to show yet.
-    /// * `.downloading` / `.uploading` → "12.3 MB / 50 MB" (or "12.3 MB" if total unknown)
-    /// * `.detectingAds` → optional determinate analysis detail, when a backend provides one
-    ///   (`12:34 / 45:00` for transcription, `Chunk 3 of 12` for chunked analysis)
+    /// Detail string for a download to this device, rendered next to its
+    /// progress bar: "12.3 MB / 50 MB" (or "12.3 MB" if the total is unknown,
+    /// or a percentage). `nil` when there's nothing meaningful to show yet.
     static func progressDetail(for episode: Episode) -> String? {
-        switch episode.processingState {
-        case .downloading, .uploading:
-            let current = episode.processingCurrent.map { Int64($0) }
-            let total = episode.processingTotal.map { Int64($0) }
-            switch (current, total) {
-            case (let c?, let t?) where t > 0:
-                return "\(fileSize(c)) / \(fileSize(t))"
-            case (let c?, _):
-                return fileSize(c)
+        switch episode.downloadState {
+        case .downloading, .queued:
+            switch (episode.downloadedBytes, episode.downloadTotalBytes) {
+            case (let current?, let total?) where total > 0:
+                return "\(fileSize(current)) / \(fileSize(total))"
+            case (let current?, _):
+                return fileSize(current)
             default:
-                guard episode.processingProgress > 0 else { return nil }
-                let pct = Int((episode.processingProgress * 100).rounded())
+                guard episode.downloadProgress > 0 else { return nil }
+                let pct = Int((episode.downloadProgress * 100).rounded())
                 return "\(pct)%"
             }
-        case .detectingAds:
-            guard let current = episode.processingCurrent,
-                  let total = episode.processingTotal,
-                  total > 0 else { return nil }
-            let label = episode.processingStatusText?.lowercased() ?? ""
-            if label.contains("transcrib") {
-                return "\(timestamp(current)) / \(timestamp(total))"
-            }
-            return "Chunk \(Int(current)) of \(Int(total))"
-        default:
+        case .idle, .downloaded, .failed:
             return nil
         }
+    }
+
+    /// Detail string for a server job from `GET /jobs/active`, in the
+    /// stage's natural unit:
+    /// * `download` → "12.3 MB / 50 MB" (bytes)
+    /// * `transcribe` → "12:34 / 45:00" (audio time)
+    /// * `classify` → nothing (indeterminate)
+    static func progressDetail(for job: ActiveJobDTO) -> String? {
+        switch job.stage {
+        case .download:
+            switch (job.current, job.total) {
+            case (let current?, let total?) where total > 0:
+                return "\(fileSize(byteCount(current))) / \(fileSize(byteCount(total)))"
+            case (let current?, _):
+                return fileSize(byteCount(current))
+            default:
+                return nil
+            }
+        case .transcribe:
+            guard let current = job.current, let total = job.total, total > 0 else { return nil }
+            return "\(timestamp(max(0, min(current, total)))) / \(timestamp(total))"
+        case .classify, .unknown:
+            return nil
+        }
+    }
+
+    /// Server-reported byte counts arrive as `Double`; never trap on a bad one.
+    private static func byteCount(_ value: Double) -> Int64 {
+        guard value.isFinite, value > 0 else { return 0 }
+        return value >= Double(Int64.max) ? Int64.max : Int64(value)
     }
 
     /// "3:47 PM · 5 min ago" — absolute (locale time) and relative (locale

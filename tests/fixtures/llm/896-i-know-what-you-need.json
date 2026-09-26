@@ -1,0 +1,40 @@
+{
+  "episode_title": "896: I Know What You Need",
+  "description": "Gemini answer wrapped in a ```json fence: the parser strips it (attempts == 1).",
+  "responses": [
+    {
+      "format": "gemini",
+      "status": 200,
+      "body": {
+        "candidates": [
+          {
+            "content": {
+              "role": "model",
+              "parts": [
+                {
+                  "text": "```json\n{\n  \"segments\": [\n    {\n      \"startSeconds\": 0.0,\n      \"endSeconds\": 61.0,\n      \"summary\": \"Show billboard and theme music\",\n      \"kind\": \"intro\"\n    },\n    {\n      \"startSeconds\": 3921.0,\n      \"endSeconds\": 3984.2,\n      \"summary\": \"Credits, funding credits, and next week's teaser\",\n      \"kind\": \"outro\"\n    }\n  ]\n}\n```"
+                }
+              ]
+            },
+            "finishReason": "STOP",
+            "index": 0
+          }
+        ],
+        "usageMetadata": {
+          "promptTokenCount": 20412,
+          "candidatesTokenCount": 214,
+          "thoughtsTokenCount": 1650,
+          "totalTokenCount": 22276,
+          "promptTokensDetails": [
+            {
+              "modality": "TEXT",
+              "tokenCount": 20412
+            }
+          ]
+        },
+        "modelVersion": "gemini-3.5-flash",
+        "responseId": "fixture-response"
+      }
+    }
+  ]
+}

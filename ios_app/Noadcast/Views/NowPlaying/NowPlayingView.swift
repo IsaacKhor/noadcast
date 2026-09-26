@@ -10,6 +10,7 @@ struct NowPlayingView: View {
 
     @State private var showNotes = false
     @State private var showAds = false
+    @State private var selectedPage = 0
 
     private var settings: AppSettings? { settingsList.first }
     private var globalAdSkippingEnabled: Bool { settings?.skipAds == true }
@@ -28,7 +29,21 @@ struct NowPlayingView: View {
         NavigationStack {
             Group {
                 if let episode = currentEpisode {
-                    nowPlayingContent(for: episode)
+                    TabView(selection: $selectedPage) {
+                        nowPlayingContent(for: episode)
+                            .tag(0)
+                        ChaptersView(
+                            chapters: player.chapters,
+                            currentTime: player.currentTime,
+                            isLoading: player.isLoadingChapters,
+                            hasAudioItem: player.sourceKind != .none
+                        ) {
+                            player.seek(to: $0)
+                        }
+                        .tag(1)
+                    }
+                    .tabViewStyle(.page(indexDisplayMode: .never))
+                    .onChange(of: episode.serverID) { _, _ in selectedPage = 0 }
                 } else {
                     emptyState
                 }
@@ -62,51 +77,86 @@ struct NowPlayingView: View {
 
     @ViewBuilder
     private func nowPlayingContent(for episode: Episode) -> some View {
-        ScrollView {
-            VStack(spacing: 24) {
-                artwork(for: episode)
-
-                VStack(spacing: 4) {
-                    Text(episode.title)
-                        .font(.headline)
-                        .multilineTextAlignment(.center)
-                    Text(episode.podcastTitle ?? episode.podcast?.title ?? "")
-                        .font(.subheadline)
-                        .foregroundStyle(.secondary)
-                }
-
-                AdMarkerTimeline(
-                    currentTime: player.currentTime,
-                    duration: player.duration,
-                    adRegions: player.adRegions,
-                    onSeek: { player.seek(to: $0) }
-                )
-
-                adSummary
-
-                transportControls
-
-                playbackOptions
-
-                HStack(spacing: 16) {
-                    Button {
-                        showNotes = true
-                    } label: {
-                        Label("Show Notes", systemImage: "doc.text")
+        GeometryReader { geometry in
+            let wide = geometry.size.width > geometry.size.height * 1.15
+            let compact = geometry.size.height < 600
+            if wide {
+                HStack(spacing: 20) {
+                    VStack(spacing: 8) {
+                        artwork(for: episode, size: min(100, geometry.size.height * 0.24))
+                        episodeHeading(for: episode)
+                        adSummary(for: episode)
+                        playbackStatus(compact: true)
                     }
-
-                    AudioOutputRoutePickerButton()
-                        .frame(width: 44, height: 36)
-                        .background(.quaternary, in: RoundedRectangle(cornerRadius: 8))
-                        .accessibilityLabel("Audio Output")
+                    .frame(width: min(200, geometry.size.width * 0.32))
+                    playerControls(for: episode, compact: true, showAdSummary: false, showStatus: false)
+                        .frame(maxWidth: .infinity)
                 }
-                .buttonStyle(.bordered)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .padding(.horizontal, 16)
+            } else {
+                VStack(spacing: compact ? 4 : 9) {
+                    Spacer(minLength: 0)
+                    artwork(for: episode, size: min(compact ? 90 : 140, geometry.size.height * 0.16))
+                    episodeHeading(for: episode)
+                    playerControls(for: episode, compact: compact)
+                    Spacer(minLength: 0)
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .padding(.horizontal, 16)
             }
-            .padding()
         }
     }
 
-    private func artwork(for episode: Episode) -> some View {
+    private func episodeHeading(for episode: Episode) -> some View {
+        VStack(spacing: 4) {
+            Text(episode.title)
+                .font(.headline)
+                .multilineTextAlignment(.center)
+                .lineLimit(2)
+            Text(episode.podcastTitle ?? episode.podcast?.title ?? "")
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+        }
+    }
+
+    private func playerControls(
+        for episode: Episode,
+        compact: Bool,
+        showAdSummary: Bool = true,
+        showStatus: Bool = true
+    ) -> some View {
+        VStack(spacing: compact ? 4 : 9) {
+            AdMarkerTimeline(
+                currentTime: player.currentTime,
+                duration: player.duration,
+                adRegions: visibleAdRegions(for: episode),
+                bufferedRanges: player.bufferedRanges,
+                onSeek: { player.seek(to: $0) }
+            )
+            if showStatus { playbackStatus(compact: compact) }
+            if showAdSummary { adSummary(for: episode) }
+            transportControls
+            playbackOptions
+            HStack(spacing: 12) {
+                Button { showNotes = true } label: {
+                    Label(compact ? "Notes" : "Show Notes", systemImage: "doc.text")
+                }
+                Button { selectedPage = 1 } label: {
+                    Label("Chapters", systemImage: "list.bullet")
+                }
+                AudioOutputRoutePickerButton()
+                    .frame(width: 44, height: 44)
+                    .background(.quaternary, in: RoundedRectangle(cornerRadius: 8))
+                    .accessibilityLabel("Audio Output")
+            }
+            .buttonStyle(.bordered)
+        }
+        .frame(maxWidth: .infinity)
+    }
+
+    private func artwork(for episode: Episode, size: CGFloat) -> some View {
         let url = episode.podcastArtworkDisplayURL ?? episode.podcast?.artworkDisplayURL
         return AsyncImage(url: url) { phase in
             switch phase {
@@ -122,19 +172,20 @@ struct NowPlayingView: View {
                     )
             }
         }
-        .frame(maxWidth: 280, maxHeight: 280)
+        .frame(width: size, height: size)
         .clipShape(RoundedRectangle(cornerRadius: 16))
     }
 
-    private var adSummary: some View {
-        Button {
+    private func adSummary(for episode: Episode) -> some View {
+        let markers = episode.adMarkers.filter { !$0.isDeleted }
+        return Button {
             showAds = true
         } label: {
             HStack(spacing: 16) {
                 Image(systemName: "speaker.slash.fill")
                     .foregroundStyle(.orange)
                 VStack(alignment: .leading) {
-                    Text(detectionSummary)
+                    Text(detectionSummary(for: markers))
                         .font(.subheadline.bold())
                     Text("\(player.skippedAds) skipped this session")
                         .font(.caption)
@@ -150,14 +201,14 @@ struct NowPlayingView: View {
             .background(.orange.opacity(0.1), in: RoundedRectangle(cornerRadius: 10))
         }
         .buttonStyle(.plain)
-        .disabled(player.adRegions.isEmpty)
+        .disabled(markers.isEmpty)
     }
 
     /// Headline of the segments pill, e.g. "3 ads · intro · outro".
-    private var detectionSummary: String {
-        let adCount = player.adRegions.filter { $0.kind == .ad }.count
-        let hasIntro = player.adRegions.contains { $0.kind == .intro }
-        let hasOutro = player.adRegions.contains { $0.kind == .outro }
+    private func detectionSummary(for markers: [AdMarker]) -> String {
+        let adCount = markers.filter { $0.kind == .ad }.count
+        let hasIntro = markers.contains { $0.kind == .intro }
+        let hasOutro = markers.contains { $0.kind == .outro }
         var parts: [String] = []
         if adCount > 0 { parts.append("\(adCount) ad\(adCount == 1 ? "" : "s")") }
         if hasIntro { parts.append("intro") }
@@ -166,48 +217,120 @@ struct NowPlayingView: View {
         return parts.joined(separator: " · ")
     }
 
+    /// Marker visibility is independent of whether this audio version can
+    /// safely use them for automatic skipping.
+    private func visibleAdRegions(for episode: Episode) -> [AdRegion] {
+        episode.adMarkers.filter { !$0.isDeleted }.compactMap {
+            AdRegion.sanitized(
+                startSeconds: $0.startSeconds,
+                endSeconds: $0.endSeconds,
+                kind: $0.kind,
+                episodeDuration: player.duration
+            )
+        }
+    }
+
     private var transportControls: some View {
         HStack(spacing: 36) {
             Button { player.skipBackward(15) } label: {
-                Image(systemName: "gobackward.15").font(.title)
+                Image(systemName: "gobackward.15")
+                    .font(.title)
+                    .frame(minWidth: 44, minHeight: 44)
             }
             Button {
                 player.togglePlayPause()
             } label: {
-                Image(systemName: player.isPlaying ? "pause.circle.fill" : "play.circle.fill")
-                    .font(.system(size: 64))
+                ZStack {
+                    Image(systemName: player.isPlaying ? "pause.circle.fill" : "play.circle.fill")
+                        .font(.system(size: 64))
+                        .opacity(player.isWaitingForAudio ? 0.35 : 1)
+                    if player.isWaitingForAudio {
+                        ProgressView()
+                    }
+                }
             }
             Button { player.skipForward(30) } label: {
-                Image(systemName: "goforward.30").font(.title)
+                Image(systemName: "goforward.30")
+                    .font(.title)
+                    .frame(minWidth: 44, minHeight: 44)
             }
         }
     }
 
     private var playbackOptions: some View {
-        VStack(spacing: 12) {
-            HStack {
-                Text("Speed")
-                    .font(.subheadline)
-                Spacer()
-                Picker("Speed", selection: Binding(
-                    get: { player.playbackRate },
-                    set: { player.setPlaybackRate($0) }
-                )) {
-                    ForEach(PlaybackSpeed.options, id: \.self) { rate in
-                        Text(PlaybackSpeed.label(for: rate)).tag(rate)
-                    }
+        HStack(spacing: 8) {
+            Picker("Speed", selection: Binding(
+                get: { player.playbackRate },
+                set: { player.setPlaybackRate($0) }
+            )) {
+                ForEach(PlaybackSpeed.options, id: \.self) { rate in
+                    Text(PlaybackSpeed.label(for: rate)).tag(rate)
                 }
-                .pickerStyle(.menu)
             }
-
+            .pickerStyle(.menu)
+            .frame(minHeight: 44)
+            Spacer(minLength: 0)
             if globalAdSkippingEnabled, player.adRegions.contains(where: { $0.kind == .ad }) {
-                Toggle("Play ads this episode", isOn: Binding(
+                Toggle("Play ads", isOn: Binding(
                     get: { player.playAdsForCurrentEpisode },
                     set: { player.setPlayAdsForCurrentEpisode($0) }
                 ))
+                .font(.subheadline)
+                .fixedSize()
+                .frame(minHeight: 44)
             }
         }
-        .padding(.horizontal)
+        .padding(.horizontal, 8)
+    }
+
+    /// Streaming / preparing / buffering / unavailable state, with Retry
+    /// and Download when the episode can't play right now.
+    @ViewBuilder
+    private func playbackStatus(compact: Bool) -> some View {
+        VStack(spacing: 8) {
+            if let message = player.statusMessage {
+                HStack(spacing: 8) {
+                    if player.isWaitingForAudio {
+                        ProgressView()
+                    } else if player.isUnavailable {
+                        Image(systemName: "exclamationmark.triangle.fill")
+                            .foregroundStyle(.orange)
+                    }
+                    Text(message)
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                        .multilineTextAlignment(.leading)
+                        .lineLimit(2)
+                }
+            }
+            if player.isUnavailable {
+                HStack(spacing: 12) {
+                    Button {
+                        player.retry()
+                    } label: {
+                        Label("Retry", systemImage: "arrow.clockwise")
+                    }
+                    if player.offersDownload {
+                        Button {
+                            player.downloadCurrentEpisode()
+                        } label: {
+                            Label("Download", systemImage: "arrow.down.circle")
+                        }
+                    }
+                }
+                .buttonStyle(.bordered)
+            } else if player.sourceKind == .stream, !compact {
+                Label("Streaming from your server", systemImage: "antenna.radiowaves.left.and.right")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            if player.markersSuppressedForLocalFile {
+                Text("This download differs from the server audio, so automatic skipping is off.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+            }
+        }
     }
 
     private func syncAdSkipSetting() {

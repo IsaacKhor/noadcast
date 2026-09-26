@@ -68,10 +68,19 @@ struct ShowNotesView: View {
                     }
                 }
                 ToolbarItem(placement: .topBarTrailing) {
-                    Button {
-                        redownloadAction()
-                    } label: {
-                        Label("Re-download & analyze", systemImage: "icloud.and.arrow.down")
+                    if episode.isMarkedDownloaded {
+                        Button(role: .destructive) {
+                            removeDownloadAction()
+                        } label: {
+                            Label("Remove download", systemImage: "trash")
+                        }
+                    } else {
+                        Button {
+                            downloadAction()
+                        } label: {
+                            Label("Download", systemImage: "arrow.down.circle")
+                        }
+                        .disabled(episode.downloadState.isActive)
                     }
                 }
                 ToolbarItem(placement: .topBarTrailing) {
@@ -80,7 +89,9 @@ struct ShowNotesView: View {
                     } label: {
                         Label("Re-analyze", systemImage: "sparkles")
                     }
-                    .disabled(!episode.hasLocalFile)
+                    // Analysis runs on the server against its own copy of the
+                    // audio, so no local file is needed.
+                    .disabled(!APIConfiguration.isConfigured)
                 }
             }
             .overlay(alignment: .bottom) {
@@ -124,8 +135,9 @@ struct ShowNotesView: View {
             rows.append(("Duration", TimeFormatting.longDuration(duration)))
         }
         if let bytes = episode.fileSizeBytes, bytes > 0 {
-            rows.append(("File size", TimeFormatting.fileSize(bytes)))
+            rows.append(("On this iPhone", TimeFormatting.fileSize(bytes)))
         }
+        rows.append(("Server", episode.serverState.label))
         let total = metadataDurationForAds
         if total > 0 {
             let activeAds = episode.adMarkers.filter { !$0.isDeleted }
@@ -161,14 +173,26 @@ struct ShowNotesView: View {
         showToast(added ? "Added to queue" : "Already in queue")
     }
 
-    private func redownloadAction() {
-        SubscriptionService.shared.redownloadAndReprocess(episode, in: context)
-        showToast("Re-downloading and re-analyzing…")
+    private func downloadAction() {
+        SubscriptionService.shared.download(episode, in: context)
+        showToast("Downloading to this iPhone…")
+    }
+
+    private func removeDownloadAction() {
+        SubscriptionService.shared.deleteEpisodeContent(episode, in: context)
+        showToast("Download removed")
     }
 
     private func reanalyzeAction() {
-        SubscriptionService.shared.reanalyzeEpisode(episode, in: context)
-        showToast("Re-analyzing existing audio…")
+        let target = episode
+        Task {
+            do {
+                try await SubscriptionService.shared.reanalyzeEpisode(target, in: context)
+                showToast("Re-analyzing on your server…")
+            } catch {
+                showToast(error.localizedDescription)
+            }
+        }
     }
 
     private func showToast(_ message: String) {

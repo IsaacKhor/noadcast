@@ -6,7 +6,6 @@ struct QueueView: View {
     @Query(sort: \QueueItem.position) private var items: [QueueItem]
 
     private var player = PlayerService.shared
-    private var pipeline = ProcessingPipeline.shared
 
     /// Queue minus whichever item (if any) is currently loaded in the
     /// player — rendered in its own header section instead. Cached in
@@ -14,10 +13,28 @@ struct QueueView: View {
     /// change, so a body re-eval doesn't re-filter the array.
     @State private var pendingItems: [QueueItem] = []
     @State private var pendingDuration: Double = 0
-    /// Bumped after a swipe-to-top action so SwiftUI throws away the List that
-    /// still owns the active swipe gesture instead of keeping its row as an
-    /// overlay at the old screen position.
-    @State private var queuePresentationRevision = 0
+    /// Recreate only a moved row to end its active swipe gesture. Replacing
+    /// the whole List also discards its scroll position.
+    @State private var rowRevisions: [PersistentIdentifier: Int] = [:]
+
+    private struct PresentedItem: Identifiable {
+        struct ID: Hashable {
+            let modelID: PersistentIdentifier
+            let revision: Int
+        }
+
+        let item: QueueItem
+        let id: ID
+    }
+
+    private var presentedItems: [PresentedItem] {
+        pendingItems.map { item in
+            PresentedItem(item: item, id: .init(
+                modelID: item.persistentModelID,
+                revision: rowRevisions[item.persistentModelID, default: 0]
+            ))
+        }
+    }
 
     /// The episode the player is currently loaded on, if any. Looked up by
     /// `PersistentIdentifier` so we don't fault every Episode just to render
@@ -104,7 +121,8 @@ struct QueueView: View {
 
             if !pendingItems.isEmpty {
                 Section {
-                    ForEach(pendingItems) { item in
+                    ForEach(presentedItems) { presented in
+                        let item = presented.item
                         if let episode = item.episode {
                             EpisodeRow(episode: episode, style: .withPodcast) {
                                 QueueRowTrailing(episode: episode, onPlay: { play(item) })
@@ -139,7 +157,6 @@ struct QueueView: View {
             }
         }
         .listStyle(.plain)
-        .id(queuePresentationRevision)
     }
 
     private var upNextHeader: some View {
@@ -181,15 +198,15 @@ struct QueueView: View {
         }
     }
 
+    /// Plays from the device, streams, or prepares on the server — the
+    /// player resolves the source. When streaming isn't allowed on this
+    /// network the button downloads instead (see `QueueRowTrailing`).
     private func play(_ item: QueueItem) {
         guard let episode = item.episode else { return }
-        if episode.processingState != .ready || !episode.isMarkedDownloaded {
-            pipeline.process(episode: episode)
-            return
-        }
         let s = AppSettings.current(in: context)
-        player.load(episode: episode, settings: s)
-        player.play()
+        Task {
+            await player.load(episode: episode, settings: s, autoPlay: true)
+        }
     }
 
     private func move(from source: IndexSet, to destination: Int) {
@@ -262,14 +279,14 @@ struct QueueView: View {
 
         // A List keeps the full-swiped row alive as a gesture overlay even
         // after its model moves. Replace the visible ordering ourselves and
-        // recreate the List in a no-animation transaction; that discards
-        // the gesture-owned row and paints a fresh copy at the top immediately.
+        // replace only that row's identity in a no-animation transaction.
+        // The List and every other row keep their identities and scroll state.
         var transaction = Transaction(animation: nil)
         transaction.disablesAnimations = true
         withTransaction(transaction) {
             pendingItems = reorderedPending
             pendingDuration = totalDuration(of: reorderedPending)
-            queuePresentationRevision &+= 1
+            rowRevisions[item.persistentModelID, default: 0] &+= 1
 
             var pos = 0
             if let playing { playing.position = pos; pos += 1 }
@@ -333,23 +350,69 @@ struct QueueView: View {
     }
 }
 
-/// Queue rows show a play/download button plus the drag-handle glyph (which
-/// is purely cosmetic — `.onMove` drives the actual reorder gesture).
+/// Queue rows show the episode's action (play / download / retry /
+/// spinner) plus the drag-handle glyph (which is purely cosmetic —
+/// `.onMove` drives the actual reorder gesture).
 private struct QueueRowTrailing: View {
+    @Environment(\.modelContext) private var context
     @Bindable var episode: Episode
     let onPlay: () -> Void
+    @AppStorage(StreamingPolicy.storageKey) private var streamingPolicy: StreamingPolicy = StreamingPolicy.defaultValue
+
+    private let network = NetworkMonitor.shared
 
     var body: some View {
         HStack(spacing: 8) {
-            Button(action: onPlay) {
-                Image(systemName: episode.processingState == .ready && episode.isMarkedDownloaded ? "play.circle.fill" : "arrow.down.circle")
-                    .font(.title2)
-            }
-            .buttonStyle(.plain)
+            actionButton
             Image(systemName: "line.3.horizontal")
                 .font(.body)
                 .foregroundStyle(.tertiary)
                 .accessibilityHidden(true)
         }
+    }
+
+    @ViewBuilder
+    private var actionButton: some View {
+        switch action {
+        case .play:
+            Button(action: onPlay) {
+                Image(systemName: "play.circle.fill").font(.title2)
+            }
+            .buttonStyle(.plain)
+        case .inProgress:
+            ProgressView()
+        case .retry:
+            Button {
+                SubscriptionService.shared.retry(episode, in: context)
+            } label: {
+                Image(systemName: "arrow.clockwise.circle").font(.title2)
+            }
+            .buttonStyle(.plain)
+        case .download:
+            Button {
+                SubscriptionService.shared.download(episode, in: context)
+            } label: {
+                Image(systemName: "arrow.down.circle").font(.title2)
+            }
+            .buttonStyle(.plain)
+        case .unavailable:
+            Image(systemName: "icloud.slash")
+                .font(.title2)
+                .foregroundStyle(.tertiary)
+                .accessibilityLabel("Not available offline")
+        }
+    }
+
+    private var action: EpisodeRowAction {
+        PlaybackSourceResolver.rowAction(
+            isDownloaded: episode.isMarkedDownloaded,
+            downloadState: episode.downloadState,
+            serverState: episode.serverState,
+            audioState: episode.audioState,
+            isServerConfigured: APIConfiguration.isConfigured,
+            isOnline: network.isOnline,
+            isWiFi: network.isWiFi,
+            streamingPolicy: streamingPolicy
+        )
     }
 }

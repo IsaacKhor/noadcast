@@ -2,142 +2,187 @@ import Foundation
 import SwiftData
 import os
 
-/// Wires `FeedService` to SwiftData: adds podcasts, refreshes feeds, inserts
-/// new episodes, and triggers auto-download via `ProcessingPipeline` when the
-/// settings + network conditions allow.
+nonisolated struct OPMLImportSummary: Sendable, Equatable {
+    let added: Int
+    let existing: Int
+    let failed: Int
+
+    var message: String {
+        if added == 0 && existing == 0 && failed == 0 {
+            return "No podcast feeds were found in the OPML file."
+        }
+        var parts = ["Added \(added)."]
+        if existing > 0 {
+            parts.append("Skipped \(existing) already subscribed.")
+        }
+        if failed > 0 {
+            parts.append("\(failed) couldn't be subscribed.")
+        }
+        return parts.joined(separator: " ")
+    }
+}
+
+/// Podcast and episode actions against the Noadcast server, plus the
+/// device-local queue and download bookkeeping. Keeps its name and most
+/// signatures from the on-device-RSS era to limit call-site churn; the
+/// bodies now go through `NoadcastAPIClient` and `SyncService`.
+///
+/// Rows for podcasts/episodes are only ever *inserted* by `SyncEngine`
+/// (mutation responses are applied through it too), so two contexts never
+/// race to insert the same `serverID`.
 @MainActor
 final class SubscriptionService {
     static let shared = SubscriptionService()
 
-    func subscribe(feedURL: URL, in context: ModelContext) async throws -> Podcast {
-        let descriptor = FetchDescriptor<Podcast>(
-            predicate: #Predicate { $0.feedURL == feedURL }
-        )
-        if let existing = try? context.fetch(descriptor).first {
-            try await refresh(podcast: existing, in: context)
-            return existing
-        }
+    private var sync: SyncService { SyncService.shared }
+    private var api: NoadcastAPIClient { SyncService.shared.api }
 
-        let parsed = try await FeedService.shared.fetch(feedURL: feedURL)
-        let podcast = Podcast(
-            feedURL: feedURL,
-            title: parsed.title,
-            author: parsed.author,
-            summary: parsed.summary,
-            artworkURL: parsed.artworkURL
-        )
-        context.insert(podcast)
-        importEpisodes(parsed.episodes, into: podcast, context: context)
-        podcast.lastFetched = .now
-        try context.save()
-        await ArtworkService.shared.cache(for: podcast)
-        try? context.save()
-        return podcast
+    // MARK: - Podcasts
+
+    /// `POST /api/v1/podcasts` (idempotent). The podcast row is mirrored at
+    /// once; its episodes arrive through the follow-up syncs.
+    func subscribe(feedURL: URL, in context: ModelContext) async throws -> Podcast? {
+        guard APIConfiguration.isConfigured else { throw APIError.notConfigured }
+        let response = try await api.subscribe(feedURL: feedURL.absoluteString)
+        await sync.applyPodcasts([response.podcast])
+        await sync.syncNow(.mutation)
+        sync.scheduleFollowUpSyncs()
+        return fetchPodcast(serverID: response.podcast.id, in: context)
     }
 
-    func refresh(
-        podcast: Podcast,
-        in context: ModelContext,
-        startQueuedDownloads: Bool = true
-    ) async throws {
-        let parsed = try await FeedService.shared.fetch(feedURL: podcast.feedURL)
-        let previousTitle = podcast.title
-        let previousArtworkURL = podcast.artworkURL
-        if podcast.title.isEmpty { podcast.title = parsed.title }
-        if let author = parsed.author, podcast.author != author {
-            podcast.author = author
+    /// Pull-to-refresh on one podcast: ask the server to re-fetch the feed,
+    /// then sync (now and a few times shortly after, since the fetch runs
+    /// asynchronously on the server).
+    func refresh(podcast: Podcast, in context: ModelContext) async {
+        guard APIConfiguration.isConfigured else { return }
+        let serverID = podcast.serverID
+        do {
+            try await api.refreshPodcast(id: serverID)
+        } catch {
+            Log.feed.notice("Refresh request failed: \(error.localizedDescription, privacy: .public)")
         }
-        if let summary = parsed.summary, podcast.summary != summary {
-            podcast.summary = summary
-        }
-        // Always pick up updated artwork from the feed — the show might have
-        // rebranded since we first subscribed. `ArtworkService.cache(for:)`
-        // below diffs against `cachedArtworkSourceURL` and only re-downloads
-        // when the URL actually changed.
-        if let artwork = parsed.artworkURL, podcast.artworkURL != artwork {
-            podcast.artworkURL = artwork
-        }
-        importEpisodes(parsed.episodes, into: podcast, context: context)
-        if podcast.title != previousTitle || podcast.artworkURL != previousArtworkURL {
-            podcast.syncEpisodeSnapshots()
-        }
-        podcast.lastFetched = .now
-        try context.save()
-        await ArtworkService.shared.cache(for: podcast)
-        try? context.save()
-        // Newly-imported episodes that auto-enqueued in importEpisodes now
-        // exist with persisted IDs; tell the pipeline to download/analyze
-        // anything in the queue that isn't already ready.
-        if startQueuedDownloads {
-            processQueuedEpisodes(context: context)
-        }
+        await sync.syncNow(.pullToRefresh)
+        sync.scheduleFollowUpSyncs()
     }
 
+    /// Pull-to-refresh on the library: `POST /api/v1/refresh`, then sync.
     func refreshAll(context: ModelContext) async {
-        let podcasts = (try? context.fetch(FetchDescriptor<Podcast>())) ?? []
-        for p in podcasts {
-            try? await refresh(podcast: p, in: context, startQueuedDownloads: false)
-            await Task.yield()
+        guard APIConfiguration.isConfigured else { return }
+        var requested = true
+        do {
+            try await api.refreshAll()
+        } catch {
+            requested = false
+            Log.feed.notice("Refresh-all request failed: \(error.localizedDescription, privacy: .public)")
         }
-        AppSettings.current(in: context).lastGlobalRefreshAt = .now
-        try? context.save()
-        processQueuedEpisodes(context: context)
+        await sync.syncNow(.pullToRefresh)
+        if requested, sync.lastError == nil {
+            let settings = AppSettings.current(in: context)
+            settings.lastGlobalRefreshAt = .now
+            try? context.save()
+        }
+        sync.scheduleFollowUpSyncs()
     }
 
-    func unsubscribe(_ podcast: Podcast, in context: ModelContext) throws {
-        for episode in podcast.episodes {
-            deleteEpisodeContent(episode, in: context, save: false)
+    /// `DELETE /api/v1/podcasts/{id}` first (not optimistic: an offline
+    /// unsubscribe would otherwise silently come back), then the local rows
+    /// with their files, queue items and artwork.
+    func unsubscribe(_ podcast: Podcast, in context: ModelContext) async throws {
+        let serverID = podcast.serverID
+        try await api.deletePodcast(id: serverID)
+        guard let podcast = fetchPodcast(serverID: serverID, in: context) else { return }
+        let descriptor = FetchDescriptor<Episode>(predicate: #Predicate<Episode> { $0.podcastServerID == serverID })
+        let episodes = (try? context.fetch(descriptor)) ?? []
+        let queueItems = (try? context.fetch(FetchDescriptor<QueueItem>())) ?? []
+        for episode in episodes {
+            PlayerService.shared.unloadIfCurrent(episodeID: episode.persistentModelID)
+            DownloadManager.shared.cancelTransfer(serverID: episode.serverID, discardResumeData: true)
+            if let url = episode.localFileURL {
+                try? FileManager.default.removeItem(at: url)
+            }
+            for item in queueItems where item.episode == episode {
+                context.delete(item)
+            }
         }
         ArtworkService.shared.deleteCache(for: podcast)
         context.delete(podcast)
         try context.save()
     }
 
+    /// `POST /api/v1/opml` with the picked file. Validated locally first
+    /// for a clearer error than a server 422.
+    func importOPML(from url: URL, in context: ModelContext) async throws -> OPMLImportSummary {
+        guard APIConfiguration.isConfigured else { throw APIError.notConfigured }
+        let didStart = url.startAccessingSecurityScopedResource()
+        defer {
+            if didStart {
+                url.stopAccessingSecurityScopedResource()
+            }
+        }
+        let data = try Data(contentsOf: url)
+        let entries = try await OPMLService.shared.parse(data: data)
+        guard !entries.isEmpty else {
+            return OPMLImportSummary(added: 0, existing: 0, failed: 0)
+        }
+        let result = try await api.importOPML(data)
+        await sync.applyPodcasts(result.added + result.existing)
+        await sync.syncNow(.mutation)
+        sync.scheduleFollowUpSyncs()
+        return OPMLImportSummary(added: result.added.count, existing: result.existing.count, failed: result.failed.count)
+    }
+
+    // MARK: - Episodes
+
     /// Single entry point for removing an episode's downloaded content from
     /// the device. Called by both the Downloads tab and the Queue tab so the
     /// two stay in sync:
     ///
-    /// - Removes the local audio file.
-    /// - Clears `localFilename`, `fileSizeBytes`, `playbackPosition`.
-    /// - Resets `processingState` to `.new`.
-    /// - Deletes existing ad markers — a fresh
-    ///   download may have different audio (podcasts using dynamic ad
-    ///   insertion change the ads and the file length per request), so the
-    ///   cached markers are no longer trustworthy.
+    /// - Cancels any transfer and removes the local audio file.
     /// - Deletes every `QueueItem` pointing to the episode.
     /// - Unloads the player if it's the episode currently being played.
-    /// - Optionally records the episode as played when deletion represents a
-    ///   deliberate dismissal from the queue.
+    /// - Optionally records the episode as played (a deliberate dismissal
+    ///   from the queue), which also sends the retention release so the
+    ///   server may delete its copy.
+    ///
+    /// Markers are server-owned and stay: the server keeps serving the same
+    /// bytes, so they remain valid for a re-download.
     func deleteEpisodeContent(
         _ episode: Episode,
         in context: ModelContext,
         markAsPlayed: Bool = false,
         save: Bool = true
     ) {
-        ProcessingPipeline.shared.cancel(
-            episodeID: episode.persistentModelID,
-            episodeGUID: episode.guid
-        )
         PlayerService.shared.unloadIfCurrent(episodeID: episode.persistentModelID)
+        DownloadManager.shared.cancelTransfer(serverID: episode.serverID, discardResumeData: true)
 
         if let url = episode.localFileURL {
             try? FileManager.default.removeItem(at: url)
         }
-        episode.localFilename = nil
-        episode.fileSizeBytes = nil
-        episode.playbackPosition = 0
-        episode.isPlayed = markAsPlayed
-        episode.datePlayed = markAsPlayed ? .now : nil
-        episode.processingState = .new
-        episode.processingProgress = 0
-        episode.processingCurrent = nil
-        episode.processingTotal = nil
-        episode.processingError = nil
-        episode.processingStatusText = nil
-        episode.activeAdMarkerCount = 0
+        if episode.localFilename != nil {
+            episode.localFilename = nil
+        }
+        if episode.fileSizeBytes != nil {
+            episode.fileSizeBytes = nil
+        }
+        if episode.localAudioSha256 != nil {
+            episode.localAudioSha256 = nil
+        }
+        episode.setDownloadState(.idle)
+        if episode.downloadIsUserInitiated {
+            episode.downloadIsUserInitiated = false
+        }
+        episode.downloadRequestedAt = nil
+        episode.downloadError = nil
+        if episode.downloadProgress != 0 {
+            episode.downloadProgress = 0
+        }
+        episode.downloadedBytes = nil
+        episode.downloadTotalBytes = nil
 
-        for marker in episode.adMarkers {
-            context.delete(marker)
+        if markAsPlayed {
+            episode.playbackPosition = 0
+            episode.isPlayed = true
+            episode.datePlayed = .now
         }
 
         let allItems = (try? context.fetch(FetchDescriptor<QueueItem>())) ?? []
@@ -148,71 +193,54 @@ final class SubscriptionService {
         if save {
             try? context.save()
         }
-    }
-
-    /// Re-runs the entire AI pipeline (download + ad detection) for one
-    /// episode. Wipes the local audio file and existing ad markers, then
-    /// enqueues processing. Preserves any
-    /// `QueueItem`s pointing at the episode so the user's queue placement
-    /// isn't lost when they ask the system to redo the analysis. Best for
-    /// dynamically-ad-inserted feeds where the audio file itself may differ
-    /// between downloads.
-    func redownloadAndReprocess(_ episode: Episode, in context: ModelContext) {
-        ProcessingPipeline.shared.cancel(
-            episodeID: episode.persistentModelID,
-            episodeGUID: episode.guid
-        )
-        PlayerService.shared.unloadIfCurrent(episodeID: episode.persistentModelID)
-
-        if let url = episode.localFileURL {
-            try? FileManager.default.removeItem(at: url)
+        if markAsPlayed {
+            SyncService.shared.releaseAudio(episodeServerID: episode.serverID)
         }
-        episode.localFilename = nil
-        episode.fileSizeBytes = nil
-        episode.playbackPosition = 0
-        episode.isPlayed = false
-        episode.datePlayed = nil
-        episode.processingState = .new
-        episode.processingProgress = 0
-        episode.processingCurrent = nil
-        episode.processingTotal = nil
-        episode.processingError = nil
-        episode.processingStatusText = nil
-        episode.activeAdMarkerCount = 0
-        for marker in episode.adMarkers { context.delete(marker) }
-        try? context.save()
-
-        ProcessingPipeline.shared.process(episode: episode)
     }
 
-    /// Re-runs ad detection on the **existing** local file (does not
-    /// re-download). Useful when the user has changed models and wants
-    /// fresh markers without re-fetching audio. Falls back to a full
-    /// re-download if the file is no longer on disk. Doesn't unload the
-    /// player — playback can keep going against the same audio while AI
-    /// re-runs in the background.
-    func reanalyzeEpisode(_ episode: Episode, in context: ModelContext) {
-        guard episode.hasLocalFile else {
-            redownloadAndReprocess(episode, in: context)
-            return
+    /// User-initiated download to the device (bypasses the auto-download
+    /// network policy).
+    func download(_ episode: Episode, in context: ModelContext) {
+        DownloadManager.shared.enqueue(episode, userInitiated: true)
+    }
+
+    func cancelDownload(_ episode: Episode) {
+        DownloadManager.shared.cancel(episode)
+    }
+
+    /// Retry after a failure on either axis: a device download failure
+    /// downloads again; a server pipeline failure asks the server to process
+    /// the episode again (`POST /process`, idempotent).
+    func retry(_ episode: Episode, in context: ModelContext) {
+        if episode.downloadState == .failed {
+            download(episode, in: context)
         }
-        ProcessingPipeline.shared.cancel(
-            episodeID: episode.persistentModelID,
-            episodeGUID: episode.guid
-        )
-
-        for marker in episode.adMarkers { context.delete(marker) }
-        episode.processingState = .downloaded
-        episode.processingProgress = 0
-        episode.processingCurrent = nil
-        episode.processingTotal = nil
-        episode.processingError = nil
-        episode.processingStatusText = nil
-        episode.activeAdMarkerCount = 0
-        try? context.save()
-
-        ProcessingPipeline.shared.process(episode: episode)
+        if episode.serverState == .failed {
+            requestServerProcessing(episode)
+        }
     }
+
+    /// Ensures the server has the audio and, if analysis is on, markers.
+    func requestServerProcessing(_ episode: Episode) {
+        let serverID = episode.serverID
+        Task {
+            do {
+                try await self.api.process(episodeID: serverID)
+                self.sync.scheduleFollowUpSyncs()
+            } catch {
+                Log.feed.notice("process request failed: \(error.localizedDescription, privacy: .public)")
+            }
+        }
+    }
+
+    /// Re-runs ad detection on the server (`POST /reanalyze`). No local file
+    /// is needed any more: the server keeps the audio.
+    func reanalyzeEpisode(_ episode: Episode, in context: ModelContext) async throws {
+        try await api.reanalyze(episodeID: episode.serverID)
+        sync.scheduleFollowUpSyncs()
+    }
+
+    // MARK: - Queue (device-local)
 
     /// Adds an episode to the **top** of the queue (just after the
     /// currently-playing episode, if any) so manually-queued episodes are
@@ -248,197 +276,67 @@ final class SubscriptionService {
         return true
     }
 
-    // MARK: - Private
-
-    private func importEpisodes(
-        _ parsed: [ParsedEpisode],
-        into podcast: Podcast,
-        context: ModelContext
-    ) {
-        let parsedGUIDs = Set(parsed.map(\.guid))
-        var existingEpisodesByGUID = Dictionary(grouping: fetchEpisodes(withGUIDs: parsedGUIDs, context: context), by: \.guid)
-            .mapValues { episodes in
-                episodes.first { $0.podcast?.persistentModelID == podcast.persistentModelID }
-                    ?? episodes.max(by: { importPreferenceScore($0) < importPreferenceScore($1) })!
-            }
-        var newestSeen: Date? = podcast.latestEpisodeAt
-        var episodeCount = podcast.episodeCount
-
-        // `lastFetched == nil` is the first import for this podcast — i.e.,
-        // the initial subscribe. We don't auto-enqueue then, otherwise the
-        // user's queue would get flooded with the show's entire archive.
-        // On subsequent refreshes, anything new in the feed is genuinely a
-        // newly-published episode and should join the up-next queue
-        // (gated by the per-podcast `autoDownloadEnabled` switch).
-        let isRefresh = podcast.lastFetched != nil
-        let autoEnqueue = isRefresh && podcast.autoDownloadEnabled
-
-        // Pre-compute the next queue position once so we can append
-        // multiple new episodes in order without re-querying.
-        let existingQueueItems: [QueueItem] = {
-            guard autoEnqueue else { return [] }
-            let descriptor = FetchDescriptor<QueueItem>(sortBy: [SortDescriptor(\.position)])
-            return (try? context.fetch(descriptor)) ?? []
-        }()
-        var queuedEpisodeIDs = Set(existingQueueItems.compactMap { $0.episode?.persistentModelID })
-        var nextQueuePosition: Int = {
-            guard autoEnqueue else { return 0 }
-            return (existingQueueItems.last?.position ?? -1) + 1
-        }()
-
-        func enqueueIfNeeded(_ episode: Episode) {
-            guard autoEnqueue else { return }
-            guard !episode.isPlayed else { return }
-            let episodeID = episode.persistentModelID
-            guard queuedEpisodeIDs.insert(episodeID).inserted else { return }
-            let item = QueueItem(position: nextQueuePosition, episode: episode)
-            context.insert(item)
-            nextQueuePosition += 1
+    /// Appends newly published episodes (reported by the sync engine for
+    /// podcasts with auto-download on) to the end of the queue, oldest first.
+    func enqueueNewEpisodes(serverIDs: [Int], in context: ModelContext) {
+        let ids = Array(Set(serverIDs))
+        guard !ids.isEmpty else { return }
+        var episodes: [Episode] = []
+        for batch in SyncEngine.batches(of: ids) {
+            let descriptor = FetchDescriptor<Episode>(predicate: #Predicate<Episode> { batch.contains($0.serverID) })
+            episodes += (try? context.fetch(descriptor)) ?? []
         }
-
-        for entry in parsed {
-            if let existing = existingEpisodesByGUID[entry.guid] {
-                let alreadyOwnedByPodcast = existing.podcast?.persistentModelID == podcast.persistentModelID
-                if existing.podcast == nil || existing.podcast?.feedURL == podcast.feedURL {
-                    if !alreadyOwnedByPodcast {
-                        existing.podcast = podcast
-                        episodeCount += 1
-                        enqueueIfNeeded(existing)
-                    }
-                    update(existing, from: entry, podcast: podcast)
-                    if let pub = entry.publishedAt,
-                       newestSeen == nil || pub > newestSeen! {
-                        newestSeen = pub
-                    }
-                } else {
-                    Log.feed.notice("Skipping duplicate episode GUID \"\(entry.guid, privacy: .public)\" from \"\(podcast.title, privacy: .public)\" because another podcast already owns it")
-                }
-                continue
-            }
-
-            let ep = Episode(
-                guid: entry.guid,
-                title: entry.title,
-                episodeDescription: entry.description,
-                publishedAt: entry.publishedAt,
-                duration: entry.duration,
-                audioURL: entry.audioURL,
-                audioMimeType: entry.audioMimeType,
-                podcast: podcast
-            )
-            context.insert(ep)
-            existingEpisodesByGUID[entry.guid] = ep
-            episodeCount += 1
-            if let pub = entry.publishedAt,
-               newestSeen == nil || pub > newestSeen! {
-                newestSeen = pub
-            }
-            enqueueIfNeeded(ep)
+        let existing = (try? context.fetch(FetchDescriptor<QueueItem>(sortBy: [SortDescriptor(\QueueItem.position)]))) ?? []
+        var queued = Set(existing.compactMap { $0.episode?.serverID })
+        var nextPosition = (existing.map(\.position).max() ?? -1) + 1
+        let ordered = episodes.sorted { ($0.publishedAt ?? .distantPast) < ($1.publishedAt ?? .distantPast) }
+        var inserted = 0
+        for episode in ordered {
+            guard !episode.isPlayed, !queued.contains(episode.serverID) else { continue }
+            queued.insert(episode.serverID)
+            context.insert(QueueItem(position: nextPosition, episode: episode))
+            nextPosition += 1
+            inserted += 1
         }
-        if let newestSeen { podcast.latestEpisodeAt = newestSeen }
-        updateEpisodeCount(for: podcast, fallback: episodeCount, context: context)
-        // Caller is responsible for saving and then invoking
-        // `processQueuedEpisodes` (idempotent + cheap) so the pipeline only
-        // ever looks up *persisted* `PersistentIdentifier`s.
+        guard inserted > 0 else { return }
+        try? context.save()
+        Log.feed.info("Queued \(inserted) newly published episode(s)")
+        processQueuedEpisodes(context: context)
     }
 
-    private func fetchEpisodes(withGUIDs guids: Set<String>, context: ModelContext) -> [Episode] {
-        guard !guids.isEmpty else { return [] }
-        let sortedGUIDs = Array(guids).sorted()
-        let batchSize = 250
-        var fetched: [Episode] = []
-        var start = sortedGUIDs.startIndex
-
-        while start < sortedGUIDs.endIndex {
-            let end = sortedGUIDs.index(
-                start,
-                offsetBy: batchSize,
-                limitedBy: sortedGUIDs.endIndex
-            ) ?? sortedGUIDs.endIndex
-            let batch = Array(sortedGUIDs[start..<end])
-            let descriptor = FetchDescriptor<Episode>(
-                predicate: #Predicate<Episode> { batch.contains($0.guid) }
-            )
-            if let matches = try? context.fetch(descriptor) {
-                fetched.append(contentsOf: matches)
-            }
-            start = end
-        }
-        return fetched
-    }
-
-    private func updateEpisodeCount(for podcast: Podcast, fallback: Int, context: ModelContext) {
-        let feedURL = podcast.feedURL
-        let descriptor = FetchDescriptor<Episode>(
-            predicate: #Predicate<Episode> { $0.podcast?.feedURL == feedURL }
-        )
-        let counted = (try? context.fetchCount(descriptor)) ?? fallback
-        podcast.episodeCount = max(fallback, counted)
-    }
-
-    private func update(_ episode: Episode, from entry: ParsedEpisode, podcast: Podcast) {
-        if episode.title != entry.title {
-            episode.title = entry.title
-        }
-        if episode.episodeDescription != entry.description {
-            episode.episodeDescription = entry.description
-        }
-        if episode.publishedAt != entry.publishedAt {
-            episode.publishedAt = entry.publishedAt
-        }
-        // Once audio is downloaded, ProcessingPipeline stores the measured
-        // local-file duration. Preserve that authoritative endpoint across
-        // feed refreshes; RSS duration can be absent or stale with dynamic
-        // ad insertion.
-        if episode.localFilename == nil, episode.duration != entry.duration {
-            episode.duration = entry.duration
-        }
-        if episode.audioURL != entry.audioURL {
-            episode.audioURL = entry.audioURL
-        }
-        if episode.audioMimeType != entry.audioMimeType {
-            episode.audioMimeType = entry.audioMimeType
-        }
-        episode.syncPodcastSnapshot(from: podcast)
-    }
-
-    private func importPreferenceScore(_ episode: Episode) -> Int {
-        var score = 0
-        if episode.processingState == .ready { score += 1_000 }
-        if episode.hasLocalFile { score += 500 }
-        if episode.localFilename != nil { score += 250 }
-        score += min(episode.activeAdMarkerCount, 100)
-        if episode.publishedAt != nil { score += 1 }
-        return score
-    }
-
-    /// Triggers `ProcessingPipeline` for every queued episode that isn't yet
-    /// ready, subject to the auto-download policy. Call this whenever the
-    /// queue changes or the network becomes more permissive (e.g. the Queue
-    /// tab appears, or the user just added an item).
+    /// Marks every queued episode that is not on the device as wanted
+    /// (subject to the auto-download policy); `DownloadManager` starts them
+    /// as the network and its concurrency cap allow. Call whenever the queue
+    /// changes or after a sync.
     func processQueuedEpisodes(context: ModelContext) {
-        let pipeline = ProcessingPipeline.shared
-        var remainingStarts = pipeline.queuedStartCapacity
-        guard remainingStarts > 0 else { return }
-
         let settings = AppSettings.current(in: context)
-        guard NetworkMonitor.shared.canAutoDownload(under: settings.autoDownloadPolicy) else {
-            return
-        }
+        guard settings.autoDownloadPolicy != .manualOnly else { return }
         let descriptor = FetchDescriptor<QueueItem>(
             sortBy: [SortDescriptor(\QueueItem.position)]
         )
         let queued = (try? context.fetch(descriptor)) ?? []
+        var wanted: [Episode] = []
         for item in queued {
-            guard remainingStarts > 0 else { break }
-            guard let episode = item.episode else { continue }
-            switch episode.processingState {
-            case .ready, .downloading, .uploading, .detectingAds:
+            guard let episode = item.episode, !episode.isMarkedDownloaded else { continue }
+            switch episode.downloadState {
+            case .idle:
+                wanted.append(episode)
+            case .queued, .downloading, .downloaded, .failed:
+                // Failed downloads wait for an explicit retry.
                 continue
-            case .new, .downloaded, .failed:
-                pipeline.process(episode: episode)
-                remainingStarts -= 1
             }
         }
+        guard !wanted.isEmpty else {
+            DownloadManager.shared.startEligibleDownloads()
+            return
+        }
+        DownloadManager.shared.enqueue(wanted, userInitiated: false)
+    }
+
+    // MARK: - Helpers
+
+    private func fetchPodcast(serverID: Int, in context: ModelContext) -> Podcast? {
+        let descriptor = FetchDescriptor<Podcast>(predicate: #Predicate<Podcast> { $0.serverID == serverID })
+        return try? context.fetch(descriptor).first
     }
 }

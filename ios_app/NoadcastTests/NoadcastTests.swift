@@ -14,110 +14,22 @@ struct NoadcastTests {
 
     @Test @MainActor func podcastDefaultsToAnalysisEnabled() async throws {
         let podcast = Podcast(
+            serverID: 1,
             feedURL: try #require(URL(string: "https://example.com/feed.xml")),
             title: "Example"
         )
 
         #expect(podcast.autoDownloadEnabled)
-        #expect(podcast.aiProcessingEnabled)
+        #expect(podcast.adAnalysisEnabled)
+        #expect(podcast.autoProcessEnabled)
+        #expect(podcast.customPlaybackSpeed == nil)
     }
 
-    @Test @MainActor func globalAdAnalysisDefaultsOff() async throws {
+    @Test @MainActor func globalAdAnalysisMirrorDefaultsOn() async throws {
+        // Mirror of the server's global switch; the server default is on.
         let settings = AppSettings()
 
-        #expect(!settings.adAnalysisEnabled)
-    }
-
-    @Test @MainActor func adDetectionBackendDefaultsToDirectGemini() async throws {
-        let settings = AppSettings()
-
-        #expect(settings.adDetectionBackend == .geminiFiles)
-        #expect(AdDetectionBackend.allCases == [.geminiFiles, .openRouter, .whisperServer, .appleSpeech])
-        #expect(settings.openRouterAPIKey == nil)
-        #expect(settings.adDetectionServerHost == "http://127.0.0.1")
-        #expect(settings.adDetectionServerPort == 8765)
-    }
-
-    @Test func newestGeminiModelsMapToNativeAndOpenRouterIDs() {
-        #expect(AdDetectionProvider.gemini36Flash.apiModel == "gemini-3.6-flash")
-        #expect(AdDetectionProvider.gemini36Flash.openRouterAPIModel == "google/gemini-3.6-flash")
-        #expect(AdDetectionProvider.gemini37Flash.apiModel == "gemini-3.7-flash")
-        #expect(AdDetectionProvider.gemini37Flash.openRouterAPIModel == "google/gemini-3.7-flash")
-        #expect(AdDetectionProvider.allCases.contains(.gemini36Flash))
-        #expect(AdDetectionProvider.allCases.contains(.gemini37Flash))
-    }
-
-    @Test func durationPromptNamesThePhysicalOutroEndpoint() {
-        let guidance = CloudAdDetectionService.durationPromptContext(3_723.5)
-
-        #expect(guidance.contains("3723.50 seconds"))
-        #expect(guidance.contains("outro"))
-        #expect(guidance.contains("endSeconds"))
-        #expect(CloudAdDetectionService.durationPromptContext(nil).isEmpty)
-        #expect(CloudAdDetectionService.durationPromptContext(.nan).isEmpty)
-        #expect(CloudAdDetectionService.durationPromptContext(0).isEmpty)
-        #expect(CloudAdDetectionService.transcriptEndpointGuidance(
-            episodeDuration: 100,
-            transcriptEnd: 90
-        ).contains("100.00 seconds"))
-        #expect(CloudAdDetectionService.transcriptEndpointGuidance(
-            episodeDuration: 80,
-            transcriptEnd: 90
-        ).contains("endpoint is unavailable"))
-        #expect(CloudAdDetectionService.transcriptEndpointGuidance(
-            episodeDuration: nil,
-            transcriptEnd: 90
-        ).contains("final transcript timestamp"))
-        #expect(CloudAdDetectionService.segmentsOnlyPrompt.contains("deliberately inspect the final portion"))
-        #expect(CloudAdDetectionService.transcriptSegmentsPrompt.contains("physical episode endpoint"))
-    }
-
-    @Test func openRouterAudioFormatsAreMappedWithoutRelabelingBytes() {
-        #expect(CloudAdDetectionService.openRouterAudioFormat(
-            mimeType: "audio/mpeg",
-            fileExtension: "mp3"
-        ) == "mp3")
-        #expect(CloudAdDetectionService.openRouterAudioFormat(
-            mimeType: "audio/mp4",
-            fileExtension: "m4a"
-        ) == "m4a")
-        #expect(CloudAdDetectionService.openRouterAudioFormat(
-            mimeType: "application/octet-stream",
-            fileExtension: "flac"
-        ) == "flac")
-        #expect(CloudAdDetectionService.openRouterAudioFormat(
-            mimeType: "application/octet-stream",
-            fileExtension: "bin"
-        ) == nil)
-    }
-
-    @Test func openRouterBase64StreamingHandlesChunkBoundaries() throws {
-        for byteCount in 0...13 {
-            let sourceData = Data((0..<byteCount).map { UInt8($0 & 0xff) })
-            for chunkSize in 1...5 {
-                let token = UUID().uuidString
-                let sourceURL = FileManager.default.temporaryDirectory
-                    .appendingPathComponent("noadcast-base64-source-\(token)")
-                let outputURL = FileManager.default.temporaryDirectory
-                    .appendingPathComponent("noadcast-base64-output-\(token)")
-                defer {
-                    try? FileManager.default.removeItem(at: sourceURL)
-                    try? FileManager.default.removeItem(at: outputURL)
-                }
-                try sourceData.write(to: sourceURL)
-                #expect(FileManager.default.createFile(atPath: outputURL.path, contents: nil))
-                let output = try FileHandle(forWritingTo: outputURL)
-                try CloudAdDetectionService.writeBase64EncodedContents(
-                    of: sourceURL,
-                    to: output,
-                    chunkSize: chunkSize
-                )
-                try output.close()
-
-                let actual = try Data(contentsOf: outputURL)
-                #expect(actual == sourceData.base64EncodedData())
-            }
-        }
+        #expect(settings.adAnalysisEnabled)
     }
 
     @Test @MainActor func resetPlaybackHistoryClearsListeningTotals() async throws {
@@ -192,20 +104,27 @@ struct NoadcastTests {
     }
 
     @Test @MainActor func queueDismissalMarksPlayedAndRemovesQueueItem() throws {
-        let schema = Schema([
-            Podcast.self,
-            Episode.self,
-            QueueItem.self,
-            AdMarker.self,
-        ])
-        let configuration = ModelConfiguration(schema: schema, isStoredInMemoryOnly: true)
-        let container = try ModelContainer(for: schema, configurations: [configuration])
+        // Dismissing as played records a retention release in UserDefaults
+        // (via SyncService.shared); never leave it behind for the host app.
+        defer { PendingReleaseStore.clear() }
+
+        let container = try makeTestContainer()
         let context = container.mainContext
+        let podcast = Podcast(
+            serverID: 9_100_001,
+            feedURL: try #require(URL(string: "https://example.com/feed.xml")),
+            title: "Queue dismissal podcast"
+        )
+        context.insert(podcast)
         let episode = Episode(
+            serverID: 9_100_002,
+            podcastServerID: podcast.serverID,
             guid: "queue-dismissal-test",
             title: "Queue dismissal",
-            audioURL: try #require(URL(string: "https://example.com/audio.mp3"))
+            enclosureURL: try #require(URL(string: "https://example.com/audio.mp3")),
+            podcast: podcast
         )
+        episode.playbackPosition = 300
         context.insert(episode)
         context.insert(QueueItem(position: 0, episode: episode))
         try context.save()
@@ -218,39 +137,36 @@ struct NoadcastTests {
 
         #expect(episode.isPlayed)
         #expect(episode.datePlayed != nil)
+        #expect(episode.playbackPosition == 0)
         #expect(try context.fetchCount(FetchDescriptor<QueueItem>()) == 0)
+        // The retention release (`DELETE …/audio?reason=played`) is queued.
+        #expect(PendingReleaseStore.load().ids.contains(episode.serverID))
     }
 
-    @Test @MainActor func transcriptionProgressShowsAudioTime() async throws {
-        let episode = Episode(
-            guid: "progress-test",
-            title: "Progress",
-            audioURL: try #require(URL(string: "https://example.com/audio.mp3"))
+    @Test @MainActor func transcriptionProgressShowsAudioTime() throws {
+        let transcribing = ActiveJobDTO(
+            episodeId: 1,
+            state: .transcribing,
+            stage: .transcribe,
+            current: 65,
+            total: 90
         )
-        episode.processingState = .detectingAds
-        episode.processingStatusText = "Transcribing locally with Apple…"
-        episode.processingCurrent = 65
-        episode.processingTotal = 90
+        #expect(TimeFormatting.progressDetail(for: transcribing) == "1:05 / 1:30")
 
-        #expect(TimeFormatting.progressDetail(for: episode) == "1:05 / 1:30")
-    }
-
-    @Test func whisperServerURLDefaultsToAnalyzeEndpoint() async throws {
-        let url = try CloudAdDetectionService.serverAnalyzeURL(
-            host: "127.0.0.1",
-            port: 8765
+        // `download` reports bytes.
+        let downloading = ActiveJobDTO(
+            episodeId: 2,
+            state: .downloading,
+            stage: .download,
+            current: 12_300_000,
+            total: 50_000_000
         )
+        let bytes = try #require(TimeFormatting.progressDetail(for: downloading))
+        #expect(bytes.contains(" / "))
 
-        #expect(url.absoluteString == "http://127.0.0.1:8765/analyze")
-    }
-
-    @Test func whisperServerURLPreservesBasePath() async throws {
-        let url = try CloudAdDetectionService.serverAnalyzeURL(
-            host: "http://example.local/noadcast",
-            port: 8080
-        )
-
-        #expect(url.absoluteString == "http://example.local:8080/noadcast/analyze")
+        // `classify` is indeterminate.
+        let classifying = ActiveJobDTO(episodeId: 3, state: .classifying, stage: .classify)
+        #expect(TimeFormatting.progressDetail(for: classifying) == nil)
     }
 
 }

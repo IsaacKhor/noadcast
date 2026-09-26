@@ -54,9 +54,14 @@ struct MiniPlayerBar: View {
                 Button {
                     player.togglePlayPause()
                 } label: {
-                    Image(systemName: player.isPlaying ? "pause.fill" : "play.fill")
-                        .font(.title2)
-                        .frame(width: 36, height: 36)
+                    if player.isWaitingForAudio {
+                        ProgressView()
+                            .frame(width: 36, height: 36)
+                    } else {
+                        Image(systemName: player.isPlaying ? "pause.fill" : "play.fill")
+                            .font(.title2)
+                            .frame(width: 36, height: 36)
+                    }
                 }
                 .buttonStyle(.plain)
                 Button {
