@@ -54,13 +54,16 @@ final class Episode {
     var downloadRequestedAt: Date?
     var downloadError: String?
     /// `[0, 1]`, written on a background context by `DownloadManager`.
-    /// Only `DownloadsView` rows read it (see `EpisodeRow.showProgress`).
+    /// Only `StatusView` rows read it (see `EpisodeRow.showProgress`).
     var downloadProgress: Double = 0
     var downloadedBytes: Int64?
     var downloadTotalBytes: Int64?
+    /// Background URLSession task currently allowed to update this row.
+    /// A canceled task can still deliver delegate events after a restart.
+    var downloadTaskIdentifier: Int?
 
     /// Denormalized "server job active OR device download active". A plain
-    /// `Bool` keeps the Downloads `#Predicate` translatable to SQL.
+    /// `Bool` keeps the Status `#Predicate` translatable to SQL.
     /// Maintained by `applyServerState(_:)` / `setDownloadState(_:)`.
     var isBusy: Bool = false
 
@@ -147,6 +150,9 @@ final class Episode {
     func setDownloadState(_ state: DownloadState) {
         if downloadStateRaw != state.rawValue {
             downloadStateRaw = state.rawValue
+        }
+        if state != .downloading, downloadTaskIdentifier != nil {
+            downloadTaskIdentifier = nil
         }
         refreshBusyFlag()
     }

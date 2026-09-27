@@ -83,6 +83,12 @@ class JobTableTests(unittest.TestCase):
         self.assertIsNone(self.claim(), "not yet available")
         self.assertEqual(self.claim(now=self.now + dt.timedelta(minutes=6)).subject_id, 4)
 
+    def test_claim_skips_a_job_id_whose_prior_runner_is_still_unwinding(self) -> None:
+        first = self.enqueue(subject=1, priority=10).job_id
+        second = self.enqueue(subject=2, priority=20).job_id
+        self.assertEqual(self.claim(exclude_ids={first}).id, second)
+        self.assertEqual(self.claim().id, first)
+
     def test_concurrent_claims_from_separate_connections_take_each_job_once(self) -> None:
         with self.db.write() as tx:
             for subject in range(200):

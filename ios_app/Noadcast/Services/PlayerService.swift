@@ -192,6 +192,9 @@ final class PlayerService {
     func load(episode: Episode, settings: AppSettings, autoPlay: Bool = false) async {
         let loadState = Log.signposter.beginInterval("PlayerService.load")
         defer { Log.signposter.endInterval("PlayerService.load", loadState) }
+        if autoPlay, let context = modelContainer?.mainContext {
+            SubscriptionService.shared.reviveAfterUserRequest(episode, in: context)
+        }
         if currentEpisodeID == episode.persistentModelID, player.currentItem != nil {
             // Already loaded (e.g. its row's play button): don't restart it.
             if autoPlay {
@@ -279,6 +282,11 @@ final class PlayerService {
     }
 
     func play() {
+        if let id = currentEpisodeID,
+           let context = modelContainer?.mainContext,
+           let episode = context.model(for: id) as? Episode {
+            SubscriptionService.shared.reviveAfterUserRequest(episode, in: context)
+        }
         activateAudioSessionIfNeeded()
         wantsToPlay = true
         guard player.currentItem != nil else {

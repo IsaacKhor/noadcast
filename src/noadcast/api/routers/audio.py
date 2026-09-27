@@ -85,28 +85,40 @@ async def stored_audio(ctx: AppContext, episode: repo.Episode) -> Path | None:
     return None
 
 
-def request_audio(ctx: AppContext, episode_id: int) -> tuple[repo.Episode, int | None]:
-    """Enqueue the priority (re-)download; returns the episode as it was and the job id."""
-    with ctx.db.write() as tx:
-        episode = repo.get_episode(tx, episode_id)
+async def request_audio(
+    ctx: AppContext, episode_id: int, *, implicit: bool = False
+) -> tuple[repo.Episode, int | None]:
+    """Enqueue audio work unless a late GET follows a played release."""
+    async with ctx.episode_release_lock(episode_id):
+        episode = repo.get_episode(ctx.db, episode_id)
         if episode is None:
             raise commands.NotFound(f"episode {episode_id}")
-        job_id = commands.request_audio(
-            tx, episode_id, server=repo.load_server_settings(tx, ctx.settings), now=now_iso()
-        )
-    ctx.wake()
+        if implicit and episode.release_reason == "played":
+            return episode, None
+        with ctx.db.write() as tx:
+            job_id = commands.request_audio(
+                tx, episode_id, server=repo.load_server_settings(tx, ctx.settings), now=now_iso()
+            )
+    if job_id is not None:
+        ctx.wake()
     return episode, job_id
 
 
-def audio_unavailable(ctx: AppContext, episode_id: int) -> ApiError:
-    episode, job_id = request_audio(ctx, episode_id)
+def _audio_unavailable_error(episode: repo.Episode, job_id: int | None) -> ApiError:
     if episode.audio_state == "evicted":
-        code, message = "audioEvicted", "the server deleted its copy of this audio and is downloading it again"
+        code, message = "audioEvicted", "the server does not have this audio"
     else:
-        code, message = "audioNotReady", "the server does not have this audio yet and is downloading it"
+        code, message = "audioNotReady", "the server does not have this audio yet"
     return ApiError(
-        409, code, message, headers={"Retry-After": str(RETRY_AFTER_SECONDS)}, extra={"jobId": job_id}
+        409, code, message,
+        headers={"Retry-After": str(RETRY_AFTER_SECONDS)} if job_id is not None else None,
+        extra={"jobId": job_id},
     )
+
+
+async def audio_unavailable(ctx: AppContext, episode_id: int, *, implicit: bool = False) -> ApiError:
+    episode, job_id = await request_audio(ctx, episode_id, implicit=implicit)
+    return _audio_unavailable_error(episode, job_id)
 
 
 @router.post("/episodes/{episode_id}/audio-url")
@@ -114,7 +126,7 @@ async def audio_url(request: Request, episode_id: int, ctx: Ctx) -> Response:
     """A signed URL for players that cannot send an Authorization header."""
     episode = episode_or_404(ctx, episode_id)
     if await stored_audio(ctx, episode) is None:
-        raise audio_unavailable(ctx, episode_id)
+        raise await audio_unavailable(ctx, episode_id)
     path, expires = signed_audio_path(ctx.settings, episode_id, now=time.time())
     url = str(request.base_url).rstrip("/") + path
     return json_response(AudioUrlOut(path=path, url=url, expires_at=iso(expires)))
@@ -127,9 +139,11 @@ async def stream_audio(request: Request, episode_id: int, ctx: Ctx) -> Response:
     path = await stored_audio(ctx, episode)
     if path is None:
         if ctx.settings.evicted_redirect:
-            request_audio(ctx, episode_id)
-            return RedirectResponse(episode.enclosure_url, status_code=307)
-        raise audio_unavailable(ctx, episode_id)
+            current, job_id = await request_audio(ctx, episode_id, implicit=True)
+            if current.release_reason != "played":
+                return RedirectResponse(current.enclosure_url, status_code=307)
+            raise _audio_unavailable_error(current, job_id)
+        raise await audio_unavailable(ctx, episode_id, implicit=True)
     # mark_audio_present always records these alongside the path.
     assert episode.audio_path is not None and episode.audio_bytes is not None and episode.audio_sha256 is not None
     if request.app.state.audio_access.due(episode_id):
@@ -149,7 +163,7 @@ async def stream_audio(request: Request, episode_id: int, ctx: Ctx) -> Response:
     except FileNotFoundError:
         # Deleted between the size check and the open (a release or a sweep).
         _record_missing(ctx, episode, None)
-        raise audio_unavailable(ctx, episode_id) from None
+        raise await audio_unavailable(ctx, episode_id, implicit=True) from None
 
 
 @router.delete("/episodes/{episode_id}/audio")

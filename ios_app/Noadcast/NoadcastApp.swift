@@ -15,6 +15,11 @@ struct NoadcastApp: App {
             PlayerService.shared.setModelContainer(sharedModelContainer)
             return
         }
+        if ProcessInfo.processInfo.arguments.contains("--ui-test-status") {
+            sharedModelContainer = StatusUITestFixture.makeContainer()
+            PlayerService.shared.setModelContainer(sharedModelContainer)
+            return
+        }
         #endif
         // Order matters: the generation-1 store must be exported and moved
         // aside before the generation-2 container opens on the same path.
@@ -51,6 +56,8 @@ struct NoadcastApp: App {
             #if DEBUG
             if ProcessInfo.processInfo.arguments.contains("--ui-test-queue") {
                 QueueView()
+            } else if ProcessInfo.processInfo.arguments.contains("--ui-test-status") {
+                StatusView(subscription: StatusUITestFixture.subscription, isUITestFixture: true)
             } else {
                 ContentView()
             }

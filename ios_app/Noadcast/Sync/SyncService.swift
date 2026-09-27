@@ -48,14 +48,12 @@ nonisolated enum PendingReleaseStore {
     static let idsKey = "PendingAudioReleases.ids"
     static let instanceKey = "PendingAudioReleases.instance"
 
-    static func load() -> (instanceId: String?, ids: [Int]) {
-        let defaults = UserDefaults.standard
+    static func load(defaults: UserDefaults = .standard) -> (instanceId: String?, ids: [Int]) {
         let ids = (defaults.array(forKey: idsKey) as? [Int]) ?? []
         return (defaults.string(forKey: instanceKey), ids)
     }
 
-    static func add(_ id: Int, instanceId: String?) {
-        let defaults = UserDefaults.standard
+    static func add(_ id: Int, instanceId: String?, defaults: UserDefaults = .standard) {
         var ids = (defaults.array(forKey: idsKey) as? [Int]) ?? []
         if let stored = defaults.string(forKey: instanceKey), let instanceId, stored != instanceId {
             ids = []
@@ -69,16 +67,15 @@ nonisolated enum PendingReleaseStore {
         }
     }
 
-    static func remove(_ id: Int) {
-        let defaults = UserDefaults.standard
+    static func remove(_ id: Int, defaults: UserDefaults = .standard) {
         var ids = (defaults.array(forKey: idsKey) as? [Int]) ?? []
         ids.removeAll { $0 == id }
         defaults.set(ids, forKey: idsKey)
     }
 
-    static func clear() {
-        UserDefaults.standard.removeObject(forKey: idsKey)
-        UserDefaults.standard.removeObject(forKey: instanceKey)
+    static func clear(defaults: UserDefaults = .standard) {
+        defaults.removeObject(forKey: idsKey)
+        defaults.removeObject(forKey: instanceKey)
     }
 }
 
@@ -139,7 +136,7 @@ final class SyncService {
     @ObservationIgnored private var lastSyncAttemptAt: Date?
     @ObservationIgnored private var pollTask: Task<Void, Never>?
     @ObservationIgnored private var jobsETag: String?
-    @ObservationIgnored private var downloadsTabVisible = false
+    @ObservationIgnored private var statusTabVisible = false
     @ObservationIgnored private var isInForeground = true
     @ObservationIgnored private var followUpTask: Task<Void, Never>?
     @ObservationIgnored private var globalAdAnalysisOverride: Bool?
@@ -553,10 +550,10 @@ final class SyncService {
 
     // MARK: - Job progress polling
 
-    /// 2 s while the Downloads tab is visible, 5 s in the foreground with
+    /// 2 s while the Status tab is visible, 5 s in the foreground with
     /// active jobs, 30 s idle; stopped in the background.
     private var pollInterval: Double {
-        if downloadsTabVisible { return 2 }
+        if statusTabVisible { return 2 }
         return activeJobs.isEmpty ? 30 : 5
     }
 
@@ -577,9 +574,9 @@ final class SyncService {
         pollTask = nil
     }
 
-    func setDownloadsTabVisible(_ visible: Bool) {
-        guard downloadsTabVisible != visible else { return }
-        downloadsTabVisible = visible
+    func setStatusTabVisible(_ visible: Bool) {
+        guard statusTabVisible != visible else { return }
+        statusTabVisible = visible
         // Restart so a pending 30 s sleep doesn't delay the 2 s cadence.
         if pollTask != nil {
             stopJobPolling()

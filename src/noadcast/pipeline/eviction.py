@@ -8,9 +8,10 @@ is under ``min_free_bytes`` or stored audio exceeds ``audio_cache_max_bytes``.
 
 Transcripts and markers are never evicted (~100 KB against ~60 MB), so an
 evicted episode keeps its skip data and a later request re-downloads the
-audio. Audio is never evicted while a download/transcribe/classify job for
-the episode is live; a release that arrives then is carried out by the
-sweep once the job is gone.
+audio. Sweeps and manual releases defer while a media job still needs the
+file. A played release cancels pending/running media jobs, waits for their
+runners to close, and removes complete and partial audio. Its stop intent
+blocks late audio reads from starting work again until an explicit request.
 """
 
 from __future__ import annotations
@@ -53,10 +54,28 @@ async def _remove(ctx: AppContext, relpaths: Iterable[str]) -> int:
 
 
 async def release_audio(ctx: AppContext, episode_id: int, *, reason: str) -> bool:
-    """The client's retention command. Evicts now unless a pipeline job still
-    needs the file; returns True if the audio was deleted immediately."""
+    """The client's retention command. Played also stops unfinished media work.
+
+    Manual releases keep the previous deferred behavior when a job is live.
+    """
     if reason not in RELEASE_REASONS:
         raise ValueError(f"reason must be one of {RELEASE_REASONS}")
+    if reason == "played":
+        async with ctx.episode_release_lock(episode_id):
+            now = iso(utc_now())
+            with ctx.db.write() as tx:
+                episode = repo.get_episode(tx, episode_id)
+                if episode is None:
+                    raise NotFound(f"episode {episode_id}")
+                canceled = jobs.cancel_live_jobs_for_subjects(tx, states.EPISODE_STAGES, (episode_id,), now=now)
+                repo.mark_played_released(tx, episode, now=now)
+            canceled_ids = [job.id for job in canceled]
+            ctx.abort(canceled_ids)
+            await ctx.wait_aborted(canceled_ids)
+            if episode.audio_path is not None:
+                await _remove(ctx, [episode.audio_path])
+            log.info("episode work stopped and audio released", extra={"episode_id": episode_id})
+            return episode.audio_path is not None
     now = iso(utc_now())
     with ctx.db.write() as tx:
         episode = repo.get_episode(tx, episode_id)

@@ -51,10 +51,15 @@ class ProgressReporter:
     transaction. Safe to call from another thread (it hops to the loop)."""
 
     def __init__(
-        self, db: Database, episode_id: int, *, min_interval: float = 2.0, min_fraction: float = 0.05
+        self, db: Database, episode_id: int, *, job_id: int | None = None, owner: str | None = None,
+        attempts: int | None = None,
+        min_interval: float = 2.0, min_fraction: float = 0.05
     ) -> None:
         self._db = db
         self._episode_id = episode_id
+        self._job_id = job_id
+        self._owner = owner
+        self._attempts = attempts
         self._min_interval = min_interval
         self._min_fraction = min_fraction
         self._loop = asyncio.get_running_loop()
@@ -75,6 +80,11 @@ class ProgressReporter:
             return
         self._last_at, self._last_value = now, current
         with self._db.write() as tx:
+            if self._job_id is not None:
+                job = jobs.get_job(tx, self._job_id)
+                if (job is None or job.state != "running" or job.lease_owner != self._owner
+                        or (self._attempts is not None and job.attempts != self._attempts)):
+                    return
             repo.set_progress(tx, self._episode_id, current=current, total=total, now=iso(utc_now()))
 
 
@@ -84,6 +94,23 @@ def _load(tx: repo.Reader, episode_id: int) -> tuple[repo.Episode, repo.Podcast]
         return None
     podcast = repo.get_podcast(tx, episode.podcast_id)
     return None if podcast is None else (episode, podcast)
+
+
+def _owned(tx: WriteTx, running: RunningJob) -> bool:
+    current = jobs.get_job(tx, running.job.id)
+    return (
+        current is not None and current.state == "running"
+        and current.lease_owner == running.owner and current.attempts == running.job.attempts
+    )
+
+
+def _start_allowed(tx: WriteTx, running: RunningJob, episode: repo.Episode) -> bool:
+    if not _owned(tx, running):
+        return False
+    if episode.release_reason == "played":
+        jobs.cancel(tx, running.job.id, now=iso(utc_now()))
+        return False
+    return True
 
 
 def _audio_file(ctx: AppContext, episode: repo.Episode) -> Path | None:
@@ -100,9 +127,14 @@ def _advance_instead(ctx: AppContext, running: RunningJob, *, audio_missing: boo
     job = running.job
     stamp = iso(utc_now())
     with ctx.db.write() as tx:
+        if not _owned(tx, running):
+            return
         loaded = _load(tx, job.subject_id)
         if loaded is not None:
             episode, podcast = loaded
+            if episode.release_reason == "played":
+                jobs.cancel(tx, job.id, now=stamp)
+                return
             if audio_missing and episode.audio_state == "present":
                 # The row claimed a file the disk no longer has.
                 repo.mark_audio_evicted(tx, episode.id, reason="missing", now=stamp)
@@ -157,40 +189,44 @@ class DownloadStage:
 
     async def run(self, running: RunningJob) -> None:
         ctx, job = self.ctx, running.job
-        loaded = _load(ctx.db, job.subject_id)
-        if loaded is None:
-            return  # deleted since it was queued
-        episode, _ = loaded
-        if _audio_file(ctx, episode) is not None:
-            _advance_instead(ctx, running)  # a duplicate request; the audio is already here
-            return
-        relpath = (
-            episode.audio_path
-            if episode.audio_state == "partial" and episode.audio_path
-            else ctx.store.audio_relpath(
-                episode.podcast_id,
-                episode.id,
-                ctx.store.extension_for(episode.enclosure_type, episode.enclosure_url),
+        async with ctx.episode_release_lock(job.subject_id):
+            loaded = _load(ctx.db, job.subject_id)
+            if loaded is None:
+                return  # deleted since it was queued
+            episode, _ = loaded
+            if _audio_file(ctx, episode) is not None:
+                _advance_instead(ctx, running)  # a duplicate request; the audio is already here
+                return
+            relpath = (
+                episode.audio_path
+                if episode.audio_state == "partial" and episode.audio_path
+                else ctx.store.audio_relpath(
+                    episode.podcast_id,
+                    episode.id,
+                    ctx.store.extension_for(episode.enclosure_type, episode.enclosure_url),
+                )
             )
-        )
-        advances_pipeline = episode.pipeline_state in states.DOWNLOAD_IS_PIPELINE_STEP
-        with ctx.db.write() as tx:
-            repo.begin_download(
-                tx,
-                episode.id,
-                audio_path=relpath,
-                pipeline_state="downloading" if advances_pipeline else None,
-                total_bytes=episode.enclosure_length,
-                now=iso(utc_now()),
-            )
-        report = ProgressReporter(ctx.db, episode.id)
+            advances_pipeline = episode.pipeline_state in states.DOWNLOAD_IS_PIPELINE_STEP
+            with ctx.db.write() as tx:
+                if not _start_allowed(tx, running, episode):
+                    return
+                repo.begin_download(
+                    tx,
+                    episode.id,
+                    audio_path=relpath,
+                    pipeline_state="downloading" if advances_pipeline else None,
+                    total_bytes=episode.enclosure_length,
+                    now=iso(utc_now()),
+                )
+        report = ProgressReporter(ctx.db, episode.id, job_id=job.id, owner=running.owner, attempts=job.attempts)
 
         def save_validators(etag: str | None, last_modified: str | None) -> None:
             # Recorded as soon as the .part holds these bytes, not only when a
             # transient error reports them, so a crash mid-transfer resumes too.
             # Called synchronously between awaits, so no other write is open.
             with ctx.db.write() as tx:
-                repo.set_origin_validators(tx, episode.id, etag=etag, last_modified=last_modified)
+                if _owned(tx, running):
+                    repo.set_origin_validators(tx, episode.id, etag=etag, last_modified=last_modified)
 
         try:
             result = await download_audio(
@@ -213,7 +249,8 @@ class DownloadStage:
                 # The .part is kept; its validators let the retry resume
                 # with If-Range instead of starting over.
                 with ctx.db.write() as tx:
-                    repo.set_origin_validators(tx, episode.id, etag=exc.etag, last_modified=exc.last_modified)
+                    if _owned(tx, running):
+                        repo.set_origin_validators(tx, episode.id, etag=exc.etag, last_modified=exc.last_modified)
             raise
 
         transcript = repo.get_transcript(ctx.db, episode.id)
@@ -222,6 +259,8 @@ class DownloadStage:
         rendered_differently = transcript is not None and transcript.audio_sha256 != result.sha256
         stamp = iso(utc_now())
         with ctx.db.write() as tx:
+            if not _owned(tx, running):
+                return
             loaded = _load(tx, episode.id)
             if loaded is None:
                 return
@@ -290,29 +329,32 @@ class TranscribeStage:
 
     async def run(self, running: RunningJob) -> None:
         ctx, job = self.ctx, running.job
-        loaded = _load(ctx.db, job.subject_id)
-        if loaded is None:
-            return
-        episode, podcast = loaded
-        if not commands.analysis_enabled(podcast, ctx.server_settings(), job.params):
-            _advance_instead(ctx, running)  # switched off after this was queued
-            return
-        audio = _audio_file(ctx, episode)
-        if audio is None:
-            _advance_instead(ctx, running, audio_missing=True)  # re-download first
-            return
-        if ctx.transcriber is None:
-            raise TranscriptionError("no transcription pool is attached to this server")
-        with ctx.db.write() as tx:
-            repo.set_episode_states(
-                tx,
-                episode.id,
-                pipeline_state=states.RUNNING_STATE[self.kind],
-                error=None,
-                progress=repo.Progress("transcribe", 0.0, episode.duration_seconds),
-                now=iso(utc_now()),
-            )
-        report = ProgressReporter(ctx.db, episode.id)
+        async with ctx.episode_release_lock(job.subject_id):
+            loaded = _load(ctx.db, job.subject_id)
+            if loaded is None:
+                return
+            episode, podcast = loaded
+            if not commands.analysis_enabled(podcast, ctx.server_settings(), job.params):
+                _advance_instead(ctx, running)  # switched off after this was queued
+                return
+            audio = _audio_file(ctx, episode)
+            if audio is None:
+                _advance_instead(ctx, running, audio_missing=True)  # re-download first
+                return
+            if ctx.transcriber is None:
+                raise TranscriptionError("no transcription pool is attached to this server")
+            with ctx.db.write() as tx:
+                if not _start_allowed(tx, running, episode):
+                    return
+                repo.set_episode_states(
+                    tx,
+                    episode.id,
+                    pipeline_state=states.RUNNING_STATE[self.kind],
+                    error=None,
+                    progress=repo.Progress("transcribe", 0.0, episode.duration_seconds),
+                    now=iso(utc_now()),
+                )
+        report = ProgressReporter(ctx.db, episode.id, job_id=job.id, owner=running.owner, attempts=job.attempts)
 
         def on_progress(progress: TranscribeProgress) -> None:
             report(progress.processed_seconds, progress.total_seconds)
@@ -327,6 +369,8 @@ class TranscribeStage:
 
         stamp = iso(utc_now())
         with ctx.db.write() as tx:
+            if not _owned(tx, running):
+                return
             loaded = _load(tx, episode.id)
             if loaded is None:
                 return
@@ -372,31 +416,34 @@ class ClassifyStage:
 
     async def run(self, running: RunningJob) -> None:
         ctx, job = self.ctx, running.job
-        loaded = _load(ctx.db, job.subject_id)
-        if loaded is None:
-            return
-        episode, podcast = loaded
-        server = ctx.server_settings()
-        if not commands.analysis_enabled(podcast, server, job.params):
-            _advance_instead(ctx, running)
-            return
-        transcript = repo.get_transcript(ctx.db, episode.id)
-        words_row = repo.get_transcript_words(ctx.db, episode.id)
-        sentences = repo.get_sentences(ctx.db, episode.id)
-        if episode.transcript_state != "ready" or transcript is None or words_row is None or not sentences:
-            _advance_instead(ctx, running)  # transcribe first
-            return
-        provider = job.params.get("provider") or server.classifier
-        audio = _audio_file(ctx, episode)
-        with ctx.db.write() as tx:
-            repo.set_episode_states(
-                tx,
-                episode.id,
-                pipeline_state=states.RUNNING_STATE[self.kind],
-                error=None,
-                progress=repo.Progress("classify", None, None),
-                now=iso(utc_now()),
-            )
+        async with ctx.episode_release_lock(job.subject_id):
+            loaded = _load(ctx.db, job.subject_id)
+            if loaded is None:
+                return
+            episode, podcast = loaded
+            server = ctx.server_settings()
+            if not commands.analysis_enabled(podcast, server, job.params):
+                _advance_instead(ctx, running)
+                return
+            transcript = repo.get_transcript(ctx.db, episode.id)
+            words_row = repo.get_transcript_words(ctx.db, episode.id)
+            sentences = repo.get_sentences(ctx.db, episode.id)
+            if episode.transcript_state != "ready" or transcript is None or words_row is None or not sentences:
+                _advance_instead(ctx, running)  # transcribe first
+                return
+            provider = job.params.get("provider") or server.classifier
+            audio = _audio_file(ctx, episode)
+            with ctx.db.write() as tx:
+                if not _start_allowed(tx, running, episode):
+                    return
+                repo.set_episode_states(
+                    tx,
+                    episode.id,
+                    pipeline_state=states.RUNNING_STATE[self.kind],
+                    error=None,
+                    progress=repo.Progress("classify", None, None),
+                    now=iso(utc_now()),
+                )
         duration = episode.measured_duration_seconds or transcript.audio_duration_seconds
         request = ClassifyRequest(
             sentences=sentences,
@@ -419,6 +466,8 @@ class ClassifyStage:
 
         stamp = iso(utc_now())
         with ctx.db.write() as tx:
+            if not _owned(tx, running):
+                return
             if repo.get_episode(tx, episode.id) is None:
                 return
             classification = repo.insert_classification(

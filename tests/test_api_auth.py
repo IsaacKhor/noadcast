@@ -115,6 +115,18 @@ class SignedAudioUrlTests(ApiTestCase):
         self.assertEqual(ranged.status_code, 206)
         self.assertEqual(ranged.content, self.audio[:10])
 
+    async def test_signed_audio_read_after_played_does_not_restart_download(self) -> None:
+        path = await self.mint()
+        self.assertEqual((await self.client.delete(f"/api/v1/episodes/{self.episode_id}/audio")).status_code, 204)
+        response = await self.anon.get(path)
+        self.assertError(response, 409, "audioEvicted")
+        self.assertIsNone(response.json()["jobId"])
+        self.assertEqual((await self.anon.head(path)).status_code, 409)
+        self.assertIsNone(self.ctx.db.read_one(
+            "SELECT id FROM jobs WHERE subject_id = ? AND kind = 'download' AND state IN ('pending', 'running')",
+            (self.episode_id,),
+        ))
+
     async def test_bearer_also_streams(self) -> None:
         response = await self.client.get(f"/api/v1/episodes/{self.episode_id}/audio")
         self.assertEqual(response.status_code, 200)

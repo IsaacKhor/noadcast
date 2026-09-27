@@ -131,6 +131,12 @@ class Scheduler:
             if task is not None:
                 task.cancel()
 
+    async def wait_aborted(self, job_ids: Iterable[int]) -> None:
+        """Wait until canceled runners close their transfers before file cleanup."""
+        tasks = [task for job_id in job_ids if (task := self._running.get(job_id)) is not None]
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
+
     @property
     def running_job_ids(self) -> set[int]:
         return set(self._running)
@@ -194,7 +200,8 @@ class Scheduler:
         )
         with self.db.write() as tx:
             job = jobs.claim(
-                tx, kind, owner=self.ctx.owner, lease_seconds=jobs.LEASE_SECONDS, now=now, exclude_hosts=saturated
+                tx, kind, owner=self.ctx.owner, lease_seconds=jobs.LEASE_SECONDS, now=now,
+                exclude_hosts=saturated, exclude_ids=self.running_job_ids,
             )
             if job is None:
                 return None
@@ -230,7 +237,10 @@ class Scheduler:
                     self._record_failure(running, exc)
                 else:
                     with self.db.write() as tx:
-                        jobs.complete(tx, job.id, now=iso(utc_now()))
+                        current = jobs.get_job(tx, job.id)
+                        if (current is not None and current.state == "running"
+                                and current.lease_owner == running.owner and current.attempts == job.attempts):
+                            jobs.complete(tx, job.id, now=iso(utc_now()))
         except Exception:
             # Bookkeeping itself failed (e.g. the database stayed locked): the
             # row keeps its lease, which lapses, and the sweeper requeues it.
@@ -262,7 +272,8 @@ class Scheduler:
         )
         with self.db.write() as tx:
             current = jobs.get_job(tx, job.id)
-            if current is None or current.state != "running" or current.lease_owner != running.owner:
+            if (current is None or current.state != "running" or current.lease_owner != running.owner
+                    or current.attempts != job.attempts):
                 return  # canceled or reclaimed while failing; the new owner decides
             if decision.retry:
                 assert decision.available_at is not None
@@ -275,9 +286,13 @@ class Scheduler:
         while True:
             await asyncio.sleep(self.config.lease_renew_seconds)
             with self.db.write() as tx:
-                held = jobs.renew_lease(
-                    tx, running.job.id, owner=running.owner, lease_seconds=running.lease_seconds, now=utc_now()
-                )
+                current = jobs.get_job(tx, running.job.id)
+                held = bool(current is not None and current.state == "running"
+                            and current.lease_owner == running.owner and current.attempts == running.job.attempts)
+                if held:
+                    held = jobs.renew_lease(
+                        tx, running.job.id, owner=running.owner, lease_seconds=running.lease_seconds, now=utc_now()
+                    )
             if not held:
                 current = jobs.get_job(self.db, running.job.id)
                 if current is not None and current.state == "done":

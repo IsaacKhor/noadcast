@@ -168,6 +168,18 @@ class StageTestCase(unittest.IsolatedAsyncioTestCase):
 
 
 class DownloadTranscribeClassifyTests(StageTestCase):
+    async def test_played_stop_intent_blocks_stale_queued_download(self) -> None:
+        await eviction.release_audio(self.ctx, self.episode.id, reason="played")
+        with self.ctx.db.write() as tx:
+            stale_id = jobs.enqueue(tx, "download", self.episode.id, now=now_iso()).job_id
+        stale = await self.run_next("download")
+        self.assertEqual((stale.id, stale.state), (stale_id, "canceled"))
+        self.assertEqual(self.origin.calls, [])
+        self.assertEqual(self.fresh().release_reason, "played")
+        fresh_id = self.process()
+        self.assertNotEqual(fresh_id, stale_id)
+        self.assertIsNone(self.fresh().release_reason)
+
     async def test_the_happy_path_end_to_end(self) -> None:
         self.process()
         job = await self.run_next("download")
@@ -465,6 +477,59 @@ class SchedulerTests(StageTestCase):
         self.assertEqual(jobs.get_job(self.ctx.db, job.id).state, "canceled")
         self.assertEqual(self.fresh().pipeline_state, "downloaded")
 
+    async def test_played_release_stops_running_transcription_without_chaining(self) -> None:
+        self.transcriber.gate = asyncio.Event()
+        scheduler = self.scheduler()
+        self.addAsyncCleanup(scheduler.shutdown)
+        self.process()
+        self.ctx.wake()
+        await asyncio.wait_for(self.transcriber.started.wait(), 5)
+        job = jobs.live_job(self.ctx.db, "transcribe", self.episode.id)
+        self.assertIsNotNone(job)
+        path = self.ctx.store.abspath(self.fresh().audio_path)
+        self.assertTrue(await eviction.release_audio(self.ctx, self.episode.id, reason="played"))
+        self.assertEqual(jobs.get_job(self.ctx.db, job.id).state, "canceled")
+        self.assertNotIn(job.id, scheduler.running_job_ids)
+        self.assertFalse(path.exists())
+        self.assertEqual((self.fresh().pipeline_state, self.fresh().classify_state), ("ready", "skipped"))
+        self.assertIsNone(repo.get_transcript(self.ctx.db, self.episode.id))
+        self.assertIsNone(jobs.live_stage_job(self.ctx.db, self.episode.id))
+        self.assertEqual(jobs.recover_leases(self.ctx.db, self.ctx.store).healed, [])
+
+    async def test_played_release_stops_running_download_without_chaining(self) -> None:
+        self.origin.gate = asyncio.Event()
+        scheduler = self.scheduler()
+        self.addAsyncCleanup(scheduler.shutdown)
+        job_id = self.process()
+        self.ctx.wake()
+        await self.wait_for(lambda: self.origin.in_flight == 1)
+        self.assertEqual(self.fresh().audio_state, "partial")
+        self.assertTrue(await eviction.release_audio(self.ctx, self.episode.id, reason="played"))
+        self.assertEqual(self.origin.in_flight, 0)
+        self.assertEqual(jobs.get_job(self.ctx.db, job_id).state, "canceled")
+        self.assertEqual((self.fresh().audio_state, self.fresh().pipeline_state), ("evicted", "ready"))
+        self.assertIsNone(jobs.live_stage_job(self.ctx.db, self.episode.id))
+        self.assertFalse(self.ctx.store.abspath(self.ctx.store.audio_relpath(self.podcast.id, self.episode.id, "mp3")).exists())
+
+    async def test_canceled_stage_cannot_commit_or_report_late_progress(self) -> None:
+        self.transcriber.gate = asyncio.Event()
+        self.process()
+        await self.run_next("download")
+        task = asyncio.create_task(self.run_next("transcribe"))
+        await asyncio.wait_for(self.transcriber.started.wait(), 5)
+        job = jobs.live_job(self.ctx.db, "transcribe", self.episode.id)
+        self.assertIsNotNone(job)
+        reporter = stages.ProgressReporter(self.ctx.db, self.episode.id, job_id=job.id, owner=self.ctx.owner)
+        await eviction.release_audio(self.ctx, self.episode.id, reason="played")
+        reporter(500.0, 600.0)
+        self.transcriber.gate.set()
+        await task
+        self.assertEqual(jobs.get_job(self.ctx.db, job.id).state, "canceled")
+        self.assertIsNone(self.fresh().progress_stage)
+        self.assertIsNone(self.fresh().progress_updated_at)
+        self.assertIsNone(repo.get_transcript(self.ctx.db, self.episode.id))
+        self.assertIsNone(jobs.live_stage_job(self.ctx.db, self.episode.id))
+
     async def test_a_lost_lease_stops_the_job(self) -> None:
         self.transcriber.gate = asyncio.Event()
         scheduler = self.scheduler()
@@ -538,7 +603,7 @@ class EvictionTests(StageTestCase):
         episode = await self.ready_with_audio("r2")
         with self.ctx.db.write() as tx:
             job_id = commands.reanalyze_episode(tx, episode.id, server=self.ctx.server_settings(), now=now_iso())
-        self.assertFalse(await eviction.release_audio(self.ctx, episode.id, reason="played"))
+        self.assertFalse(await eviction.release_audio(self.ctx, episode.id, reason="manual"))
         self.assertEqual(self.fresh(episode.id).audio_state, "present")
         await eviction.sweep(self.ctx)
         self.assertEqual(self.fresh(episode.id).audio_state, "present", "still live")
@@ -546,7 +611,7 @@ class EvictionTests(StageTestCase):
             jobs.cancel(tx, job_id, now=now_iso())
         report = await eviction.sweep(self.ctx)
         self.assertEqual(report.released, [episode.id])
-        self.assertEqual((self.fresh(episode.id).audio_state, self.fresh(episode.id).audio_evicted_reason), ("evicted", "played"))
+        self.assertEqual((self.fresh(episode.id).audio_state, self.fresh(episode.id).audio_evicted_reason), ("evicted", "manual"))
 
     async def test_age_and_disk_sweeps_evict_least_recently_useful_first(self) -> None:
         now = utc_now()

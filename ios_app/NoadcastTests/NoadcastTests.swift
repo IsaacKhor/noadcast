@@ -104,9 +104,13 @@ struct NoadcastTests {
     }
 
     @Test @MainActor func queueDismissalMarksPlayedAndRemovesQueueItem() throws {
-        // Dismissing as played records a retention release in UserDefaults
-        // (via SyncService.shared); never leave it behind for the host app.
-        defer { PendingReleaseStore.clear() }
+        let suiteName = "NoadcastTests.PendingRelease.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let service = SubscriptionService(
+            releasePlayedAudio: { PendingReleaseStore.add($0, instanceId: "test-instance", defaults: defaults) },
+            cancelPendingRelease: { PendingReleaseStore.remove($0, defaults: defaults) }
+        )
 
         let container = try makeTestContainer()
         let context = container.mainContext
@@ -125,11 +129,18 @@ struct NoadcastTests {
             podcast: podcast
         )
         episode.playbackPosition = 300
+        episode.applyServerState(ServerEpisodeState.transcribing.rawValue)
+        episode.setDownloadState(.queued)
+        episode.downloadIsUserInitiated = true
+        episode.downloadRequestedAt = .now
+        episode.downloadProgress = 0.4
+        episode.downloadedBytes = 400
+        episode.downloadTotalBytes = 1_000
         context.insert(episode)
         context.insert(QueueItem(position: 0, episode: episode))
         try context.save()
 
-        SubscriptionService.shared.deleteEpisodeContent(
+        service.deleteEpisodeContent(
             episode,
             in: context,
             markAsPlayed: true
@@ -138,9 +149,130 @@ struct NoadcastTests {
         #expect(episode.isPlayed)
         #expect(episode.datePlayed != nil)
         #expect(episode.playbackPosition == 0)
+        #expect(episode.downloadState == .idle)
+        #expect(!episode.downloadIsUserInitiated)
+        #expect(episode.downloadRequestedAt == nil)
+        #expect(episode.downloadProgress == 0)
+        #expect(episode.downloadedBytes == nil)
+        #expect(episode.downloadTotalBytes == nil)
         #expect(try context.fetchCount(FetchDescriptor<QueueItem>()) == 0)
+        // The server mirror may still say "transcribing" until the next
+        // sync. Played episodes stay out of Status immediately.
+        #expect(try context.fetchCount(FetchDescriptor<Episode>(predicate: #Predicate<Episode> {
+            (!$0.isPlayed && ($0.isBusy || $0.serverStateRaw == "failed" || $0.downloadStateRaw == "failed")) || $0.localFilename != nil
+        })) == 0)
         // The retention release (`DELETE …/audio?reason=played`) is queued.
-        #expect(PendingReleaseStore.load().ids.contains(episode.serverID))
+        #expect(PendingReleaseStore.load(defaults: defaults).ids.contains(episode.serverID))
+
+        // A later explicit queue action reverses the played dismissal and
+        // cancels its unsent release without starting a real transfer.
+        AppSettings.current(in: context).autoDownloadPolicy = .manualOnly
+        try context.save()
+        #expect(service.addToQueue(episode, in: context))
+        #expect(!episode.isPlayed)
+        #expect(PendingReleaseStore.load(defaults: defaults).ids.isEmpty)
+        #expect(try context.fetchCount(FetchDescriptor<QueueItem>()) == 1)
+    }
+
+    @Test @MainActor func playedEpisodeStaysDismissedAfterServerMirrorUpdate() async throws {
+        let suiteName = "NoadcastTests.PendingRelease.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let service = SubscriptionService(
+            releasePlayedAudio: { PendingReleaseStore.add($0, instanceId: "test-instance", defaults: defaults) },
+            cancelPendingRelease: { PendingReleaseStore.remove($0, defaults: defaults) }
+        )
+        let container = try makeTestContainer()
+        let engine = SyncEngine(modelContainer: container)
+        _ = try await engine.apply(
+            page: SyncFixtures.page(
+                podcasts: [SyncFixtures.podcast(9_100_101)],
+                episodes: [SyncFixtures.episode(9_100_102, podcast: 9_100_101, state: .downloading)],
+                nextSince: 1
+            ), options: SyncFixtures.options, save: true
+        )
+        let context = container.mainContext
+        let episode = try #require(storedEpisode(9_100_102, in: context))
+        service.deleteEpisodeContent(episode, in: context, markAsPlayed: true)
+
+        _ = try await engine.apply(
+            page: SyncFixtures.page(
+                episodes: [SyncFixtures.episode(9_100_102, podcast: 9_100_101, state: .classifying)],
+                nextSince: 2
+            ), options: SyncFixtures.options, save: true
+        )
+        let refreshed = try #require(storedEpisode(9_100_102, in: ModelContext(container)))
+        #expect(refreshed.isPlayed)
+        #expect(refreshed.downloadState == .idle)
+        #expect(refreshed.serverState == .classifying)
+        #expect(PendingReleaseStore.load(defaults: defaults).ids.contains(refreshed.serverID))
+    }
+
+    @Test @MainActor func statusKeepsPlayedAudioButHidesPlayedWork() throws {
+        let container = try makeTestContainer()
+        let context = container.mainContext
+        let podcast = Podcast(
+            serverID: 9_100_201,
+            feedURL: try #require(URL(string: "https://example.com/status.xml")),
+            title: "Status fixture"
+        )
+        context.insert(podcast)
+        let retained = Episode(serverID: 9_100_202, podcastServerID: podcast.serverID, guid: "retained", title: "Retained", podcast: podcast)
+        retained.isPlayed = true
+        retained.localFilename = "retained-fixture.mp3"
+        retained.fileSizeBytes = 1_000
+        retained.applyServerState(ServerEpisodeState.classifying.rawValue)
+        context.insert(retained)
+        let dismissed = Episode(serverID: 9_100_203, podcastServerID: podcast.serverID, guid: "dismissed", title: "Dismissed", podcast: podcast)
+        dismissed.isPlayed = true
+        dismissed.applyServerState(ServerEpisodeState.classifying.rawValue)
+        context.insert(dismissed)
+        try context.save()
+
+        let visible = try context.fetch(FetchDescriptor<Episode>(predicate: #Predicate<Episode> {
+            (!$0.isPlayed && ($0.isBusy || $0.serverStateRaw == "failed" || $0.downloadStateRaw == "failed")) || $0.localFilename != nil
+        }))
+        #expect(visible.map(\.serverID) == [retained.serverID])
+    }
+
+    @Test @MainActor func lateDownloadProgressCannotWriteIntoReplacementTransfer() async throws {
+        let container = try makeTestContainer()
+        let context = container.mainContext
+        let podcast = Podcast(
+            serverID: 9_100_301,
+            feedURL: try #require(URL(string: "https://example.com/progress.xml")),
+            title: "Progress fixture"
+        )
+        context.insert(podcast)
+        let episode = Episode(serverID: 9_100_302, podcastServerID: podcast.serverID, guid: "progress", title: "Progress", podcast: podcast)
+        episode.setDownloadState(.downloading)
+        episode.downloadTaskIdentifier = 202
+        context.insert(episode)
+        try context.save()
+
+        let writer = DownloadProgressWriter(modelContainer: container)
+        await writer.record(serverID: episode.serverID, taskID: 101, written: 500, expected: 1_000)
+        #expect(try storedEpisode(episode.serverID, in: ModelContext(container))?.downloadProgress == 0)
+        await writer.record(serverID: episode.serverID, taskID: 202, written: 500, expected: 1_000)
+        #expect(try storedEpisode(episode.serverID, in: ModelContext(container))?.downloadProgress == 0.5)
+    }
+
+    @Test @MainActor func oldVersionDownloadCompletionIsAcceptedOnlyBeforeReplacementOrDismissal() {
+        #expect(DownloadManager.acceptsLegacyCompletion(
+            wasDownloadingAtStartup: true, isPlayed: false, state: .downloading
+        ))
+        #expect(DownloadManager.acceptsLegacyCompletion(
+            wasDownloadingAtStartup: true, isPlayed: false, state: .queued
+        ))
+        #expect(!DownloadManager.acceptsLegacyCompletion(
+            wasDownloadingAtStartup: true, isPlayed: true, state: .downloading
+        ))
+        #expect(!DownloadManager.acceptsLegacyCompletion(
+            wasDownloadingAtStartup: true, isPlayed: false, state: .idle
+        ))
+        #expect(!DownloadManager.acceptsLegacyCompletion(
+            wasDownloadingAtStartup: false, isPlayed: false, state: .downloading
+        ))
     }
 
     @Test @MainActor func transcriptionProgressShowsAudioTime() throws {

@@ -288,12 +288,27 @@ arrives via `/sync`.
   → `206` with `Content-Range`; unsatisfiable → `416` with
   `Content-Range: bytes */<size>`; multi-range → `200` full body;
   `If-Range` mismatch → `200`; `If-None-Match` hit → `304`. `HEAD` returns
-  identical headers with no body. Missing audio → `409` as above.
+  identical headers with no body. Missing audio normally queues a priority
+  download and returns `409` as above, except after a played release.
 - `DELETE /api/v1/episodes/{id}/audio?reason=played|manual` → `204`. The
-  **retention release**: the client sends it when the user finishes or marks
-  an episode played. The server deletes its audio copy but keeps the
-  transcript and markers, so a later request re-downloads (`409` meanwhile).
-  If a re-download yields different bytes (dynamic ad insertion), the server
+  **retention release**: the client sends `reason=played` when the user
+  finishes or marks an episode played. This cancels pending and running
+  download, transcription, and classification jobs for that episode, clears
+  progress, and deletes complete or partial server audio, including when the
+  audio was never downloaded. The episode leaves the active job list and will
+  not be automatically resumed after a server restart. Transcript, markers,
+  and classification history remain. The played flag itself is device-local.
+  Repeating the request is harmless; an explicit later process, reanalysis,
+  or audio request may start work again. `reason=manual` only releases audio;
+  when a media job is live, that release is deferred until the job finishes.
+  A later explicit audio request re-downloads (`409` meanwhile).
+  After a `reason=played` release, late `GET|HEAD` requests (including an
+  already-minted signed URL) return `409` with `jobId: null` and do not queue
+  a download or redirect to the enclosure. The played-release stop intent is
+  kept server-side until an explicit `POST /process`, `POST /audio-url`,
+  `POST /reanalyze`, or job retry requests new work. This protects against
+  stale player and background transfer requests. If a re-download yields
+  different bytes (dynamic ad insertion), the server
   re-transcribes and reclassifies before markers are trusted again.
 
 ### Settings, usage, OPML

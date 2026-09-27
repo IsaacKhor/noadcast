@@ -2,7 +2,7 @@ import SwiftUI
 import SwiftData
 
 /// Visual variants of `EpisodeRow`. Pick `.withPodcast` for lists that mix
-/// episodes from multiple podcasts (Queue, Downloads, Latest) and
+/// episodes from multiple podcasts (Queue, Status, Latest) and
 /// `.episodeOnly` for a single podcast's own episode list.
 enum EpisodeRowStyle {
     case withPodcast
@@ -15,7 +15,7 @@ enum EpisodeRowStyle {
 ///     the server) · ads-detected count
 ///   * a thin progress bar for in-progress work or partial playback
 ///   * a trailing affordance supplied by the caller (`StandardEpisodeAction`
-///     for most lists; Queue / Downloads pass custom ones).
+///     for most lists; Queue / Status pass custom ones).
 ///
 /// Tapping the title area opens `ShowNotesView`. Swipe actions are *not*
 /// declared here — callers add their own per-list swipes via
@@ -29,7 +29,7 @@ struct EpisodeRow<Trailing: View>: View {
     /// `downloadProgress`, `downloadedBytes`, `playbackPosition`, or the
     /// in-memory job progress, so Observation doesn't subscribe the row to
     /// them — download bytes, job polls, and 0.25 s playback ticks don't
-    /// re-render every list. Only `DownloadsView` opts in.
+    /// re-render every list. Only `StatusView` opts in.
     var showProgress: Bool = false
     @ViewBuilder var trailing: () -> Trailing
 
@@ -160,7 +160,7 @@ struct EpisodeRow<Trailing: View>: View {
     private var progressLine: some View {
         // Guard each progress branch on `showProgress` *before* it reads
         // any ticking property — short-circuiting keeps Observation from
-        // subscribing the row to those writes outside the Downloads tab.
+        // subscribing the row to those writes outside the Status tab.
         if showProgress, episode.isBusy {
             if episode.downloadState.isActive {
                 deviceDownloadProgress

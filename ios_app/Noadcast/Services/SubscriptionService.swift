@@ -34,6 +34,23 @@ nonisolated struct OPMLImportSummary: Sendable, Equatable {
 final class SubscriptionService {
     static let shared = SubscriptionService()
 
+    private let releasePlayedAudio: @MainActor (Int) -> Void
+    private let cancelPendingRelease: @MainActor (Int) -> Void
+    private let cancelLocalTransfer: @MainActor (Int) -> Void
+    private let cancelServerAudioRequest: @MainActor (Int) -> Void
+
+    init(
+        releasePlayedAudio: @escaping @MainActor (Int) -> Void = { SyncService.shared.releaseAudio(episodeServerID: $0) },
+        cancelPendingRelease: @escaping @MainActor (Int) -> Void = { PendingReleaseStore.remove($0) },
+        cancelLocalTransfer: @escaping @MainActor (Int) -> Void = { DownloadManager.shared.cancelTransfer(serverID: $0, discardResumeData: true) },
+        cancelServerAudioRequest: @escaping @MainActor (Int) -> Void = { DownloadManager.shared.cancelServerAudioRequest(serverID: $0) }
+    ) {
+        self.releasePlayedAudio = releasePlayedAudio
+        self.cancelPendingRelease = cancelPendingRelease
+        self.cancelLocalTransfer = cancelLocalTransfer
+        self.cancelServerAudioRequest = cancelServerAudioRequest
+    }
+
     private var sync: SyncService { SyncService.shared }
     private var api: NoadcastAPIClient { SyncService.shared.api }
 
@@ -134,7 +151,7 @@ final class SubscriptionService {
     // MARK: - Episodes
 
     /// Single entry point for removing an episode's downloaded content from
-    /// the device. Called by both the Downloads tab and the Queue tab so the
+    /// the device. Called by both the Status tab and the Queue tab so the
     /// two stay in sync:
     ///
     /// - Cancels any transfer and removes the local audio file.
@@ -144,8 +161,8 @@ final class SubscriptionService {
     ///   from the queue), which also sends the retention release so the
     ///   server may delete its copy.
     ///
-    /// Markers are server-owned and stay: the server keeps serving the same
-    /// bytes, so they remain valid for a re-download.
+    /// Markers are server-owned and stay even if the server releases its
+    /// audio copy; a later download can fetch the same episode again.
     func deleteEpisodeContent(
         _ episode: Episode,
         in context: ModelContext,
@@ -153,7 +170,7 @@ final class SubscriptionService {
         save: Bool = true
     ) {
         PlayerService.shared.unloadIfCurrent(episodeID: episode.persistentModelID)
-        DownloadManager.shared.cancelTransfer(serverID: episode.serverID, discardResumeData: true)
+        cancelLocalTransfer(episode.serverID)
 
         if let url = episode.localFileURL {
             try? FileManager.default.removeItem(at: url)
@@ -183,6 +200,7 @@ final class SubscriptionService {
             episode.playbackPosition = 0
             episode.isPlayed = true
             episode.datePlayed = .now
+            cancelServerAudioRequest(episode.serverID)
         }
 
         let allItems = (try? context.fetch(FetchDescriptor<QueueItem>())) ?? []
@@ -194,13 +212,14 @@ final class SubscriptionService {
             try? context.save()
         }
         if markAsPlayed {
-            SyncService.shared.releaseAudio(episodeServerID: episode.serverID)
+            releasePlayedAudio(episode.serverID)
         }
     }
 
     /// User-initiated download to the device (bypasses the auto-download
     /// network policy).
     func download(_ episode: Episode, in context: ModelContext) {
+        reviveAfterUserRequest(episode, in: context)
         DownloadManager.shared.enqueue(episode, userInitiated: true)
     }
 
@@ -216,12 +235,13 @@ final class SubscriptionService {
             download(episode, in: context)
         }
         if episode.serverState == .failed {
-            requestServerProcessing(episode)
+            requestServerProcessing(episode, in: context)
         }
     }
 
     /// Ensures the server has the audio and, if analysis is on, markers.
-    func requestServerProcessing(_ episode: Episode) {
+    func requestServerProcessing(_ episode: Episode, in context: ModelContext) {
+        reviveAfterUserRequest(episode, in: context)
         let serverID = episode.serverID
         Task {
             do {
@@ -236,6 +256,7 @@ final class SubscriptionService {
     /// Re-runs ad detection on the server (`POST /reanalyze`). No local file
     /// is needed any more: the server keeps the audio.
     func reanalyzeEpisode(_ episode: Episode, in context: ModelContext) async throws {
+        reviveAfterUserRequest(episode, in: context)
         try await api.reanalyze(episodeID: episode.serverID)
         sync.scheduleFollowUpSyncs()
     }
@@ -256,6 +277,8 @@ final class SubscriptionService {
             return false
         }
 
+        reviveAfterUserRequest(episode, in: context)
+
         let playingID = PlayerService.shared.currentEpisodeID
         let playing = existing.first { $0.episode?.persistentModelID == playingID }
 
@@ -274,6 +297,16 @@ final class SubscriptionService {
         try? context.save()
         processQueuedEpisodes(context: context)
         return true
+    }
+
+    /// A later explicit request supersedes a queued played-release. The
+    /// episode becomes eligible for downloads and Status again.
+    func reviveAfterUserRequest(_ episode: Episode, in context: ModelContext) {
+        guard episode.isPlayed else { return }
+        episode.isPlayed = false
+        episode.datePlayed = nil
+        cancelPendingRelease(episode.serverID)
+        try? context.save()
     }
 
     /// Appends newly published episodes (reported by the sync engine for

@@ -912,6 +912,54 @@ def mark_audio_evicted(tx: WriteTx, episode_id: int, *, reason: str, now: str) -
     )
 
 
+def mark_played_released(tx: WriteTx, episode: Episode, *, now: str) -> bool:
+    """Stop this episode's pipeline and release its audio with one sync seq.
+
+    The pipeline rests at ``ready`` so restart recovery cannot heal a canceled
+    stage. A later explicit process or reanalysis may enqueue work again.
+    """
+    had_audio = episode.audio_state in ("present", "partial")
+    classify_state = "ready" if episode.classify_state == "ready" else "skipped"
+    changed = (
+        had_audio or episode.audio_path is not None or episode.pipeline_state != "ready"
+        or episode.classify_state != classify_state or episode.pipeline_error is not None
+        or any(value is not None for value in (
+            episode.progress_stage, episode.progress_current, episode.progress_total, episode.progress_updated_at
+        ))
+    )
+    if not changed:
+        tx.execute(
+            "UPDATE episodes SET released_at = coalesce(released_at, ?), release_reason = 'played' WHERE id = ?",
+            (now, episode.id),
+        )
+        return False
+    tx.execute(
+        """
+        UPDATE episodes SET
+          audio_state = CASE WHEN audio_state IN ('present', 'partial') THEN 'evicted' ELSE audio_state END,
+          audio_path = NULL,
+          audio_evicted_at = CASE WHEN audio_state IN ('present', 'partial') THEN ? ELSE audio_evicted_at END,
+          audio_evicted_reason = CASE WHEN audio_state IN ('present', 'partial') THEN 'played' ELSE audio_evicted_reason END,
+          origin_etag = NULL, origin_last_modified = NULL,
+          released_at = coalesce(released_at, ?), release_reason = 'played',
+          pipeline_state = 'ready', classify_state = ?, pipeline_error = NULL,
+          progress_stage = NULL, progress_current = NULL, progress_total = NULL, progress_updated_at = NULL,
+          updated_at = ?, updated_seq = ?
+        WHERE id = ?
+        """,
+        (now, now, classify_state, now, tx.next_seq(), episode.id),
+    )
+    return True
+
+
+def clear_played_release(tx: WriteTx, episode_id: int) -> None:
+    """An explicit request permits work again; this stop intent is server-internal."""
+    tx.execute(
+        "UPDATE episodes SET released_at = NULL, release_reason = NULL WHERE id = ? AND release_reason = 'played'",
+        (episode_id,),
+    )
+
+
 def set_origin_validators(tx: WriteTx, episode_id: int, *, etag: str | None, last_modified: str | None) -> None:
     """Validators of the bytes in an interrupted download's ``.part`` file:
     the next attempt passes them back to resume with ``If-Range``. Not

@@ -5,19 +5,27 @@ import SwiftData
 /// transcribe, analyse) or on the way to this device — every failure on
 /// either axis with a retry, and every episode whose audio is on this
 /// device.
-struct DownloadsView: View {
+struct StatusView: View {
     @Environment(\.modelContext) private var context
     @State private var showCancelAllConfirm = false
+    private let subscription: SubscriptionService
+    private let isUITestFixture: Bool
+
+    init(subscription: SubscriptionService = .shared, isUITestFixture: Bool = false) {
+        self.subscription = subscription
+        self.isUITestFixture = isUITestFixture
+    }
 
     // One SwiftData query covers the whole tab. `isBusy` is the denormalized
     // "server job active OR device download active" flag, so the predicate
     // stays a plain SQL `WHERE`.
     @Query(
         filter: #Predicate<Episode> {
-            $0.isBusy
-                || $0.serverStateRaw == "failed"
-                || $0.downloadStateRaw == "failed"
-                || $0.localFilename != nil
+            (!$0.isPlayed && (
+                $0.isBusy
+                    || $0.serverStateRaw == "failed"
+                    || $0.downloadStateRaw == "failed"
+            )) || $0.localFilename != nil
         },
         sort: \.publishedAt,
         order: .reverse
@@ -30,12 +38,12 @@ struct DownloadsView: View {
     // can stay identical as a download moves from queued to failed or ready.
     // Fine-grained progress is still read only by EpisodeRow.
     private var inProgressEpisodes: [Episode] {
-        visibleEpisodes.filter(\.isBusy)
+        visibleEpisodes.filter { !$0.isPlayed && $0.isBusy }
     }
 
     private var failedEpisodes: [Episode] {
         visibleEpisodes.filter { episode in
-            !episode.isBusy && (episode.downloadState == .failed || episode.serverState == .failed)
+            !episode.isPlayed && !episode.isBusy && (episode.downloadState == .failed || episode.serverState == .failed)
         }
     }
 
@@ -54,9 +62,9 @@ struct DownloadsView: View {
             Group {
                 if visibleEpisodes.isEmpty {
                     ContentUnavailableView {
-                        Label("Nothing downloaded", systemImage: "arrow.down.circle")
+                        Label("Nothing in progress", systemImage: "checkmark.circle")
                     } description: {
-                        Text("Queued episodes are downloaded automatically, following your download settings. Your server's work on new episodes also shows up here.")
+                        Text("Active jobs, failures, and audio on this iPhone appear here.")
                     }
                 } else {
                     List {
@@ -66,7 +74,7 @@ struct DownloadsView: View {
                                     EpisodeRow(episode: episode, style: .withPodcast, showProgress: true) {
                                         if episode.downloadState.isActive {
                                             Button {
-                                                SubscriptionService.shared.cancelDownload(episode)
+                                                subscription.cancelDownload(episode)
                                             } label: {
                                                 Image(systemName: "xmark.circle.fill")
                                                     .foregroundStyle(.secondary)
@@ -79,6 +87,9 @@ struct DownloadsView: View {
                                         }
                                     }
                                     .listRowInsets(.init(top: 8, leading: 16, bottom: 8, trailing: 16))
+                                    .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+                                        markPlayedButton(for: episode)
+                                    }
                                 }
                             }
                         }
@@ -88,7 +99,7 @@ struct DownloadsView: View {
                                 ForEach(failedEpisodes) { episode in
                                     EpisodeRow(episode: episode, style: .withPodcast, showProgress: true) {
                                         Button {
-                                            SubscriptionService.shared.retry(episode, in: context)
+                                            subscription.retry(episode, in: context)
                                         } label: {
                                             Image(systemName: "arrow.clockwise.circle")
                                                 .font(.title2)
@@ -97,6 +108,9 @@ struct DownloadsView: View {
                                         .accessibilityLabel("Retry")
                                     }
                                     .listRowInsets(.init(top: 8, leading: 16, bottom: 8, trailing: 16))
+                                    .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+                                        markPlayedButton(for: episode)
+                                    }
                                 }
                             }
                         }
@@ -121,30 +135,38 @@ struct DownloadsView: View {
                                             .foregroundStyle(.secondary)
                                     }
                                     .listRowInsets(.init(top: 8, leading: 16, bottom: 8, trailing: 16))
+                                    .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+                                        if !episode.isPlayed {
+                                            markPlayedButton(for: episode)
+                                        }
+                                        Button("Remove download", systemImage: "trash", role: .destructive) {
+                                            subscription.deleteEpisodeContent(episode, in: context)
+                                        }
+                                        .accessibilityLabel("Remove download for \(episode.title)")
+                                    }
                                 }
-                                .onDelete(perform: deleteDownloaded)
                             }
                         }
                     }
                     .listStyle(.plain)
                 }
             }
-            .navigationTitle("Downloads")
+            .navigationTitle("Status")
             .navigationBarTitleDisplayMode(.inline)
             .refreshable {
-                await sync.syncNow(.pullToRefresh)
+                if !isUITestFixture { await sync.syncNow(.pullToRefresh) }
             }
             .onAppear {
                 // 2 s job-progress polling while this tab is on screen.
-                sync.setDownloadsTabVisible(true)
+                if !isUITestFixture { sync.setStatusTabVisible(true) }
             }
             .onDisappear {
-                sync.setDownloadsTabVisible(false)
+                if !isUITestFixture { sync.setStatusTabVisible(false) }
             }
             .toolbar {
                 if inProgressEpisodes.contains(where: { $0.downloadState.isActive }) {
                     ToolbarItem(placement: .topBarTrailing) {
-                        Button("Cancel All", role: .destructive) {
+                        Button("Cancel downloads", role: .destructive) {
                             showCancelAllConfirm = true
                         }
                     }
@@ -155,7 +177,7 @@ struct DownloadsView: View {
                 isPresented: $showCancelAllConfirm,
                 titleVisibility: .visible
             ) {
-                Button("Cancel All", role: .destructive) { cancelAllDownloads() }
+                Button("Cancel downloads", role: .destructive) { cancelAllDownloads() }
                 Button("Keep Going", role: .cancel) { }
             }
         }
@@ -167,18 +189,15 @@ struct DownloadsView: View {
 
     private func cancelAllDownloads() {
         for episode in activeDeviceDownloads {
-            SubscriptionService.shared.cancelDownload(episode)
+            subscription.cancelDownload(episode)
         }
     }
 
-    private func deleteDownloaded(at offsets: IndexSet) {
-        let toDelete = offsets.map { downloadedEpisodes[$0] }
-        for episode in toDelete {
-            // Unified delete: removes the file *and* any QueueItem pointing
-            // at this episode, and unloads the player if it's currently
-            // playing this one.
-            SubscriptionService.shared.deleteEpisodeContent(episode, in: context, save: false)
+    private func markPlayedButton(for episode: Episode) -> some View {
+        Button("Mark played", systemImage: "checkmark.circle") {
+            subscription.deleteEpisodeContent(episode, in: context, markAsPlayed: true)
         }
-        try? context.save()
+        .tint(.green)
+        .accessibilityLabel("Mark \(episode.title) played and stop its downloads and analysis")
     }
 }

@@ -99,8 +99,14 @@ async def list_jobs(
 @router.post("/jobs/{job_id}/retry")
 async def retry_job(job_id: int, ctx: Ctx) -> Response:
     """The job that will do the work may be another live job covering the same subject."""
-    with ctx.db.write() as tx:
-        job = commands.retry_job(tx, job_id, now=now_iso())
+    original = jobs.get_job(ctx.db, job_id)
+    if original is not None and original.kind in states.EPISODE_STAGES:
+        async with ctx.episode_release_lock(original.subject_id):
+            with ctx.db.write() as tx:
+                job = commands.retry_job(tx, job_id, now=now_iso())
+    else:
+        with ctx.db.write() as tx:
+            job = commands.retry_job(tx, job_id, now=now_iso())
     ctx.wake()
     return json_response(JobIdOut(job_id=job.id), status_code=202)
 

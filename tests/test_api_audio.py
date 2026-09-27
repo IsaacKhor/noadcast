@@ -11,8 +11,13 @@ from noadcast.api.routers import audio as audio_routes
 from noadcast.db import repo
 from noadcast.media import ranges
 from noadcast.pipeline import jobs
+from noadcast.media.downloader import part_path
+from noadcast.timeutil import now_iso, utc_now
 
-from tests.api_support import AUDIO_BYTES, ApiTestCase, add_episodes, add_podcast, store_audio
+from tests.api_support import (
+    AUDIO_BYTES, ApiTestCase, add_classification, add_episodes, add_podcast,
+    set_markers, store_audio, store_transcript,
+)
 
 
 class AudioTestCase(ApiTestCase):
@@ -184,6 +189,13 @@ class EvictedRedirectTests(AudioTestCase):
         live = [job for job in jobs.list_jobs(self.ctx.db, kind="download") if job.is_live]
         self.assertEqual([job.subject_id for job in live], [self.absent_id])
 
+    async def test_played_release_disables_implicit_origin_redirect(self) -> None:
+        self.assertEqual((await self.client.delete(f"/api/v1/episodes/{self.present_id}/audio")).status_code, 204)
+        response = await self.client.get(f"/api/v1/episodes/{self.present_id}/audio")
+        self.assertError(response, 409, "audioEvicted")
+        self.assertIsNone(response.json()["jobId"])
+        self.assertIsNone(jobs.live_stage_job(self.ctx.db, self.present_id))
+
 
 class ReleaseAudioTests(AudioTestCase):
     async def test_release_deletes_the_file_but_keeps_skip_data(self) -> None:
@@ -210,7 +222,97 @@ class ReleaseAudioTests(AudioTestCase):
     async def test_release_waits_for_a_live_pipeline_job(self) -> None:
         reanalyzed = await self.client.post(f"/api/v1/episodes/{self.present_id}/reanalyze")
         self.assertEqual(reanalyzed.status_code, 202)
+        self.assertEqual((await self.client.delete(f"/api/v1/episodes/{self.present_id}/audio", params={"reason": "manual"})).status_code, 204)
+        episode = self.episode(self.present_id)
+        self.assertEqual((episode.audio_state, episode.release_reason), ("present", "manual"))
+        self.assertTrue(self.path.exists())
+
+    async def test_played_cancels_pending_download_and_does_not_restart_on_recovery(self) -> None:
+        job_id = (await self.client.post(f"/api/v1/episodes/{self.absent_id}/process")).json()["jobId"]
+        before = self.episode(self.absent_id).updated_seq
+        response = await self.client.delete(f"/api/v1/episodes/{self.absent_id}/audio?reason=played")
+        self.assertEqual(response.status_code, 204)
+        self.assertEqual(jobs.get_job(self.ctx.db, job_id).state, "canceled")
+        episode = self.episode(self.absent_id)
+        self.assertEqual((episode.audio_state, episode.pipeline_state, episode.classify_state), ("absent", "ready", "skipped"))
+        self.assertEqual((episode.pipeline_error, episode.progress_stage), (None, None))
+        self.assertGreater(episode.updated_seq, before)
+        self.assertIn(job_id, self.scheduler.aborted)
+        self.assertEqual((await self.client.get("/api/v1/jobs/active")).json()["items"], [])
+        report = jobs.recover_leases(self.ctx.db, self.ctx.store)
+        self.assertEqual((report.requeued, report.healed), ([], []))
+        seq = self.episode(self.absent_id).updated_seq
+        self.assertEqual((await self.client.delete(f"/api/v1/episodes/{self.absent_id}/audio")).status_code, 204)
+        self.assertEqual(self.episode(self.absent_id).updated_seq, seq)
+        late = await self.client.get(f"/api/v1/episodes/{self.absent_id}/audio")
+        self.assertError(late, 409, "audioNotReady")
+        self.assertIsNone(late.json()["jobId"])
+        self.assertNotIn("retry-after", late.headers)
+        self.assertEqual((await self.client.head(f"/api/v1/episodes/{self.absent_id}/audio")).status_code, 409)
+        self.assertIsNone(jobs.live_stage_job(self.ctx.db, self.absent_id))
+        restarted = (await self.client.post(f"/api/v1/episodes/{self.absent_id}/process")).json()["jobId"]
+        self.assertNotEqual(restarted, job_id)
+        self.assertEqual(jobs.get_job(self.ctx.db, restarted).state, "pending")
+        self.assertIsNone(self.episode(self.absent_id).release_reason)
+
+    async def test_late_audio_reads_after_played_wait_for_explicit_audio_url(self) -> None:
+        self.assertEqual((await self.client.delete(f"/api/v1/episodes/{self.present_id}/audio")).status_code, 204)
+        for method in ("GET", "HEAD"):
+            response = await self.client.request(method, f"/api/v1/episodes/{self.present_id}/audio")
+            self.assertEqual(response.status_code, 409)
+        self.assertIsNone(jobs.live_stage_job(self.ctx.db, self.present_id))
+        self.assertEqual(self.episode(self.present_id).release_reason, "played")
+        explicit = await self.client.post(f"/api/v1/episodes/{self.present_id}/audio-url")
+        self.assertAudioMissing(explicit, "audioEvicted", self.present_id)
+        self.assertIsNone(self.episode(self.present_id).release_reason)
+
+    async def test_played_cancels_transcription_and_keeps_existing_history(self) -> None:
+        store_transcript(self.ctx, self.present_id, ["Previously transcribed episode."])
+        set_markers(self.ctx, self.present_id, [(0.0, 12.0, "intro", "Existing marker")])
+        old = add_classification(self.ctx, self.present_id)
+        job_id = (await self.client.post(f"/api/v1/episodes/{self.present_id}/reanalyze", json={"retranscribe": True})).json()["jobId"]
+        self.assertEqual(jobs.get_job(self.ctx.db, job_id).kind, "transcribe")
         self.assertEqual((await self.client.delete(f"/api/v1/episodes/{self.present_id}/audio")).status_code, 204)
         episode = self.episode(self.present_id)
-        self.assertEqual((episode.audio_state, episode.release_reason), ("present", "played"))
-        self.assertTrue(self.path.exists())
+        self.assertEqual((episode.audio_state, episode.pipeline_state), ("evicted", "ready"))
+        self.assertFalse(self.path.exists())
+        self.assertEqual(jobs.get_job(self.ctx.db, job_id).state, "canceled")
+        self.assertIsNotNone(repo.get_transcript(self.ctx.db, self.present_id))
+        self.assertEqual([m.summary for m in repo.markers_for_episode(self.ctx.db, self.present_id)], ["Existing marker"])
+        self.assertEqual([c.id for c in repo.list_classifications(self.ctx.db, self.present_id)], [old.id])
+
+    async def test_played_cancels_classification_and_removes_partial_download(self) -> None:
+        store_transcript(self.ctx, self.present_id, ["Already transcribed."])
+        classify_id = (await self.client.post(f"/api/v1/episodes/{self.present_id}/reanalyze")).json()["jobId"]
+        self.assertEqual(jobs.get_job(self.ctx.db, classify_id).kind, "classify")
+        self.assertEqual((await self.client.delete(f"/api/v1/episodes/{self.present_id}/audio")).status_code, 204)
+        self.assertEqual(jobs.get_job(self.ctx.db, classify_id).state, "canceled")
+        self.assertIsNotNone(repo.get_transcript(self.ctx.db, self.present_id))
+
+        download_id = (await self.client.post(f"/api/v1/episodes/{self.absent_id}/process")).json()["jobId"]
+        with self.ctx.db.write() as tx:
+            claimed = jobs.claim(tx, "download", owner="test", lease_seconds=60, now=utc_now())
+            self.assertEqual(claimed.id, download_id)
+            relpath = self.ctx.store.audio_relpath(self.podcast.id, self.absent_id, "mp3")
+            repo.begin_download(tx, self.absent_id, audio_path=relpath, pipeline_state="downloading", total_bytes=100, now=now_iso())
+        partial = part_path(self.ctx.store.abspath(relpath))
+        partial.parent.mkdir(parents=True, exist_ok=True)
+        partial.write_bytes(b"partial audio")
+        self.assertEqual((await self.client.delete(f"/api/v1/episodes/{self.absent_id}/audio")).status_code, 204)
+        self.assertFalse(partial.exists())
+        self.assertEqual(jobs.get_job(self.ctx.db, download_id).state, "canceled")
+        episode = self.episode(self.absent_id)
+        self.assertEqual((episode.audio_state, episode.audio_path, episode.pipeline_state), ("evicted", None, "ready"))
+        self.assertEqual(jobs.recover_leases(self.ctx.db, self.ctx.store).healed, [])
+
+    async def test_played_clears_failed_pipeline_and_allows_explicit_restart(self) -> None:
+        with self.ctx.db.write() as tx:
+            repo.set_episode_states(
+                tx, self.absent_id, pipeline_state="failed", classify_state="failed",
+                error="classifier failed", now=now_iso(),
+            )
+        self.assertEqual((await self.client.delete(f"/api/v1/episodes/{self.absent_id}/audio")).status_code, 204)
+        episode = self.episode(self.absent_id)
+        self.assertEqual((episode.pipeline_state, episode.classify_state, episode.pipeline_error), ("ready", "skipped", None))
+        restarted = (await self.client.post(f"/api/v1/episodes/{self.absent_id}/process")).json()["jobId"]
+        self.assertEqual((jobs.get_job(self.ctx.db, restarted).kind, jobs.get_job(self.ctx.db, restarted).state), ("download", "pending"))

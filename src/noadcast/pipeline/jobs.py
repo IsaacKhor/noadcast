@@ -296,6 +296,7 @@ def claim(
     lease_seconds: float,
     now: dt.datetime,
     exclude_hosts: Collection[str] = (),
+    exclude_ids: Collection[int] = (),
 ) -> Job | None:
     """Atomically take the most urgent available job of ``kind``. Download jobs
     carry their enclosure host in ``params.host`` so a saturated host can be
@@ -307,6 +308,7 @@ def claim(
         WHERE id = (
           SELECT id FROM jobs
           WHERE state = 'pending' AND kind = ? AND available_at <= ?
+            AND id NOT IN (SELECT value FROM json_each(?))
             AND coalesce(json_extract(params_json, '$.host'), '') NOT IN (SELECT value FROM json_each(?))
           ORDER BY priority, available_at, id LIMIT 1)
         RETURNING *
@@ -317,6 +319,7 @@ def claim(
             iso(now),
             kind,
             iso(now),
+            json.dumps(sorted(exclude_ids)),
             json.dumps(sorted(exclude_hosts)),
         ),
     )

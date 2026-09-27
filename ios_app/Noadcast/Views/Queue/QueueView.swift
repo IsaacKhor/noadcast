@@ -244,7 +244,7 @@ struct QueueView: View {
 
         if let episode {
             // Unified delete: wipes the audio file too so it doesn't linger
-            // in the Downloads tab after being removed from the queue. Queue
+            // in the Status tab after being removed from the queue. Queue
             // removal also records the episode as played so refreshes do not
             // treat it as an unplayed episode that should be queued again.
             SubscriptionService.shared.deleteEpisodeContent(

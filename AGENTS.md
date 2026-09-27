@@ -129,7 +129,7 @@ automatically, with no `project.pbxproj` edit.
    replaces each episode's markers wholesale; the cursor advances in the
    same save as the page.
 3. **Progress**: `GET /api/v1/jobs/active` is polled with `If-None-Match`
-   (fast on the Downloads tab, slow when idle, never in the background) and
+   (fast on the Status tab, slow when idle, never in the background) and
    held in memory, never written to SwiftData.
 4. **Play**: `PlaybackSourceResolver` prefers a local file, else streams the
    server's audio through a signed URL. `PlayerService` snapshots markers
@@ -139,8 +139,9 @@ automatically, with no `project.pbxproj` edit.
    session with the bearer header, keeps resume data, and reconciles with
    `session.allTasks` at launch.
 6. **Played**: the app sends `DELETE /api/v1/episodes/{id}/audio?reason=played`
-   so the server can free its copy; failed sends are retried from a
-   persisted list.
+   so the server cancels unfinished media jobs and frees its copy; failed
+   sends are retried from a persisted list. Late audio reads cannot restart
+   a played release; a new explicit processing or playback request can.
 
 ### Ownership rules
 

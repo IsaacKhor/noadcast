@@ -20,8 +20,8 @@ struct ContentView: View {
             Tab("Podcasts", systemImage: "rectangle.stack.fill") {
                 PodcastsView()
             }
-            Tab("Downloads", systemImage: "arrow.down.circle") {
-                DownloadsView()
+            Tab("Status", systemImage: "chart.bar.doc.horizontal") {
+                StatusView()
             }
             Tab("Settings", systemImage: "gear") {
                 SettingsView()

@@ -6,12 +6,12 @@ import os
 /// What the nonisolated session delegate hands to the main actor. Every
 /// case carries plain values; model objects never cross threads.
 nonisolated enum DownloadSessionEvent: Sendable {
-    case progress(serverID: Int, written: Int64, expected: Int64?)
+    case progress(serverID: Int, taskID: Int, written: Int64, expected: Int64?)
     /// The file is already moved into `AudioStorage.episodesDirectory`.
-    case finished(serverID: Int, filename: String, size: Int64, sha256: String?)
-    case httpFailure(serverID: Int, status: Int, errorCode: String?, message: String?)
-    case failed(serverID: Int, errorCode: Int, message: String, resumeData: Data?, cancelled: Bool)
-    case completedCleanly(serverID: Int)
+    case finished(serverID: Int, taskID: Int, filename: String, size: Int64, sha256: String?)
+    case httpFailure(serverID: Int, taskID: Int, status: Int, errorCode: String?, message: String?)
+    case failed(serverID: Int, taskID: Int, errorCode: Int, message: String, resumeData: Data?, cancelled: Bool)
+    case completedCleanly(serverID: Int, taskID: Int)
     case backgroundEventsFinished
 }
 
@@ -61,6 +61,11 @@ final class DownloadManager {
     @ObservationIgnored private var freshRetryUsed: Set<Int> = []
     @ObservationIgnored private var cancelledOnPurpose: Set<Int> = []
     @ObservationIgnored private var serverAudioRequested: Set<Int> = []
+    @ObservationIgnored private var serverAudioTasks: [Int: Task<Void, Never>] = [:]
+    @ObservationIgnored private var serverAudioRequestVersions: [Int: Int] = [:]
+    /// Downloading rows from an older app version had no persisted task ID.
+    /// Keep them eligible for one completion until reconciled or canceled.
+    @ObservationIgnored private var legacyTransferIDs: Set<Int> = []
     @ObservationIgnored private var pendingBackgroundCompletion: (() -> Void)?
 
     private init() {
@@ -82,6 +87,13 @@ final class DownloadManager {
     func configure(container: ModelContainer) {
         self.container = container
         self.progressWriter = DownloadProgressWriter(modelContainer: container)
+        let downloadingRaw = DownloadState.downloading.rawValue
+        let legacy = (try? container.mainContext.fetch(FetchDescriptor<Episode>(
+            predicate: #Predicate<Episode> {
+                $0.downloadStateRaw == downloadingRaw && $0.downloadTaskIdentifier == nil
+            }
+        ))) ?? []
+        legacyTransferIDs = Set(legacy.map(\.serverID))
         observeNetwork()
     }
 
@@ -125,10 +137,16 @@ final class DownloadManager {
         ))) ?? []
         var wanted = Set<Int>()
         for episode in inFlight {
+            if episode.isPlayed && !episode.downloadIsUserInitiated {
+                episode.setDownloadState(.idle)
+                continue
+            }
             wanted.insert(episode.serverID)
             if let task = liveByServerID[episode.serverID] {
                 tasks[episode.serverID] = task
+                legacyTransferIDs.remove(episode.serverID)
                 episode.setDownloadState(.downloading)
+                episode.downloadTaskIdentifier = task.taskIdentifier
             } else if episode.downloadState == .downloading {
                 episode.setDownloadState(.queued)
             }
@@ -212,8 +230,9 @@ final class DownloadManager {
 
     /// Stops a live transfer without touching the row.
     func cancelTransfer(serverID: Int, discardResumeData: Bool) {
-        cancelledOnPurpose.insert(serverID)
+        legacyTransferIDs.remove(serverID)
         if let task = tasks.removeValue(forKey: serverID) {
+            cancelledOnPurpose.insert(serverID)
             if discardResumeData {
                 task.cancel()
             } else {
@@ -282,6 +301,10 @@ final class DownloadManager {
         let autoAllowed = NetworkMonitor.shared.canAutoDownload(under: policy)
         var autoSlots = max(0, Self.maxConcurrentAutoDownloads - tasks.count)
         for episode in queued {
+            if episode.isPlayed && !episode.downloadIsUserInitiated {
+                episode.setDownloadState(.idle)
+                continue
+            }
             guard tasks[episode.serverID] == nil else { continue }
             // Waiting for the server to fetch the audio.
             guard episode.audioState.isPresent else { continue }
@@ -305,6 +328,7 @@ final class DownloadManager {
 
     private func start(_ episode: Episode, request: URLRequest) {
         let serverID = episode.serverID
+        legacyTransferIDs.remove(serverID)
         let task: URLSessionDownloadTask
         if let resumeData = AudioStorage.loadResumeData(serverID: serverID) {
             task = session.downloadTask(withResumeData: resumeData)
@@ -322,6 +346,7 @@ final class DownloadManager {
         tasks[serverID] = task
         liveTransferIDs.insert(serverID)
         episode.setDownloadState(.downloading)
+        episode.downloadTaskIdentifier = task.taskIdentifier
         if episode.downloadError != nil {
             episode.downloadError = nil
         }
@@ -330,38 +355,68 @@ final class DownloadManager {
     private func requestServerAudio(serverID: Int, force: Bool) {
         guard force || !serverAudioRequested.contains(serverID) else { return }
         serverAudioRequested.insert(serverID)
-        Task {
+        serverAudioTasks[serverID]?.cancel()
+        let version = (serverAudioRequestVersions[serverID] ?? 0) + 1
+        serverAudioRequestVersions[serverID] = version
+        serverAudioTasks[serverID] = Task {
+            defer {
+                if serverAudioRequestVersions[serverID] == version {
+                    serverAudioTasks.removeValue(forKey: serverID)
+                }
+            }
+            guard !Task.isCancelled,
+                  serverAudioRequestVersions[serverID] == version,
+                  let context = container?.mainContext,
+                  let episode = fetchEpisode(serverID: serverID, in: context),
+                  !episode.isPlayed
+            else { return }
             do {
                 try await NoadcastAPIClient.shared.process(episodeID: serverID)
-                SyncService.shared.scheduleFollowUpSyncs()
+                if !Task.isCancelled {
+                    SyncService.shared.scheduleFollowUpSyncs()
+                }
             } catch {
-                Log.download.notice("process request for \(serverID) failed: \(error.localizedDescription, privacy: .public)")
+                if !Task.isCancelled {
+                    Log.download.notice("process request for \(serverID) failed: \(error.localizedDescription, privacy: .public)")
+                }
             }
         }
+    }
+
+    /// Prevents a queued `/process` request from starting after the episode
+    /// was dismissed; an already submitted server job is canceled by the
+    /// retention release request.
+    func cancelServerAudioRequest(serverID: Int) {
+        serverAudioRequestVersions[serverID] = (serverAudioRequestVersions[serverID] ?? 0) + 1
+        serverAudioTasks.removeValue(forKey: serverID)?.cancel()
+        serverAudioRequested.remove(serverID)
     }
 
     // MARK: - Session events
 
     func handle(_ event: DownloadSessionEvent) {
         switch event {
-        case .progress(let serverID, let written, let expected):
+        case .progress(let serverID, let taskID, let written, let expected):
+            guard tasks[serverID]?.taskIdentifier == taskID else { return }
             guard let writer = progressWriter else { return }
             Task {
-                await writer.record(serverID: serverID, written: written, expected: expected)
+                await writer.record(serverID: serverID, taskID: taskID, written: written, expected: expected)
             }
-        case .finished(let serverID, let filename, let size, let sha256):
-            handleFinished(serverID: serverID, filename: filename, size: size, sha256: sha256)
-        case .httpFailure(let serverID, let status, let errorCode, let message):
-            handleHTTPFailure(serverID: serverID, status: status, errorCode: errorCode, message: message)
-        case .failed(let serverID, let errorCode, let message, let resumeData, let cancelled):
+        case .finished(let serverID, let taskID, let filename, let size, let sha256):
+            handleFinished(serverID: serverID, taskID: taskID, filename: filename, size: size, sha256: sha256)
+        case .httpFailure(let serverID, let taskID, let status, let errorCode, let message):
+            handleHTTPFailure(serverID: serverID, taskID: taskID, status: status, errorCode: errorCode, message: message)
+        case .failed(let serverID, let taskID, let errorCode, let message, let resumeData, let cancelled):
             handleTransportFailure(
                 serverID: serverID,
+                taskID: taskID,
                 errorCode: errorCode,
                 message: message,
                 resumeData: resumeData,
                 cancelled: cancelled
             )
-        case .completedCleanly(let serverID):
+        case .completedCleanly(let serverID, let taskID):
+            guard tasks[serverID]?.taskIdentifier == taskID else { return }
             tasks.removeValue(forKey: serverID)
             liveTransferIDs.remove(serverID)
             startedFromResumeData.remove(serverID)
@@ -374,18 +429,44 @@ final class DownloadManager {
         }
     }
 
-    private func handleFinished(serverID: Int, filename: String, size: Int64, sha256: String?) {
+    private func matchesActiveTransfer(serverID: Int, taskID: Int, episode: Episode) -> Bool {
+        if let task = tasks[serverID] {
+            return task.taskIdentifier == taskID
+        }
+        if let storedID = episode.downloadTaskIdentifier {
+            return storedID == taskID
+        }
+        guard Self.acceptsLegacyCompletion(
+            wasDownloadingAtStartup: legacyTransferIDs.contains(serverID),
+            isPlayed: episode.isPlayed,
+            state: episode.downloadState
+        ) else { return false }
+        legacyTransferIDs.remove(serverID)
+        return true
+    }
+
+    static func acceptsLegacyCompletion(
+        wasDownloadingAtStartup: Bool,
+        isPlayed: Bool,
+        state: DownloadState
+    ) -> Bool {
+        wasDownloadingAtStartup && !isPlayed && (state == .downloading || state == .queued)
+    }
+
+    private func handleFinished(serverID: Int, taskID: Int, filename: String, size: Int64, sha256: String?) {
+        guard let context = container?.mainContext,
+              let episode = fetchEpisode(serverID: serverID, in: context),
+              matchesActiveTransfer(serverID: serverID, taskID: taskID, episode: episode)
+        else {
+            AudioStorage.deleteFile(named: filename)
+            return
+        }
         tasks.removeValue(forKey: serverID)
         liveTransferIDs.remove(serverID)
         startedFromResumeData.remove(serverID)
         freshRetryUsed.remove(serverID)
         AudioStorage.deleteResumeData(serverID: serverID)
-        guard let context = container?.mainContext, let episode = fetchEpisode(serverID: serverID, in: context) else {
-            // The episode went away while downloading.
-            AudioStorage.deleteFile(named: filename)
-            return
-        }
-        if episode.downloadState == .idle {
+        if episode.isPlayed || episode.downloadState == .idle {
             // Cancelled by the user after the bytes were already in.
             AudioStorage.deleteFile(named: filename)
             return
@@ -415,12 +496,16 @@ final class DownloadManager {
         startEligibleDownloads()
     }
 
-    private func handleHTTPFailure(serverID: Int, status: Int, errorCode: String?, message: String?) {
+    private func handleHTTPFailure(serverID: Int, taskID: Int, status: Int, errorCode: String?, message: String?) {
+        guard let context = container?.mainContext,
+              let episode = fetchEpisode(serverID: serverID, in: context),
+              matchesActiveTransfer(serverID: serverID, taskID: taskID, episode: episode)
+        else { return }
         let wasResumed = startedFromResumeData.contains(serverID)
         tasks.removeValue(forKey: serverID)
         liveTransferIDs.remove(serverID)
         startedFromResumeData.remove(serverID)
-        guard let context = container?.mainContext, let episode = fetchEpisode(serverID: serverID, in: context) else {
+        if episode.isPlayed || episode.downloadState == .idle {
             AudioStorage.deleteResumeData(serverID: serverID)
             return
         }
@@ -448,28 +533,41 @@ final class DownloadManager {
         }
         try? context.save()
         Log.download.notice("Download of \(serverID) got HTTP \(status) (\(errorCode ?? "-", privacy: .public))")
+        startEligibleDownloads()
     }
 
     private func handleTransportFailure(
         serverID: Int,
+        taskID: Int,
         errorCode: Int,
         message: String,
         resumeData: Data?,
         cancelled: Bool
     ) {
+        let currentTaskID = tasks[serverID]?.taskIdentifier
+        let context = container?.mainContext
+        let episode = context.flatMap { fetchEpisode(serverID: serverID, in: $0) }
+        if cancelled, cancelledOnPurpose.remove(serverID) != nil, currentTaskID != taskID {
+            // A canceled old task may finish after a replacement has started.
+            // Only keep its resume blob if no replacement is active.
+            if currentTaskID == nil, let episode, !episode.isPlayed, episode.downloadState != .idle {
+                if let resumeData { AudioStorage.saveResumeData(resumeData, serverID: serverID) }
+            } else if currentTaskID == nil {
+                AudioStorage.deleteResumeData(serverID: serverID)
+            }
+            return
+        }
+        guard let episode, matchesActiveTransfer(serverID: serverID, taskID: taskID, episode: episode) else { return }
         let wasResumed = startedFromResumeData.contains(serverID)
         tasks.removeValue(forKey: serverID)
         liveTransferIDs.remove(serverID)
         startedFromResumeData.remove(serverID)
+        if episode.isPlayed || episode.downloadState == .idle {
+            AudioStorage.deleteResumeData(serverID: serverID)
+            return
+        }
         if let resumeData {
             AudioStorage.saveResumeData(resumeData, serverID: serverID)
-        }
-        if cancelled, cancelledOnPurpose.remove(serverID) != nil {
-            // Our own cancel; the row was already updated.
-            return
-        }
-        guard let context = container?.mainContext, let episode = fetchEpisode(serverID: serverID, in: context) else {
-            return
         }
         let isNetworkError = APIError.retryableTransportCodes.contains(errorCode)
         if wasResumed, resumeData == nil, !isNetworkError, !cancelled {
@@ -487,7 +585,7 @@ final class DownloadManager {
         } else {
             markFailed(episode, message: message)
         }
-        try? context.save()
+        if let context { try? context.save() }
         Log.download.notice("Download of \(serverID) failed (\(errorCode)): \(message, privacy: .public)")
     }
 
@@ -565,13 +663,14 @@ final class DownloadManager {
 /// fetched, not as the main context has since set it.
 @ModelActor
 actor DownloadProgressWriter {
-    func record(serverID: Int, written: Int64, expected: Int64?) {
+    func record(serverID: Int, taskID: Int, written: Int64, expected: Int64?) {
         let context = ModelContext(modelContainer)
         context.autosaveEnabled = false
         let descriptor = FetchDescriptor<Episode>(predicate: #Predicate<Episode> { $0.serverID == serverID })
         guard let episode = try? context.fetch(descriptor).first else { return }
         // A late progress event must not regress a finished row.
-        guard episode.downloadStateRaw == DownloadState.downloading.rawValue else { return }
+        guard episode.downloadStateRaw == DownloadState.downloading.rawValue,
+              episode.downloadTaskIdentifier == taskID else { return }
         var fraction = 0.0
         if let expected, expected > 0 {
             fraction = min(1, max(0, Double(written) / Double(expected)))
@@ -628,7 +727,7 @@ nonisolated final class DownloadSessionDelegate: NSObject, URLSessionDownloadDel
         guard shouldReportProgress(taskID: downloadTask.taskIdentifier, written: totalBytesWritten, total: total) else {
             return
         }
-        onEvent(.progress(serverID: serverID, written: totalBytesWritten, expected: total))
+        onEvent(.progress(serverID: serverID, taskID: downloadTask.taskIdentifier, written: totalBytesWritten, expected: total))
     }
 
     nonisolated func urlSession(
@@ -647,7 +746,7 @@ nonisolated final class DownloadSessionDelegate: NSObject, URLSessionDownloadDel
                 code = envelope.error?.code
                 message = envelope.error?.message
             }
-            onEvent(.httpFailure(serverID: serverID, status: status, errorCode: code, message: message))
+            onEvent(.httpFailure(serverID: serverID, taskID: downloadTask.taskIdentifier, status: status, errorCode: code, message: message))
             return
         }
         let mimeType = response?.mimeType ?? response?.value(forHTTPHeaderField: "Content-Type")
@@ -661,6 +760,7 @@ nonisolated final class DownloadSessionDelegate: NSObject, URLSessionDownloadDel
         } catch {
             onEvent(.failed(
                 serverID: serverID,
+                taskID: downloadTask.taskIdentifier,
                 errorCode: -1,
                 message: "Couldn't move the downloaded file: \(error.localizedDescription)",
                 resumeData: nil,
@@ -670,7 +770,7 @@ nonisolated final class DownloadSessionDelegate: NSObject, URLSessionDownloadDel
         }
         let size = AudioStorage.fileSize(named: filename) ?? 0
         let sha256 = response?.value(forHTTPHeaderField: "ETag").flatMap(Self.sha256(fromETag:))
-        onEvent(.finished(serverID: serverID, filename: filename, size: size, sha256: sha256))
+        onEvent(.finished(serverID: serverID, taskID: downloadTask.taskIdentifier, filename: filename, size: size, sha256: sha256))
     }
 
     nonisolated func urlSession(
@@ -686,13 +786,14 @@ nonisolated final class DownloadSessionDelegate: NSObject, URLSessionDownloadDel
             let cancelled = ns.domain == NSURLErrorDomain && ns.code == NSURLErrorCancelled
             onEvent(.failed(
                 serverID: serverID,
+                taskID: task.taskIdentifier,
                 errorCode: ns.code,
                 message: error.localizedDescription,
                 resumeData: resumeData,
                 cancelled: cancelled
             ))
         } else {
-            onEvent(.completedCleanly(serverID: serverID))
+            onEvent(.completedCleanly(serverID: serverID, taskID: task.taskIdentifier))
         }
     }
 

@@ -11,6 +11,7 @@ before the event loop exists (server.py) and only attached here.
 from __future__ import annotations
 
 import contextlib
+import asyncio
 import datetime as dt
 import os
 import socket
@@ -51,6 +52,7 @@ class AppContext:
     owner: str = field(default_factory=lambda: f"{socket.gethostname()}:{os.getpid()}:{uuid.uuid4().hex[:8]}")
     started_at: dt.datetime = field(default_factory=utc_now)
     scheduler: SchedulerHandle | None = None
+    _episode_release_locks: dict[int, asyncio.Lock] = field(default_factory=dict)
 
     def wake(self) -> None:
         if self.scheduler is not None:
@@ -59,6 +61,15 @@ class AppContext:
     def abort(self, job_ids: Iterable[int]) -> None:
         if self.scheduler is not None:
             self.scheduler.abort(job_ids)
+
+    def episode_release_lock(self, episode_id: int) -> asyncio.Lock:
+        """Serialize a played release's file cleanup with explicit episode requests."""
+        return self._episode_release_locks.setdefault(episode_id, asyncio.Lock())
+
+    async def wait_aborted(self, job_ids: Iterable[int]) -> None:
+        waiter = getattr(self.scheduler, "wait_aborted", None)
+        if waiter is not None:
+            await waiter(job_ids)
 
     def server_settings(self) -> repo.ServerSettings:
         return repo.load_server_settings(self.db, self.settings)

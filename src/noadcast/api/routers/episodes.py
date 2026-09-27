@@ -54,10 +54,11 @@ async def get_episode(episode_id: int, ctx: Ctx) -> Response:
 @router.post("/episodes/{episode_id}/process")
 async def process_episode(episode_id: int, ctx: Ctx) -> Response:
     """Idempotent; ``jobId`` is null when nothing is left to do."""
-    with ctx.db.write() as tx:
-        job_id = commands.process_episode(
-            tx, episode_id, server=repo.load_server_settings(tx, ctx.settings), now=now_iso()
-        )
+    async with ctx.episode_release_lock(episode_id):
+        with ctx.db.write() as tx:
+            job_id = commands.process_episode(
+                tx, episode_id, server=repo.load_server_settings(tx, ctx.settings), now=now_iso()
+            )
     ctx.wake()
     return json_response(JobIdOut(job_id=job_id), status_code=202)
 
@@ -72,17 +73,18 @@ async def reanalyze_episode(episode_id: int, ctx: Ctx, body: ReanalyzeIn | None 
     # episode marked failed.
     if request.provider is not None and not ctx.classifiers.available().get(request.provider, False):
         raise invalid_request(f"classifier {request.provider!r} is not configured on this server")
-    with ctx.db.write() as tx:
-        job_id = commands.reanalyze_episode(
-            tx,
-            episode_id,
-            server=repo.load_server_settings(tx, ctx.settings),
-            now=now_iso(),
-            provider=request.provider,
-            model=request.model,
-            thinking=request.thinking,
-            retranscribe=request.retranscribe,
-        )
+    async with ctx.episode_release_lock(episode_id):
+        with ctx.db.write() as tx:
+            job_id = commands.reanalyze_episode(
+                tx,
+                episode_id,
+                server=repo.load_server_settings(tx, ctx.settings),
+                now=now_iso(),
+                provider=request.provider,
+                model=request.model,
+                thinking=request.thinking,
+                retranscribe=request.retranscribe,
+            )
     ctx.wake()
     return json_response(JobIdOut(job_id=job_id), status_code=202)
 

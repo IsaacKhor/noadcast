@@ -140,6 +140,7 @@ def process_episode(
     episode is transcribed and classified. Idempotent: returns the live job
     if one is already working on the episode, None if nothing is left to do."""
     episode, podcast = _load(tx, episode_id)
+    repo.clear_played_release(tx, episode_id)
     if episode.audio_state == "present":
         live = jobs.live_stage_job(tx, episode.id)
         if live is not None:
@@ -173,6 +174,7 @@ def reanalyze_episode(
     if model is not None and model not in MODEL_IDS:
         raise ValueError("unsupported classifier model")
     episode, podcast = _load(tx, episode_id)
+    repo.clear_played_release(tx, episode_id)
     params: dict[str, Any] = {"force": True, "reclassify": True}
     if provider:
         params["provider"] = provider
@@ -255,6 +257,8 @@ def retry_job(tx: WriteTx, job_id: int, *, now: str) -> jobs.Job:
     job = jobs.get_job(tx, job_id)
     if job is None:
         raise NotFound(f"job {job_id}")
+    if job.kind in states.EPISODE_STAGES:
+        repo.clear_played_release(tx, job.subject_id)
     if job.state == "pending":
         jobs.make_available_now(tx, job.id, now=now)
         return job
