@@ -31,6 +31,8 @@ ios_app/             Xcode project
 
 ## Server conventions
 
+- Deploy code through Git commits, pushes, and a fast-forward pull on `laurel`.
+  Do not copy or archive working-tree files onto the remote checkout.
 - Use `.venv/bin/python` (uv-managed, no pip; install with
   `uv pip install --python .venv/bin/python -e .`). Keep caches in the
   project: `TMPDIR`, `HF_HOME`, `XDG_CACHE_HOME`, `UV_CACHE_DIR` under `.cache/`.

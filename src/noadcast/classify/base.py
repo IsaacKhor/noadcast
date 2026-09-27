@@ -1,5 +1,4 @@
-"""Classifier contract. Every provider implementation (Gemini, Claude, the
-Gemini audio control arm, and the replaying fake) satisfies ``Classifier``."""
+"""Contract for OpenRouter classification and injected test doubles."""
 
 from __future__ import annotations
 
@@ -20,21 +19,18 @@ class ClassifyRequest:
     episode_title: str | None = None
     podcast_title: str | None = None
     language: str = "en"
-    # Only the audio control-arm classifier reads these.
+    # Audio context retained for stored/evaluation request compatibility.
     audio_path: str | None = None
     audio_content_type: str | None = None
 
 
 @dataclass(frozen=True)
 class TokenUsage:
-    # The whole prompt for every provider, including cache reads and cache
-    # writes (Anthropic reports those separately; they are summed in here so
-    # totals compare with Gemini's promptTokenCount). The cached_* fields
+    # The whole prompt, including cache reads and writes. The cache fields
     # below are subsets of this number, priced at their own rates.
     input_tokens: int = 0
-    # Gemini reports thinking tokens separately. Anthropic bills thinking
-    # inside output_tokens and reports no separate count, so this is 0 for
-    # Claude — render it as provider-dependent, never as a universal metric.
+    # Reasoning is separated from visible output, so their sum equals
+    # OpenRouter's completion_tokens without double counting.
     thought_tokens: int = 0
     output_tokens: int = 0
     cached_input_tokens: int = 0

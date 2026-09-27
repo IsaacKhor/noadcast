@@ -45,6 +45,13 @@ sudo loginctl enable-linger "$USER"   # keep user services running without a log
 
 ## Operate
 
+Deploy source changes through Git: commit and push from the development
+checkout, then run `git pull --ff-only` in the checkout on laurel. Do not
+copy working-tree files with archives or file-transfer tools. Preserve any
+unrelated remote work before updating. For dependency changes, use
+`uv sync --locked --inexact` with `UV_CACHE_DIR` under the project `.cache`;
+the inexact mode preserves extra packages used by local benchmarks.
+
 ```bash
 systemctl --user status noadcast
 systemctl --user restart noadcast            # SIGTERM: drains jobs, then joins the workers (<= 90 s)

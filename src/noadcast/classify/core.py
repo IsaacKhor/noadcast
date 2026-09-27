@@ -35,7 +35,7 @@ log = logging.getLogger(__name__)
 class CallResult:
     segments: list[DetectedSegment]  # echoed seconds and cited lines, unresolved
     usage: TokenUsage
-    exchange: dict[str, Any]  # raw record; see fake.py for the envelope format
+    exchange: dict[str, Any]  # raw provider response and status
 
 
 CallFn = Callable[[str, bool], Awaitable[CallResult]]  # (user_text, repair) -> result
@@ -129,7 +129,7 @@ class _Job:
 
 
 class TranscriptClassifier:
-    """Base for classifiers that send transcript text (Gemini, Claude, fake)."""
+    """Shared transcript request flow for OpenRouter and test doubles."""
 
     provider: str = ""
 
@@ -150,7 +150,7 @@ class TranscriptClassifier:
         self.thinking = thinking
         self.prompt: PromptSpec = get_prompt(prompt_version, render_format)
         if self.prompt.render_format == "audio":
-            raise ClassifierError("the audio prompt needs the gemini-audio classifier", permanent=True)
+            raise ClassifierError("audio prompts are not supported by the transcript classifier", permanent=True)
         if self.prompt.render_format == "sentences" and include_silence:
             raise ClassifierError("the sentences format cannot include silence rows", permanent=True)
         self.include_silence = include_silence
