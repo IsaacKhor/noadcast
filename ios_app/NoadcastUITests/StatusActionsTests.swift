@@ -8,17 +8,17 @@ final class StatusActionsTests: XCTestCase {
         markPlayed("Status pending", in: app)
         markPlayed("Status failed", in: app)
         XCTAssertTrue(app.staticTexts["Status downloaded"].exists)
-        XCTAssertTrue(app.staticTexts["Status retained"].exists)
+        XCTAssertTrue(app.staticTexts["Status legacy audio"].exists)
     }
 
     @MainActor
-    func testMarkPlayedRemovesDownloadedFileButRetainedPlayedAudioRemainsVisible() {
+    func testMarkPlayedRemovesDownloadedFileWhileLegacyPlayedAudioRemainsVisible() {
         continueAfterFailure = false
         let app = launchFixture()
         let storage = app.cells.containing(.staticText, identifier: "On this iPhone").firstMatch
         XCTAssertTrue(storage.staticTexts["15 MB"].waitForExistence(timeout: 5))
         markPlayed("Status downloaded", in: app)
-        XCTAssertTrue(app.staticTexts["Status retained"].exists)
+        XCTAssertTrue(app.staticTexts["Status legacy audio"].exists)
         XCTAssertTrue(storage.staticTexts["5 MB"].waitForExistence(timeout: 3))
     }
 

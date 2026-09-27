@@ -142,6 +142,10 @@ automatically, with no `project.pbxproj` edit.
    so the server cancels unfinished media jobs and frees its copy; failed
    sends are retried from a persisted list. Late audio reads cannot restart
    a played release; a new explicit processing or playback request can.
+   Marking played (including finishing playback) always removes local audio
+   and queue entries. Each successful sync repairs retained played files and
+   reconstructs missed releases from the local played flag and server state.
+   An absent local file alone is not evidence that an episode was played.
 
 ### Ownership rules
 

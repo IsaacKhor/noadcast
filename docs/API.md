@@ -298,6 +298,11 @@ arrives via `/sync`.
   audio was never downloaded. The episode leaves the active job list and will
   not be automatically resumed after a server restart. Transcript, markers,
   and classification history remain. The played flag itself is device-local.
+  The iOS client also removes its local file and queue entries. After every
+  successful sync it reconciles played episodes that still have server audio
+  or unfinished work, recovering releases missed during an offline period or
+  older app version. Episodes without a local download are not treated as
+  played unless their device-local played flag is set.
   Repeating the request is harmless; an explicit later process, reanalysis,
   or audio request may start work again. `reason=manual` only releases audio;
   when a media job is live, that release is deferred until the job finishes.

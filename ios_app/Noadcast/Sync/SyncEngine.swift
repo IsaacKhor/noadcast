@@ -98,6 +98,11 @@ nonisolated struct MirrorCounts: Sendable, Equatable {
     var queueItems: Int
 }
 
+nonisolated struct PlayedReconciliationSnapshot: Sendable, Equatable {
+    var releaseEpisodeIDs: [Int]
+    var localCleanupEpisodeIDs: [Int]
+}
+
 /// Applies server data to the SwiftData mirror on its own context, off the
 /// main actor (the pattern the old `DatabaseMaintenanceActor` proved).
 ///
@@ -220,6 +225,35 @@ actor SyncEngine {
             episodes: (try? context.fetchCount(FetchDescriptor<Episode>())) ?? 0,
             markers: (try? context.fetchCount(FetchDescriptor<AdMarker>())) ?? 0,
             queueItems: (try? context.fetchCount(FetchDescriptor<QueueItem>())) ?? 0
+        )
+    }
+
+    /// Read device-local played intent from a fresh context after every sync,
+    /// including an empty delta. This never writes the server mirror.
+    func playedReconciliationSnapshot() throws -> PlayedReconciliationSnapshot {
+        beginOperation()
+        let played = try context.fetch(FetchDescriptor<Episode>(predicate: #Predicate<Episode> { $0.isPlayed }))
+        var releases: [Int] = []
+        var cleanup = Set<Int>()
+        for episode in played {
+            if episode.audioState == .present || episode.audioState == .partial || episode.serverState.isActive {
+                releases.append(episode.serverID)
+            }
+            if episode.localFilename != nil || episode.fileSizeBytes != nil || episode.localAudioSha256 != nil
+                || episode.downloadState != .idle || episode.downloadTaskIdentifier != nil
+                || episode.downloadIsUserInitiated || episode.downloadRequestedAt != nil || episode.downloadError != nil
+                || episode.downloadProgress != 0 || episode.downloadedBytes != nil || episode.downloadTotalBytes != nil {
+                cleanup.insert(episode.serverID)
+            }
+        }
+        for item in try context.fetch(FetchDescriptor<QueueItem>()) {
+            if let episode = item.episode, episode.isPlayed {
+                cleanup.insert(episode.serverID)
+            }
+        }
+        return PlayedReconciliationSnapshot(
+            releaseEpisodeIDs: releases.sorted(),
+            localCleanupEpisodeIDs: cleanup.sorted()
         )
     }
 

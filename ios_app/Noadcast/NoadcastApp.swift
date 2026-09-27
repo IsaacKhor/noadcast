@@ -8,8 +8,31 @@ struct NoadcastApp: App {
 
     let sharedModelContainer: ModelContainer
 
+    #if DEBUG
+    private static var isUnitTesting: Bool {
+        if ProcessInfo.processInfo.arguments.contains("--ui-test-queue")
+            || ProcessInfo.processInfo.arguments.contains("--ui-test-status") {
+            return false
+        }
+        return ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil
+            || ProcessInfo.processInfo.environment["XCTestBundlePath"] != nil
+            || NSClassFromString("XCTestCase") != nil
+    }
+    #endif
+
     init() {
         #if DEBUG
+        if Self.isUnitTesting {
+            // A hosted unit test must not launch sync against the server
+            // configured in the simulator's normal app container.
+            let schema = LocalStoreGeneration.schema
+            sharedModelContainer = try! ModelContainer(
+                for: schema,
+                configurations: [ModelConfiguration(schema: schema, isStoredInMemoryOnly: true)]
+            )
+            PlayerService.shared.setModelContainer(sharedModelContainer)
+            return
+        }
         if ProcessInfo.processInfo.arguments.contains("--ui-test-queue") {
             sharedModelContainer = QueueUITestFixture.makeContainer()
             PlayerService.shared.setModelContainer(sharedModelContainer)
@@ -54,8 +77,15 @@ struct NoadcastApp: App {
     var body: some Scene {
         WindowGroup {
             #if DEBUG
-            if ProcessInfo.processInfo.arguments.contains("--ui-test-queue") {
-                QueueView()
+            if Self.isUnitTesting {
+                Color.clear
+            } else if ProcessInfo.processInfo.arguments.contains("--ui-test-queue") {
+                QueueView(
+                    subscription: QueueUITestFixture.subscription,
+                    isUITestFixture: true,
+                    fixtureAudioFilename: QueueUITestFixture.audioFilename,
+                    fixtureReleasePending: { QueueUITestFixture.releasePending }
+                )
             } else if ProcessInfo.processInfo.arguments.contains("--ui-test-status") {
                 StatusView(subscription: StatusUITestFixture.subscription, isUITestFixture: true)
             } else {

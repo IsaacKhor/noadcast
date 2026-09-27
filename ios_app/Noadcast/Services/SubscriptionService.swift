@@ -171,6 +171,7 @@ final class SubscriptionService {
     ) {
         PlayerService.shared.unloadIfCurrent(episodeID: episode.persistentModelID)
         cancelLocalTransfer(episode.serverID)
+        cancelServerAudioRequest(episode.serverID)
 
         if let url = episode.localFileURL {
             try? FileManager.default.removeItem(at: url)
@@ -200,7 +201,6 @@ final class SubscriptionService {
             episode.playbackPosition = 0
             episode.isPlayed = true
             episode.datePlayed = .now
-            cancelServerAudioRequest(episode.serverID)
         }
 
         let allItems = (try? context.fetch(FetchDescriptor<QueueItem>())) ?? []
@@ -213,6 +213,25 @@ final class SubscriptionService {
         }
         if markAsPlayed {
             releasePlayedAudio(episode.serverID)
+        }
+    }
+
+    /// Repairs content retained by an older app or an interrupted cleanup.
+    /// The played flag is the durable removal intent; preserve its history
+    /// and let sync reconcile the server release separately.
+    func cleanUpPlayedContent(episodeServerIDs: [Int], in context: ModelContext) {
+        for batch in SyncEngine.batches(of: episodeServerIDs) {
+            let descriptor = FetchDescriptor<Episode>(
+                predicate: #Predicate<Episode> { batch.contains($0.serverID) && $0.isPlayed }
+            )
+            for episode in (try? context.fetch(descriptor)) ?? [] {
+                // The user may have revived it since the sync snapshot.
+                guard episode.isPlayed else { continue }
+                deleteEpisodeContent(episode, in: context, save: false)
+            }
+        }
+        if context.hasChanges {
+            try? context.save()
         }
     }
 

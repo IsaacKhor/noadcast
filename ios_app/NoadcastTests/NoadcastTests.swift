@@ -107,13 +107,20 @@ struct NoadcastTests {
         let suiteName = "NoadcastTests.PendingRelease.\(UUID().uuidString)"
         let defaults = try #require(UserDefaults(suiteName: suiteName))
         defer { defaults.removePersistentDomain(forName: suiteName) }
+        var cancelledTransfers: [Int] = []
+        var cancelledRequests: [Int] = []
         let service = SubscriptionService(
             releasePlayedAudio: { PendingReleaseStore.add($0, instanceId: "test-instance", defaults: defaults) },
-            cancelPendingRelease: { PendingReleaseStore.remove($0, defaults: defaults) }
+            cancelPendingRelease: { PendingReleaseStore.remove($0, defaults: defaults) },
+            cancelLocalTransfer: { cancelledTransfers.append($0) },
+            cancelServerAudioRequest: { cancelledRequests.append($0) }
         )
 
         let container = try makeTestContainer()
         let context = container.mainContext
+        // Older installations may still have this preference disabled.
+        // Marking played must now remove content regardless.
+        AppSettings.current(in: context).autoDeleteAfterPlayed = false
         let podcast = Podcast(
             serverID: 9_100_001,
             feedURL: try #require(URL(string: "https://example.com/feed.xml")),
@@ -129,6 +136,13 @@ struct NoadcastTests {
             podcast: podcast
         )
         episode.playbackPosition = 300
+        let filename = "played-test-\(UUID().uuidString).mp3"
+        let fileURL = AudioStorage.fileURL(for: filename)
+        try Data([1, 2, 3]).write(to: fileURL)
+        defer { try? FileManager.default.removeItem(at: fileURL) }
+        episode.localFilename = filename
+        episode.fileSizeBytes = 3
+        episode.localAudioSha256 = "fixture-hash"
         episode.applyServerState(ServerEpisodeState.transcribing.rawValue)
         episode.setDownloadState(.queued)
         episode.downloadIsUserInitiated = true
@@ -149,6 +163,12 @@ struct NoadcastTests {
         #expect(episode.isPlayed)
         #expect(episode.datePlayed != nil)
         #expect(episode.playbackPosition == 0)
+        #expect(!FileManager.default.fileExists(atPath: fileURL.path))
+        #expect(episode.localFilename == nil)
+        #expect(episode.fileSizeBytes == nil)
+        #expect(episode.localAudioSha256 == nil)
+        #expect(cancelledTransfers == [episode.serverID])
+        #expect(cancelledRequests == [episode.serverID])
         #expect(episode.downloadState == .idle)
         #expect(!episode.downloadIsUserInitiated)
         #expect(episode.downloadRequestedAt == nil)
@@ -172,6 +192,51 @@ struct NoadcastTests {
         #expect(!episode.isPlayed)
         #expect(PendingReleaseStore.load(defaults: defaults).ids.isEmpty)
         #expect(try context.fetchCount(FetchDescriptor<QueueItem>()) == 1)
+    }
+
+    @Test @MainActor func playedContentRepairPreservesHistoryAndIgnoresRevivedEpisodes() throws {
+        let container = try makeTestContainer()
+        let context = container.mainContext
+        var released: [Int] = []
+        var cancelled: [Int] = []
+        let service = SubscriptionService(
+            releasePlayedAudio: { released.append($0) },
+            cancelPendingRelease: { _ in },
+            cancelLocalTransfer: { cancelled.append($0) },
+            cancelServerAudioRequest: { _ in }
+        )
+        let played = Episode(serverID: 9_100_501, podcastServerID: 1, guid: "repair", title: "Repair")
+        played.isPlayed = true
+        played.datePlayed = SyncFixtures.now
+        played.playbackPosition = 100
+        played.setDownloadState(.downloading)
+        played.downloadTaskIdentifier = 44
+        let filename = "repair-test-\(UUID().uuidString).mp3"
+        let fileURL = AudioStorage.fileURL(for: filename)
+        try Data([1, 2, 3]).write(to: fileURL)
+        defer { try? FileManager.default.removeItem(at: fileURL) }
+        played.localFilename = filename
+        context.insert(played)
+        context.insert(QueueItem(position: 0, episode: played))
+        let revived = Episode(serverID: 9_100_502, podcastServerID: 1, guid: "revived", title: "Revived")
+        revived.setDownloadState(.queued)
+        context.insert(revived)
+        context.insert(QueueItem(position: 1, episode: revived))
+        try context.save()
+
+        service.cleanUpPlayedContent(episodeServerIDs: [played.serverID, revived.serverID], in: context)
+
+        #expect(played.isPlayed)
+        #expect(played.datePlayed == SyncFixtures.now)
+        #expect(played.playbackPosition == 100)
+        #expect(played.localFilename == nil)
+        #expect(played.downloadState == .idle)
+        #expect(played.downloadTaskIdentifier == nil)
+        #expect(!FileManager.default.fileExists(atPath: fileURL.path))
+        #expect(cancelled == [played.serverID])
+        #expect(released.isEmpty)
+        #expect(revived.downloadState == .queued)
+        #expect(try context.fetch(FetchDescriptor<QueueItem>()).map { $0.episode?.serverID } == [revived.serverID])
     }
 
     @Test @MainActor func playedEpisodeStaysDismissedAfterServerMirrorUpdate() async throws {
@@ -208,7 +273,7 @@ struct NoadcastTests {
         #expect(PendingReleaseStore.load(defaults: defaults).ids.contains(refreshed.serverID))
     }
 
-    @Test @MainActor func statusKeepsPlayedAudioButHidesPlayedWork() throws {
+    @Test @MainActor func statusShowsLegacyPlayedAudioUntilCleanupButHidesPlayedWork() throws {
         let container = try makeTestContainer()
         let context = container.mainContext
         let podcast = Podcast(
@@ -217,12 +282,14 @@ struct NoadcastTests {
             title: "Status fixture"
         )
         context.insert(podcast)
-        let retained = Episode(serverID: 9_100_202, podcastServerID: podcast.serverID, guid: "retained", title: "Retained", podcast: podcast)
-        retained.isPlayed = true
-        retained.localFilename = "retained-fixture.mp3"
-        retained.fileSizeBytes = 1_000
-        retained.applyServerState(ServerEpisodeState.classifying.rawValue)
-        context.insert(retained)
+        // Old stores can still contain played audio from before cleanup was
+        // unconditional. Keep it visible until reconciliation removes it.
+        let legacyAudio = Episode(serverID: 9_100_202, podcastServerID: podcast.serverID, guid: "legacy-audio", title: "Legacy audio", podcast: podcast)
+        legacyAudio.isPlayed = true
+        legacyAudio.localFilename = "legacy-audio-fixture.mp3"
+        legacyAudio.fileSizeBytes = 1_000
+        legacyAudio.applyServerState(ServerEpisodeState.classifying.rawValue)
+        context.insert(legacyAudio)
         let dismissed = Episode(serverID: 9_100_203, podcastServerID: podcast.serverID, guid: "dismissed", title: "Dismissed", podcast: podcast)
         dismissed.isPlayed = true
         dismissed.applyServerState(ServerEpisodeState.classifying.rawValue)
@@ -232,7 +299,7 @@ struct NoadcastTests {
         let visible = try context.fetch(FetchDescriptor<Episode>(predicate: #Predicate<Episode> {
             (!$0.isPlayed && ($0.isBusy || $0.serverStateRaw == "failed" || $0.downloadStateRaw == "failed")) || $0.localFilename != nil
         }))
-        #expect(visible.map(\.serverID) == [retained.serverID])
+        #expect(visible.map(\.serverID) == [legacyAudio.serverID])
     }
 
     @Test @MainActor func lateDownloadProgressCannotWriteIntoReplacementTransfer() async throws {

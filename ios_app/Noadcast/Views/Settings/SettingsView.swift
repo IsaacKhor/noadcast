@@ -187,7 +187,6 @@ struct SettingsView: View {
                 }
             }
             .pickerStyle(.menu)
-            Toggle("Auto-delete after fully played", isOn: $s.autoDeleteAfterPlayed)
         }
     }
 

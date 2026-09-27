@@ -4,6 +4,22 @@ import SwiftData
 struct QueueView: View {
     @Environment(\.modelContext) private var context
     @Query(sort: \QueueItem.position) private var items: [QueueItem]
+    private let subscription: SubscriptionService
+    private let isUITestFixture: Bool
+    private let fixtureAudioFilename: String?
+    private let fixtureReleasePending: (() -> Bool)?
+
+    init(
+        subscription: SubscriptionService = .shared,
+        isUITestFixture: Bool = false,
+        fixtureAudioFilename: String? = nil,
+        fixtureReleasePending: (() -> Bool)? = nil
+    ) {
+        self.subscription = subscription
+        self.isUITestFixture = isUITestFixture
+        self.fixtureAudioFilename = fixtureAudioFilename
+        self.fixtureReleasePending = fixtureReleasePending
+    }
 
     private var player = PlayerService.shared
 
@@ -81,7 +97,7 @@ struct QueueView: View {
                 }
             }
             .task {
-                SubscriptionService.shared.processQueuedEpisodes(context: context)
+                if !isUITestFixture { subscription.processQueuedEpisodes(context: context) }
             }
             .onAppear { refreshPending() }
             .onChange(of: items) { _, _ in refreshPending() }
@@ -105,6 +121,16 @@ struct QueueView: View {
                 .listRowInsets(.init(top: 10, leading: 16, bottom: 10, trailing: 16))
             }
 
+            if let fixtureAudioFilename {
+                Section {
+                    Text(AudioStorage.fileExists(named: fixtureAudioFilename)
+                         ? "Fixture audio: present" : "Fixture audio: removed")
+                    if let fixtureReleasePending {
+                        Text(fixtureReleasePending() ? "Fixture release: pending" : "Fixture release: none")
+                    }
+                }
+            }
+
             if let episode = currentEpisode {
                 Section {
                     EpisodeRow(episode: episode, style: .withPodcast) {
@@ -114,6 +140,13 @@ struct QueueView: View {
                             .font(.title3)
                     }
                     .listRowInsets(.init(top: 8, leading: 16, bottom: 8, trailing: 16))
+                    .swipeActions(edge: .trailing, allowsFullSwipe: true) {
+                        Button(role: .destructive) {
+                            subscription.deleteEpisodeContent(episode, in: context, markAsPlayed: true)
+                        } label: {
+                            Label("Mark played", systemImage: "checkmark.circle")
+                        }
+                    }
                 } header: {
                     Text("Now Playing")
                 }
@@ -137,8 +170,8 @@ struct QueueView: View {
                                 .tint(.indigo)
                             }
                             .swipeActions(edge: .trailing, allowsFullSwipe: true) {
-                                Button(role: .destructive) { remove(item) } label: {
-                                    Label("Remove", systemImage: "trash")
+                                Button(role: .destructive) { markPlayed(item) } label: {
+                                    Label("Mark played", systemImage: "checkmark.circle")
                                 }
                             }
                         }
@@ -202,6 +235,7 @@ struct QueueView: View {
     /// player resolves the source. When streaming isn't allowed on this
     /// network the button downloads instead (see `QueueRowTrailing`).
     private func play(_ item: QueueItem) {
+        guard !isUITestFixture else { return }
         guard let episode = item.episode else { return }
         let s = AppSettings.current(in: context)
         Task {
@@ -227,12 +261,11 @@ struct QueueView: View {
         try? context.save()
     }
 
-    private func remove(_ item: QueueItem) {
+    private func markPlayed(_ item: QueueItem) {
         let episode = item.episode
 
         // `pendingItems` is a cached view of the @Query results. Remove the
-        // row from that cache before touching SwiftData so a full swipe does
-        // not leave the swiped row hanging around while @Query catches up.
+        // row before touching SwiftData so its swipe action closes promptly.
         // Disabling the transaction animation makes the following row snap
         // into place immediately instead of briefly exposing an empty slot.
         var transaction = Transaction(animation: nil)
@@ -247,7 +280,7 @@ struct QueueView: View {
             // in the Status tab after being removed from the queue. Queue
             // removal also records the episode as played so refreshes do not
             // treat it as an unplayed episode that should be queued again.
-            SubscriptionService.shared.deleteEpisodeContent(
+            subscription.deleteEpisodeContent(
                 episode,
                 in: context,
                 markAsPlayed: true

@@ -44,11 +44,13 @@ enum StatusUITestFixture {
             downloaded.setDownloadState(.downloaded)
             context.insert(downloaded)
 
-            let retained = Episode(serverID: 9_000_004, podcastServerID: podcast.serverID, guid: "status-retained", title: "Status retained", podcast: podcast)
-            retained.isPlayed = true
-            retained.localFilename = "status-ui-retained.mp3"
-            retained.fileSizeBytes = 5_000_000
-            context.insert(retained)
+            // A played file retained by an older build remains visible in
+            // Status until its local cleanup is reconciled.
+            let legacyAudio = Episode(serverID: 9_000_004, podcastServerID: podcast.serverID, guid: "status-legacy-audio", title: "Status legacy audio", podcast: podcast)
+            legacyAudio.isPlayed = true
+            legacyAudio.localFilename = "status-ui-legacy-audio.mp3"
+            legacyAudio.fileSizeBytes = 5_000_000
+            context.insert(legacyAudio)
 
             try context.save()
             return container

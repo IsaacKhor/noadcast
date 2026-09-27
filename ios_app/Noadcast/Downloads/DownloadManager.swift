@@ -137,7 +137,7 @@ final class DownloadManager {
         ))) ?? []
         var wanted = Set<Int>()
         for episode in inFlight {
-            if episode.isPlayed && !episode.downloadIsUserInitiated {
+            if episode.isPlayed {
                 episode.setDownloadState(.idle)
                 continue
             }
@@ -301,7 +301,7 @@ final class DownloadManager {
         let autoAllowed = NetworkMonitor.shared.canAutoDownload(under: policy)
         var autoSlots = max(0, Self.maxConcurrentAutoDownloads - tasks.count)
         for episode in queued {
-            if episode.isPlayed && !episode.downloadIsUserInitiated {
+            if episode.isPlayed {
                 episode.setDownloadState(.idle)
                 continue
             }

@@ -102,6 +102,12 @@ streams episodes that aren't downloaded, and keeps playback position,
 played state, and queue order on the device. `docs/API.md` is the contract
 between the two halves; `AGENTS.md` describes the app's conventions.
 
+Swipe left on an episode in **Queue** or **Status** and choose **Mark played**
+to remove its downloaded audio from the phone and server and stop unfinished
+processing. A full left swipe in Queue performs the same action. Finishing
+playback also removes the audio. Sync retries missed server removals for
+episodes already marked played.
+
 ## Development
 
 ```bash

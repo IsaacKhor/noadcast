@@ -59,6 +59,10 @@ actor NoadcastAPIClient {
     private let decoder: JSONDecoder
     /// Last auth state reported, so the handler fires on transitions only.
     private var reportedAuthFailure: Bool?
+    /// Keep release and explicit revival requests in order across actor
+    /// suspension points. Different episodes can still proceed concurrently.
+    private var mutatingEpisodeIDs: Set<Int> = []
+    private var episodeMutationWaiters: [Int: [CheckedContinuation<Void, Never>]] = [:]
 
     init(
         session: URLSession,
@@ -194,6 +198,8 @@ actor NoadcastAPIClient {
     /// when nothing is left to do.
     @discardableResult
     func process(episodeID: Int) async throws -> Int? {
+        try await beginEpisodeMutation(episodeID)
+        defer { endEpisodeMutation(episodeID) }
         let request = try makeRequest("POST", "/api/v1/episodes/\(episodeID)/process")
         let (data, _) = try await send(request)
         return (try? decoder.decode(JobResponseDTO.self, from: data))?.jobId
@@ -201,6 +207,8 @@ actor NoadcastAPIClient {
 
     @discardableResult
     func reanalyze(episodeID: Int, retranscribe: Bool = false) async throws -> Int? {
+        try await beginEpisodeMutation(episodeID)
+        defer { endEpisodeMutation(episodeID) }
         var body: [String: Any] = [:]
         if retranscribe { body["retranscribe"] = true }
         let request = try makeRequest("POST", "/api/v1/episodes/\(episodeID)/reanalyze", jsonBody: body)
@@ -215,6 +223,8 @@ actor NoadcastAPIClient {
     /// `.audioNotReady` / `.audioEvicted` (409) when the server lacks the
     /// audio; a priority download has then already been enqueued.
     func audioURL(episodeID: Int) async throws -> SignedAudioURL {
+        try await beginEpisodeMutation(episodeID)
+        defer { endEpisodeMutation(episodeID) }
         let request = try makeRequest("POST", "/api/v1/episodes/\(episodeID)/audio-url", timeout: 15)
         let (data, _) = try await send(request)
         let dto = try decode(AudioURLDTO.self, data)
@@ -230,12 +240,36 @@ actor NoadcastAPIClient {
 
     /// `DELETE /api/v1/episodes/{id}/audio?reason=…` — the retention release.
     func releaseAudio(episodeID: Int, reason: AudioReleaseReason) async throws {
+        try await beginEpisodeMutation(episodeID)
+        defer { endEpisodeMutation(episodeID) }
         let request = try makeRequest(
             "DELETE",
             "/api/v1/episodes/\(episodeID)/audio",
             query: [URLQueryItem(name: "reason", value: reason.rawValue)]
         )
         _ = try await send(request)
+    }
+
+    private func beginEpisodeMutation(_ id: Int) async throws {
+        if !mutatingEpisodeIDs.insert(id).inserted {
+            await withCheckedContinuation { continuation in
+                episodeMutationWaiters[id, default: []].append(continuation)
+            }
+        }
+        if Task.isCancelled {
+            endEpisodeMutation(id)
+            throw APIError.cancelled
+        }
+    }
+
+    private func endEpisodeMutation(_ id: Int) {
+        if var waiters = episodeMutationWaiters[id], !waiters.isEmpty {
+            let next = waiters.removeFirst()
+            episodeMutationWaiters[id] = waiters.isEmpty ? nil : waiters
+            next.resume()
+        } else {
+            mutatingEpisodeIDs.remove(id)
+        }
     }
 
     /// Authenticated `GET …/audio` for the background download session.

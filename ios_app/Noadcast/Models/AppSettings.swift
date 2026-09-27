@@ -15,6 +15,7 @@ final class AppSettings {
     /// Changed through an optimistic `PATCH /api/v1/settings`. When off, the
     /// server skips analysis even if an individual podcast's setting is on.
     var adAnalysisEnabled: Bool = true
+    /// Retained for store compatibility. Played audio is always removed now.
     var autoDeleteAfterPlayed: Bool
     var podcastSortModeRaw: String = PodcastSortMode.latestEpisode.rawValue
 

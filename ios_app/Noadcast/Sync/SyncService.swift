@@ -47,6 +47,7 @@ nonisolated enum SyncFlags {
 nonisolated enum PendingReleaseStore {
     static let idsKey = "PendingAudioReleases.ids"
     static let instanceKey = "PendingAudioReleases.instance"
+    static let generationsKey = "PendingAudioReleases.generations"
 
     static func load(defaults: UserDefaults = .standard) -> (instanceId: String?, ids: [Int]) {
         let ids = (defaults.array(forKey: idsKey) as? [Int]) ?? []
@@ -55,27 +56,57 @@ nonisolated enum PendingReleaseStore {
 
     static func add(_ id: Int, instanceId: String?, defaults: UserDefaults = .standard) {
         var ids = (defaults.array(forKey: idsKey) as? [Int]) ?? []
-        if let stored = defaults.string(forKey: instanceKey), let instanceId, stored != instanceId {
+        var generations = (defaults.dictionary(forKey: generationsKey) as? [String: String]) ?? [:]
+        if defaults.string(forKey: instanceKey) != instanceId {
             ids = []
+            generations = [:]
         }
         if !ids.contains(id) {
             ids.append(id)
         }
+        generations[String(id)] = UUID().uuidString
         defaults.set(ids, forKey: idsKey)
+        defaults.set(generations, forKey: generationsKey)
         if let instanceId {
             defaults.set(instanceId, forKey: instanceKey)
+        } else {
+            defaults.removeObject(forKey: instanceKey)
         }
+    }
+
+    /// Sync reconstruction must not replace an explicit release that is
+    /// already pending (possibly while its DELETE is in flight).
+    static func ensure(_ id: Int, instanceId: String, defaults: UserDefaults = .standard) {
+        let stored = defaults.string(forKey: instanceKey)
+        let ids = (defaults.array(forKey: idsKey) as? [Int]) ?? []
+        let generations = (defaults.dictionary(forKey: generationsKey) as? [String: String]) ?? [:]
+        if stored != instanceId || !ids.contains(id) || generations[String(id)] == nil {
+            add(id, instanceId: instanceId, defaults: defaults)
+        }
+    }
+
+    static func generation(for id: Int, defaults: UserDefaults = .standard) -> String? {
+        (defaults.dictionary(forKey: generationsKey) as? [String: String])?[String(id)]
+    }
+
+    static func removeIfCurrent(_ id: Int, generation: String, defaults: UserDefaults = .standard) {
+        guard self.generation(for: id, defaults: defaults) == generation else { return }
+        remove(id, defaults: defaults)
     }
 
     static func remove(_ id: Int, defaults: UserDefaults = .standard) {
         var ids = (defaults.array(forKey: idsKey) as? [Int]) ?? []
         ids.removeAll { $0 == id }
         defaults.set(ids, forKey: idsKey)
+        var generations = (defaults.dictionary(forKey: generationsKey) as? [String: String]) ?? [:]
+        generations.removeValue(forKey: String(id))
+        defaults.set(generations, forKey: generationsKey)
     }
 
     static func clear(defaults: UserDefaults = .standard) {
         defaults.removeObject(forKey: idsKey)
         defaults.removeObject(forKey: instanceKey)
+        defaults.removeObject(forKey: generationsKey)
     }
 }
 
@@ -127,6 +158,7 @@ final class SyncService {
     /// Injectable so tests can sync against a stubbed `URLSession` without
     /// a server address in `UserDefaults`.
     let isConfigured: () -> Bool
+    let releaseDefaults: UserDefaults
 
     @ObservationIgnored private(set) var container: ModelContainer?
     @ObservationIgnored private(set) var engine: SyncEngine?
@@ -147,12 +179,14 @@ final class SyncService {
         api: NoadcastAPIClient,
         restoreService: DeviceStateRestoreService,
         performsSideEffects: Bool,
-        isConfigured: @escaping () -> Bool
+        isConfigured: @escaping () -> Bool,
+        releaseDefaults: UserDefaults = .standard
     ) {
         self.api = api
         self.restoreService = restoreService
         self.performsSideEffects = performsSideEffects
         self.isConfigured = isConfigured
+        self.releaseDefaults = releaseDefaults
     }
 
     func configure(container: ModelContainer) {
@@ -425,6 +459,7 @@ final class SyncService {
         if wantsFollowUp {
             scheduleFollowUpSyncs()
         }
+        try await reconcilePlayedEpisodes(engine: engine)
         if performsSideEffects {
             await afterSuccessfulSync(aggregate)
         }
@@ -441,9 +476,10 @@ final class SyncService {
             restoreService.enqueue(snapshot, subscribeMissingFeeds: false)
         }
         try await engine.wipeMirrors(newInstanceId: newInstanceId)
+        // Ids from the old database are meaningless now, even when a test or
+        // background run has app-wide side effects disabled.
+        PendingReleaseStore.clear(defaults: releaseDefaults)
         if performsSideEffects {
-            // Ids from the old database are meaningless now.
-            PendingReleaseStore.clear()
             AudioStorage.deleteAllResumeData()
         }
         activeJobs = [:]
@@ -505,11 +541,35 @@ final class SyncService {
         if let context = container?.mainContext, !report.autoQueueEpisodeIDs.isEmpty {
             SubscriptionService.shared.enqueueNewEpisodes(serverIDs: report.autoQueueEpisodeIDs, in: context)
         }
-        await flushPendingReleases()
         if let context = container?.mainContext {
             SubscriptionService.shared.processQueuedEpisodes(context: context)
         }
         DownloadManager.shared.startEligibleDownloads()
+    }
+
+    /// Recover a missed retention release from durable device-local played
+    /// state. A local file alone is never a release signal: most episodes were
+    /// never downloaded. The current mirror must still show server audio or work.
+    private func reconcilePlayedEpisodes(engine: SyncEngine) async throws {
+        let snapshot = try await engine.playedReconciliationSnapshot()
+        guard let context = container?.mainContext else { return }
+        if performsSideEffects, !snapshot.localCleanupEpisodeIDs.isEmpty {
+            SubscriptionService.shared.cleanUpPlayedContent(
+                episodeServerIDs: snapshot.localCleanupEpisodeIDs, in: context
+            )
+        }
+        guard let instanceId else { return }
+        // The actor snapshot can complete after a user revives an episode on
+        // the main context. Recheck played intent before queueing a release.
+        for batch in SyncEngine.batches(of: snapshot.releaseEpisodeIDs) {
+            let descriptor = FetchDescriptor<Episode>(
+                predicate: #Predicate<Episode> { batch.contains($0.serverID) }
+            )
+            for episode in try context.fetch(descriptor) where episode.isPlayed {
+                PendingReleaseStore.ensure(episode.serverID, instanceId: instanceId, defaults: releaseDefaults)
+            }
+        }
+        await flushPendingReleases()
     }
 
     private func cacheArtwork(forPodcastIDs ids: [Int]) async {
@@ -663,28 +723,43 @@ final class SyncService {
     /// finished (or dismissed as played) the episode. Fire-and-forget; kept
     /// in a small persisted list until it succeeds.
     func releaseAudio(episodeServerID: Int) {
-        PendingReleaseStore.add(episodeServerID, instanceId: instanceId)
+        PendingReleaseStore.add(episodeServerID, instanceId: instanceId, defaults: releaseDefaults)
         Task { await self.flushPendingReleases() }
     }
 
     func flushPendingReleases() async {
-        guard isConfigured(), !authFailed, !isFlushingReleases else { return }
+        guard isConfigured(), !authFailed, !isFlushingReleases, let instanceId else { return }
         isFlushingReleases = true
-        defer { isFlushingReleases = false }
-        var attempted = Set<Int>()
+        defer {
+            isFlushingReleases = false
+            if self.instanceId != instanceId {
+                Task { await self.flushPendingReleases() }
+            }
+        }
+        var attempted = Set<String>()
         while true {
-            let pending = PendingReleaseStore.load()
-            if let stored = pending.instanceId, let current = instanceId, stored != current {
-                PendingReleaseStore.clear()
+            guard self.instanceId == instanceId else { return }
+            let pending = PendingReleaseStore.load(defaults: releaseDefaults)
+            if pending.instanceId != instanceId {
+                PendingReleaseStore.clear(defaults: releaseDefaults)
                 return
             }
-            guard let id = pending.ids.first(where: { !attempted.contains($0) }) else { return }
-            attempted.insert(id)
+            var next: (id: Int, generation: String)?
+            for id in pending.ids {
+                PendingReleaseStore.ensure(id, instanceId: instanceId, defaults: releaseDefaults)
+                if let generation = PendingReleaseStore.generation(for: id, defaults: releaseDefaults),
+                   !attempted.contains(generation) {
+                    next = (id, generation)
+                    break
+                }
+            }
+            guard let next else { return }
+            attempted.insert(next.generation)
             do {
-                try await api.releaseAudio(episodeID: id, reason: .played)
-                PendingReleaseStore.remove(id)
+                try await api.releaseAudio(episodeID: next.id, reason: .played)
+                PendingReleaseStore.removeIfCurrent(next.id, generation: next.generation, defaults: releaseDefaults)
             } catch APIError.notFound {
-                PendingReleaseStore.remove(id)
+                PendingReleaseStore.removeIfCurrent(next.id, generation: next.generation, defaults: releaseDefaults)
             } catch {
                 // Offline or server down: keep the rest for the next sync.
                 return

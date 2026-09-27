@@ -208,7 +208,7 @@ final class PlayerService {
 
     /// Stops playback and clears all current-episode UI state if the given
     /// episode is the one currently loaded. Used when the user deletes the
-    /// playing episode from Queue or Downloads.
+    /// playing episode from Queue or Status.
     func unloadIfCurrent(episodeID: PersistentIdentifier) {
         guard currentEpisodeID == episodeID else { return }
         unload()
@@ -1097,37 +1097,11 @@ final class PlayerService {
         let context = container.mainContext
         guard let episode = context.model(for: id) as? Episode else { return }
         flushLifetimeStats(force: true)
-        episode.isPlayed = true
-        episode.datePlayed = .now
-        episode.playbackPosition = episode.duration ?? duration
-
         let settings = AppSettings.current(in: context)
-        if settings.autoDeleteAfterPlayed {
-            if episode.downloadState.isActive {
-                DownloadManager.shared.cancelTransfer(serverID: episode.serverID, discardResumeData: true)
-            }
-            if let localURL = episode.localFileURL {
-                try? FileManager.default.removeItem(at: localURL)
-            }
-            episode.localFilename = nil
-            episode.fileSizeBytes = nil
-            episode.localAudioSha256 = nil
-            episode.setDownloadState(.idle)
-        }
-
-        // Remove the just-finished episode from the queue (if present).
-        let allQueue = (try? context.fetch(FetchDescriptor<QueueItem>())) ?? []
-        for item in allQueue where item.episode == episode {
-            context.delete(item)
-        }
-        try? context.save()
-
-        // Retention release: the server may delete its copy now.
-        SyncService.shared.releaseAudio(episodeServerID: episode.serverID)
+        SubscriptionService.shared.deleteEpisodeContent(episode, in: context, markAsPlayed: true)
 
         // Auto-advance to the first item that can play right now, in queue
-        // order (never reordering). If nothing can play, the finished
-        // episode stays loaded (mini-bar visible, user can pick).
+        // order. If nothing can play, cleanup leaves the player unloaded.
         let remaining = (try? context.fetch(
             FetchDescriptor<QueueItem>(sortBy: [SortDescriptor(\QueueItem.position)])
         )) ?? []

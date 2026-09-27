@@ -223,16 +223,36 @@ enum StubJSON {
 
 // MARK: - URLProtocol stub
 
+actor StubDeliveryGate {
+    private var opened = false
+    private var waiters: [CheckedContinuation<Void, Never>] = []
+
+    func wait() async {
+        if opened { return }
+        await withCheckedContinuation { waiters.append($0) }
+    }
+
+    func open() {
+        opened = true
+        for waiter in waiters { waiter.resume() }
+        waiters.removeAll()
+    }
+}
+
 /// One canned HTTP response.
 struct StubResponse: Sendable {
     var status: Int
     var headers: [String: String]
     var body: Data
+    var deliveryGate: StubDeliveryGate? = nil
 
-    static func json(_ text: String, status: Int = 200, headers: [String: String] = [:]) -> StubResponse {
+    static func json(
+        _ text: String, status: Int = 200, headers: [String: String] = [:],
+        deliveryGate: StubDeliveryGate? = nil
+    ) -> StubResponse {
         var merged = ["Content-Type": "application/json"]
         merged.merge(headers) { _, new in new }
-        return StubResponse(status: status, headers: merged, body: Data(text.utf8))
+        return StubResponse(status: status, headers: merged, body: Data(text.utf8), deliveryGate: deliveryGate)
     }
 
     static var notFound: StubResponse {
@@ -301,6 +321,8 @@ final class StubServer: @unchecked Sendable {
 
 /// Answers every request from `StubServer.shared`, keyed by the request's host.
 final class StubURLProtocol: URLProtocol {
+    private var deliveryTask: Task<Void, Never>?
+
     override class func canInit(with request: URLRequest) -> Bool {
         true
     }
@@ -315,6 +337,14 @@ final class StubURLProtocol: URLProtocol {
             return
         }
         let stub = StubServer.shared.respond(to: request)
+        deliveryTask = Task { [weak self] in
+            if let gate = stub.deliveryGate { await gate.wait() }
+            guard let self, !Task.isCancelled else { return }
+            self.deliver(stub, at: url)
+        }
+    }
+
+    private func deliver(_ stub: StubResponse, at url: URL) {
         guard let response = HTTPURLResponse(
             url: url,
             statusCode: stub.status,
@@ -331,7 +361,10 @@ final class StubURLProtocol: URLProtocol {
         client?.urlProtocolDidFinishLoading(self)
     }
 
-    override func stopLoading() {}
+    override func stopLoading() {
+        deliveryTask?.cancel()
+        deliveryTask = nil
+    }
 
     static func makeSession() -> URLSession {
         let configuration = URLSessionConfiguration.ephemeral
@@ -393,6 +426,8 @@ final class SyncHarness {
     let restore: DeviceStateRestoreService
     let service: SyncService
     let jobsDirectory: URL
+    let releaseDefaults: UserDefaults
+    private let releaseSuiteName: String
 
     private let previousNeedsFullResync: Bool
     private let previousRestoreStatus: Any?
@@ -402,6 +437,10 @@ final class SyncHarness {
         let client = try makeStubClient(host: host)
         let jobsDirectory = FileManager.default.temporaryDirectory
             .appendingPathComponent("NoadcastTests-restore-\(UUID().uuidString)", isDirectory: true)
+        let releaseSuiteName = "NoadcastTests.SyncRelease.\(UUID().uuidString)"
+        guard let releaseDefaults = UserDefaults(suiteName: releaseSuiteName) else {
+            throw URLError(.cannotCreateFile)
+        }
         let restore = DeviceStateRestoreService(
             api: client,
             jobsDirectory: jobsDirectory,
@@ -413,7 +452,8 @@ final class SyncHarness {
             api: client,
             restoreService: restore,
             performsSideEffects: false,
-            isConfigured: { true }
+            isConfigured: { true },
+            releaseDefaults: releaseDefaults
         )
         service.configure(container: container)
 
@@ -422,6 +462,8 @@ final class SyncHarness {
         self.restore = restore
         self.service = service
         self.jobsDirectory = jobsDirectory
+        self.releaseDefaults = releaseDefaults
+        self.releaseSuiteName = releaseSuiteName
         previousNeedsFullResync = SyncFlags.needsFullResync
         previousRestoreStatus = UserDefaults.standard.object(forKey: DeviceStateRestoreService.statusDefaultsKey)
         // A leftover flag from the host app would turn a delta sync into a
@@ -437,5 +479,6 @@ final class SyncHarness {
             UserDefaults.standard.removeObject(forKey: DeviceStateRestoreService.statusDefaultsKey)
         }
         try? FileManager.default.removeItem(at: jobsDirectory)
+        releaseDefaults.removePersistentDomain(forName: releaseSuiteName)
     }
 }
