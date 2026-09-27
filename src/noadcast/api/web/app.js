@@ -21,7 +21,7 @@
     if (size >= 1000) { size /= 1000; unit = 3; }
     if (size >= 1000) { size /= 1000; unit = 4; }
     if (size >= 1000) { size /= 1000; unit = 5; }
-    return `${size.toFixed(unit === 0 ? 0 : size < 10 ? 1 : 0)} ${units[unit]}`;
+    return `${size.toFixed(unit === 0 ? 0 : size < 100 ? 1 : 0)} ${units[unit]}`;
   }
   function date(value) {
     if (!value) return "—";
@@ -159,7 +159,8 @@
       put("stat-podcasts", fmt(data.podcasts));
       put("stat-audio", bytes(data.audio?.storedBytes));
       const audioCounts = data.audio?.byState || {};
-      put("stat-audio-detail", `${fmt(audioCounts.present)} files available`);
+      const audioFiles = Number(audioCounts.present || 0);
+      put("stat-audio-detail", `${fmt(audioFiles)} ${audioFiles === 1 ? "file" : "files"} available`);
       put("stat-cost", dollars((data.spend30d || []).reduce((sum, row) => sum + Number(row.costUsd || 0), 0)));
       put("storage-used", bytes(data.disk?.usedBytes));
       put("storage-total", `used of ${bytes(data.disk?.totalBytes)} total volume`);
