@@ -192,7 +192,7 @@ struct NoadcastTests {
             ), options: SyncFixtures.options, save: true
         )
         let context = container.mainContext
-        let episode = try #require(storedEpisode(9_100_102, in: context))
+        let episode = try #require(try storedEpisode(9_100_102, in: context))
         service.deleteEpisodeContent(episode, in: context, markAsPlayed: true)
 
         _ = try await engine.apply(
@@ -201,7 +201,7 @@ struct NoadcastTests {
                 nextSince: 2
             ), options: SyncFixtures.options, save: true
         )
-        let refreshed = try #require(storedEpisode(9_100_102, in: ModelContext(container)))
+        let refreshed = try #require(try storedEpisode(9_100_102, in: ModelContext(container)))
         #expect(refreshed.isPlayed)
         #expect(refreshed.downloadState == .idle)
         #expect(refreshed.serverState == .classifying)

@@ -152,9 +152,14 @@ async def sweep(ctx: AppContext, *, now: dt.datetime | None = None) -> SweepRepo
             current = repo.get_episode(tx, episode.id)
             if current is None or current.audio_state != "present" or current.audio_path is None:
                 continue
+            if reason in RELEASE_REASONS and (current.release_reason or "played") != reason:
+                continue  # an explicit request may have cleared a deferred release
             if repo.episode_has_live_media_job(tx, episode.id):
                 continue
-            repo.mark_audio_evicted(tx, episode.id, reason=reason, now=stamp)
+            if reason == "played":
+                repo.mark_played_released(tx, current, now=stamp)
+            else:
+                repo.mark_audio_evicted(tx, episode.id, reason=reason, now=stamp)
             evicted.append(current.audio_path)
     report.freed_bytes = await _remove(ctx, evicted)
     log.info(

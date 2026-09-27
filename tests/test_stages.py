@@ -21,7 +21,7 @@ from noadcast.media.downloader import DownloadError, DownloadResult, part_path
 from noadcast.media.probe import AudioProbe, ProbeError
 from noadcast.media.store import DiskUsage
 from noadcast.pipeline import commands, eviction, jobs, stages, states
-from noadcast.pipeline.scheduler import RunningJob, Scheduler, SchedulerConfig
+from noadcast.pipeline.scheduler import RunningJob, Scheduler, SchedulerConfig, run_pipeline
 from noadcast.timeutil import iso, now_iso, utc_now
 from noadcast.transcribe.codec import decode_words
 
@@ -511,6 +511,50 @@ class SchedulerTests(StageTestCase):
         self.assertIsNone(jobs.live_stage_job(self.ctx.db, self.episode.id))
         self.assertFalse(self.ctx.store.abspath(self.ctx.store.audio_relpath(self.podcast.id, self.episode.id, "mp3")).exists())
 
+    async def test_played_release_stops_active_classification_and_keeps_history(self) -> None:
+        self.process()
+        await self.run_chain()
+        old_history = repo.list_classifications(self.ctx.db, self.episode.id)
+        old_markers = repo.markers_for_episode(self.ctx.db, self.episode.id)
+        self.assertEqual(len(old_history), 1)
+        classifier = self.ctx.classifiers.get("openrouter")
+        entered, canceled, gate = asyncio.Event(), asyncio.Event(), asyncio.Event()
+        classify_now = classifier.classify
+
+        async def blocked_classify(request):
+            entered.set()
+            try:
+                await gate.wait()
+            except asyncio.CancelledError:
+                canceled.set()
+                raise
+            return await classify_now(request)
+
+        classifier.classify = blocked_classify
+        scheduler = self.scheduler()
+        self.addAsyncCleanup(scheduler.shutdown)
+        with self.ctx.db.write() as tx:
+            job_id = commands.reanalyze_episode(
+                tx, self.episode.id, server=self.ctx.server_settings(), now=now_iso()
+            )
+        self.ctx.wake()
+        await asyncio.wait_for(entered.wait(), 5)
+        self.assertEqual(jobs.get_job(self.ctx.db, job_id).state, "running")
+        self.assertTrue(await eviction.release_audio(self.ctx, self.episode.id, reason="played"))
+        self.assertTrue(canceled.is_set())
+        self.assertEqual(jobs.get_job(self.ctx.db, job_id).state, "canceled")
+        self.assertEqual(repo.list_classifications(self.ctx.db, self.episode.id), old_history)
+        self.assertEqual(repo.markers_for_episode(self.ctx.db, self.episode.id), old_markers)
+        self.assertIsNone(jobs.live_stage_job(self.ctx.db, self.episode.id))
+        await scheduler.shutdown()
+        with self.ctx.db.write() as tx:
+            restarted = commands.reanalyze_episode(
+                tx, self.episode.id, server=self.ctx.server_settings(), now=now_iso()
+            )
+        self.assertNotEqual(restarted, job_id)
+        self.assertEqual(jobs.get_job(self.ctx.db, restarted).state, "pending")
+        self.assertIsNone(self.fresh().release_reason)
+
     async def test_canceled_stage_cannot_commit_or_report_late_progress(self) -> None:
         self.transcriber.gate = asyncio.Event()
         self.process()
@@ -598,6 +642,43 @@ class EvictionTests(StageTestCase):
         self.assertFalse(path.exists())
         with self.assertRaises(commands.NotFound):
             await eviction.release_audio(self.ctx, 9999, reason="played")
+
+    async def test_sweep_preserves_legacy_played_stop_intent(self) -> None:
+        episode = await self.ready_with_audio("legacy-sweep")
+        path = self.ctx.store.abspath(episode.audio_path)
+        with self.ctx.db.write() as tx:
+            repo.record_release(tx, episode.id, reason="played", now=now_iso())
+        report = await eviction.sweep(self.ctx)
+        self.assertIn(episode.id, report.released)
+        fresh = self.fresh(episode.id)
+        self.assertEqual((fresh.audio_state, fresh.pipeline_state, fresh.release_reason), ("evicted", "ready", "played"))
+        self.assertFalse(path.exists())
+
+    async def test_boot_drains_legacy_played_release_before_job_recovery(self) -> None:
+        self.process()
+        await self.run_chain()
+        old_history = repo.list_classifications(self.ctx.db, self.episode.id)
+        old_markers = repo.markers_for_episode(self.ctx.db, self.episode.id)
+        path = self.ctx.store.abspath(self.fresh().audio_path)
+        with self.ctx.db.write() as tx:
+            job_id = commands.reanalyze_episode(tx, self.episode.id, server=self.ctx.server_settings(), now=now_iso())
+            claimed = jobs.claim(tx, "classify", owner="old-server", lease_seconds=60, now=utc_now())
+            self.assertEqual(claimed.id, job_id)
+            repo.set_episode_states(tx, self.episode.id, pipeline_state="classifying", now=now_iso())
+            repo.record_release(tx, self.episode.id, reason="played", now=now_iso())
+        config = SchedulerConfig.from_settings(self.settings, poll_seconds=0.02, maintenance_seconds=3600)
+        async with run_pipeline(self.ctx, self.stages, config):
+            fresh = self.fresh()
+            self.assertEqual((fresh.audio_state, fresh.pipeline_state, fresh.release_reason), ("evicted", "ready", "played"))
+            self.assertEqual(jobs.get_job(self.ctx.db, job_id).state, "canceled")
+            self.assertFalse(path.exists())
+            self.assertEqual(repo.list_classifications(self.ctx.db, self.episode.id), old_history)
+            self.assertEqual(repo.markers_for_episode(self.ctx.db, self.episode.id), old_markers)
+            self.assertIsNone(jobs.live_stage_job(self.ctx.db, self.episode.id))
+        self.assertEqual(repo.legacy_played_releases(self.ctx.db), [])
+        restarted = self.process()
+        self.assertIsNotNone(restarted)
+        self.assertIsNone(self.fresh().release_reason)
 
     async def test_release_waits_for_a_live_job(self) -> None:
         episode = await self.ready_with_audio("r2")

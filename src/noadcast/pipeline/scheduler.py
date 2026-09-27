@@ -385,6 +385,12 @@ async def run_pipeline(
     """Recover after the previous run, start the scheduler, and drain it on
     exit. ``stages`` normally comes from ``pipeline.stages.build_stages(ctx)``."""
     with data_dir_lock(ctx.settings):
+        # Older servers deferred a played release while a media job ran.
+        # Resolve those rows before lease recovery can requeue or heal them.
+        from . import eviction
+
+        for episode in repo.legacy_played_releases(ctx.db):
+            await eviction.release_audio(ctx, episode.id, reason="played")
         jobs.recover_leases(ctx.db, ctx.store)
         scheduler = Scheduler(ctx, stages, config or SchedulerConfig.from_settings(ctx.settings))
         ctx.scheduler = scheduler

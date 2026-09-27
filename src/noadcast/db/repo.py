@@ -1009,6 +1009,21 @@ def released_episodes_awaiting_eviction(db: Reader) -> list[Episode]:
     return [_load(Episode, row) for row in rows]
 
 
+def legacy_played_releases(db: Reader) -> list[Episode]:
+    """Old deferred played releases needing cancellation before boot recovery."""
+    rows = db.read(
+        """
+        SELECT e.* FROM episodes e WHERE e.release_reason = 'played'
+          AND (e.audio_state IN ('present', 'partial') OR e.pipeline_state != 'ready'
+               OR EXISTS (SELECT 1 FROM jobs j WHERE j.subject_id = e.id
+                          AND j.kind IN ('download', 'transcribe', 'classify')
+                          AND j.state IN ('pending', 'running')))
+        ORDER BY e.id
+        """
+    )
+    return [_load(Episode, row) for row in rows]
+
+
 def eviction_candidates(db: Reader) -> list[Episode]:
     """Stored audio with no live pipeline job, least recently useful first
     (last stream, else download time)."""
