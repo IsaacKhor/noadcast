@@ -262,6 +262,8 @@ class Settings:
                 raise ValueError(f"{f.name} must not be negative")
         if self.pool_workers < 1 or self.pool_threads < 1:
             raise ValueError("pool workers and threads must be positive")
+        if not 1 <= self.feed_interval_minutes <= 1440:
+            raise ValueError("NOADCAST_FEED_INTERVAL_MINUTES must be 1..1440")
 
 
 def settings_for_tests(data_dir: Path, **overrides) -> Settings:

@@ -49,6 +49,7 @@ final class AppSettings {
     var serverAutoProcessEnabled: Bool = true
     var serverClassifier: String?
     var serverClassifierModel: String?
+    var serverFeedIntervalMinutes: Int?
     /// Unknown until a server reports its OpenRouter key availability.
     var serverOpenRouterAvailable: Bool?
 

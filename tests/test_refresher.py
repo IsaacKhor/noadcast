@@ -214,6 +214,21 @@ class RefresherTests(unittest.IsolatedAsyncioTestCase):
         recovered = self.podcast(podcast.id)
         self.assertEqual((job.state, recovered.consecutive_failures, recovered.last_fetch_error), ("done", 0, None))
 
+    async def test_saved_interval_applies_to_next_success_without_restart(self) -> None:
+        now = utc_now()
+        rng = mock.Mock()
+        rng.uniform.return_value = 1.0
+        self.assertEqual(refresher.next_interval_fetch(self.ctx, now, rng), iso(now + dt.timedelta(minutes=30)))
+        with self.ctx.db.write() as tx:
+            repo.update_server_settings(tx, self.settings, {"feed_interval_minutes": 7}, now=iso(now))
+        self.assertEqual(refresher.next_interval_fetch(self.ctx, now, rng), iso(now + dt.timedelta(minutes=7)))
+        podcast = (await self.subscribe()).podcast
+        _, job = await self.refresh(podcast.id)  # 304 from the saved ETag
+        self.assertEqual(job.state, "done")
+        updated = self.podcast(podcast.id)
+        delay_minutes = (parse_iso(updated.next_fetch_at) - parse_iso(updated.last_fetch_at)).total_seconds() / 60
+        self.assertTrue(7 * 0.85 - 0.01 <= delay_minutes <= 7 * 1.15 + 0.01)
+
     async def test_subscribe_outcomes(self) -> None:
         created = await self.subscribe()
         calls = len(self.server.calls)

@@ -270,6 +270,30 @@
       row.append(el("td", "num", dollars(item.costUsd))); holder.append(row);
     });
   }
+  function feedIntervalValue() {
+    const raw = $("feed-interval").value.trim();
+    if (!/^\d+$/.test(raw)) return null;
+    const value = Number(raw);
+    return Number.isSafeInteger(value) && value >= 1 && value <= 1440 ? value : null;
+  }
+  function updateSettingsControls() {
+    const disabled = state.settingsBusy || !state.settings;
+    $("global-analysis").disabled = disabled;
+    $("model-select").disabled = disabled;
+    $("save-model").disabled = disabled || $("model-select").value === state.settings?.classifierModel;
+    $("feed-interval").disabled = disabled;
+    const interval = feedIntervalValue();
+    $("save-feed-interval").disabled = disabled || interval === null || interval === state.settings?.feedIntervalMinutes;
+  }
+  function feedIntervalChanged() {
+    const interval = feedIntervalValue();
+    const status = $("feed-interval-status");
+    status.classList.toggle("error", interval === null);
+    put("feed-interval-status", interval === null
+      ? "Enter a whole number from 1 to 1,440 minutes."
+      : interval === state.settings?.feedIntervalMinutes ? "Current interval saved." : "Unsaved change.");
+    updateSettingsControls();
+  }
   async function loadAnalysis() {
     if (state.settingsBusy || state.busy.size) return;
     const serial = ++state.analysisRequest;
@@ -278,12 +302,13 @@
       if (serial !== state.analysisRequest) return;
       state.settings = settings;
       $("global-analysis").checked = !!settings.adAnalysisEnabled;
-      $("global-analysis").disabled = false;
       put("global-status", settings.adAnalysisEnabled ? "Enabled for future analysis." : "Paused for all podcasts.");
       $("model-select").value = settings.classifierModel;
-      $("model-select").disabled = false;
-      $("save-model").disabled = true;
       put("model-status", "Current model saved.");
+      $("feed-interval").value = String(settings.feedIntervalMinutes ?? 30);
+      $("feed-interval-status").classList.remove("error");
+      put("feed-interval-status", "Current interval saved.");
+      updateSettingsControls();
       clearError();
     } catch (error) { if (!$("app").hidden) showError(`Analysis settings: ${messageFor(error)}`); }
   }
@@ -329,8 +354,8 @@
     const checkbox = $("global-analysis"), enabled = checkbox.checked;
     state.analysisRequest++;
     state.settingsBusy = true;
-    $("model-select").disabled = true; $("save-model").disabled = true;
-    checkbox.disabled = true; put("global-status", "Saving…"); $("global-status").classList.remove("error");
+    updateSettingsControls();
+    put("global-status", "Saving…"); $("global-status").classList.remove("error");
     try {
       state.settings = await request("settings", { method: "PATCH", body: JSON.stringify({ adAnalysisEnabled: enabled }) });
       checkbox.checked = !!state.settings.adAnalysisEnabled;
@@ -338,14 +363,13 @@
     } catch (error) {
       checkbox.checked = !enabled;
       put("global-status", `Could not save: ${messageFor(error)}`); $("global-status").classList.add("error");
-    } finally { checkbox.disabled = false; $("model-select").disabled = false; $("save-model").disabled = $("model-select").value === state.settings?.classifierModel; state.settingsBusy = false; }
+    } finally { state.settingsBusy = false; updateSettingsControls(); }
   }
   async function saveModel() {
     const selected = $("model-select").value;
     state.analysisRequest++;
     state.settingsBusy = true;
-    $("global-analysis").disabled = true;
-    $("save-model").disabled = true; $("model-select").disabled = true;
+    updateSettingsControls();
     put("model-status", "Saving…"); $("model-status").classList.remove("error");
     try {
       state.settings = await request("settings", { method: "PATCH", body: JSON.stringify({ classifierModel: selected }) });
@@ -354,7 +378,24 @@
     } catch (error) {
       $("model-select").value = state.settings?.classifierModel || selected;
       put("model-status", `Could not save: ${messageFor(error)}`); $("model-status").classList.add("error");
-    } finally { $("global-analysis").disabled = false; $("model-select").disabled = false; $("save-model").disabled = $("model-select").value === state.settings?.classifierModel; state.settingsBusy = false; }
+    } finally { state.settingsBusy = false; updateSettingsControls(); }
+  }
+  async function saveFeedInterval() {
+    const interval = feedIntervalValue();
+    if (interval === null || state.settingsBusy || !state.settings) return;
+    state.analysisRequest++;
+    state.settingsBusy = true;
+    updateSettingsControls();
+    put("feed-interval-status", "Saving…"); $("feed-interval-status").classList.remove("error");
+    try {
+      state.settings = await request("settings", { method: "PATCH", body: JSON.stringify({ feedIntervalMinutes: interval }) });
+      $("feed-interval").value = String(state.settings.feedIntervalMinutes);
+      put("feed-interval-status", "Current interval saved.");
+    } catch (error) {
+      $("feed-interval").value = String(state.settings?.feedIntervalMinutes ?? interval);
+      put("feed-interval-status", `Could not save: ${messageFor(error)}`);
+      $("feed-interval-status").classList.add("error");
+    } finally { state.settingsBusy = false; updateSettingsControls(); }
   }
 
   $("login-form").addEventListener("submit", async (event) => {
@@ -375,8 +416,10 @@
   $("episodes-next").addEventListener("click", () => { state.episodeOffset += pageSize; loadEpisodes(); });
   $("usage-period").addEventListener("change", loadUsage);
   $("global-analysis").addEventListener("change", saveGlobal);
-  $("model-select").addEventListener("change", () => { $("save-model").disabled = $("model-select").value === state.settings?.classifierModel; });
+  $("model-select").addEventListener("change", updateSettingsControls);
   $("save-model").addEventListener("click", saveModel);
+  $("feed-interval").addEventListener("input", feedIntervalChanged);
+  $("save-feed-interval").addEventListener("click", saveFeedInterval);
   $("podcast-search").addEventListener("input", renderPodcasts);
   $("podcast-filter").addEventListener("change", renderPodcasts);
   document.addEventListener("visibilitychange", () => { if (!document.hidden && state.view === "overview" && !$("app").hidden) loadOverview(); });

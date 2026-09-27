@@ -62,15 +62,18 @@ logs, reprocessing, backups), see [deploy/README.md](deploy/README.md).
 Open the server URL in a browser (for example,
 `http://laurel.turkey-galaxy.ts.net:44007/`) and enter the
 `NOADCAST_API_TOKEN` from `secrets.env`. The dashboard shows server health,
-episodes, OpenRouter token and cost history, and storage. Under **Analysis**,
-select the model for future classifications and exclude individual podcasts
-from ad detection. Existing markers and classification history are retained.
+episodes, OpenRouter token and cost history, and storage. Under **Settings**,
+set the feed check interval (1–1,440 minutes), select the model for future
+classifications, and exclude individual podcasts from ad detection. Changes
+apply without restarting the server. Existing markers and classification history are retained.
 The token stays in the browser tab's session storage; data and settings use
 the authenticated API. See [docs/API.md](docs/API.md) for the endpoints.
 
 How an episode flows:
 
-1. **Refresh** polls each feed every ~30 minutes with conditional GETs. A new
+1. **Refresh** polls each feed every ~30 minutes by default with conditional
+   GETs and ±15% jitter. Configure the interval in the dashboard; failing
+   feeds keep their retry backoff. A new
    subscription admits only its newest episode; later, only genuinely new
    episodes are admitted, so an archive is never processed wholesale.
 2. **Download** fetches the audio once, resumably, and serves it back to
@@ -107,6 +110,11 @@ to remove its downloaded audio from the phone and server and stop unfinished
 processing. A full left swipe in Queue performs the same action. Finishing
 playback also removes the audio. Sync retries missed server removals for
 episodes already marked played.
+
+Tap the **Refresh all feeds** button (circular arrow) at the top of
+**Podcasts**, or pull to refresh, to ask the server to check every feed now.
+The request time appears above the list; new episodes arrive as the server's
+refresh jobs finish.
 
 ## Development
 

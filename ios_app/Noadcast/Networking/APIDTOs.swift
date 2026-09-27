@@ -427,6 +427,8 @@ nonisolated struct ServerSettingsDTO: Decodable, Sendable, Equatable {
     let autoProcessEnabled: Bool
     let classifier: String?
     let classifierModel: String?
+    /// Optional for compatibility with servers predating polling settings.
+    let feedIntervalMinutes: Int?
     /// Which providers have server-side keys. Keys themselves are never sent.
     let availableClassifiers: [String: Bool]
 
@@ -435,17 +437,20 @@ nonisolated struct ServerSettingsDTO: Decodable, Sendable, Equatable {
         autoProcessEnabled: Bool = true,
         classifier: String? = nil,
         classifierModel: String? = nil,
+        feedIntervalMinutes: Int? = nil,
         availableClassifiers: [String: Bool] = [:]
     ) {
         self.adAnalysisEnabled = adAnalysisEnabled
         self.autoProcessEnabled = autoProcessEnabled
         self.classifier = classifier
         self.classifierModel = classifierModel
+        self.feedIntervalMinutes = feedIntervalMinutes
         self.availableClassifiers = availableClassifiers
     }
 
     nonisolated enum CodingKeys: String, CodingKey {
         case adAnalysisEnabled, autoProcessEnabled, classifier, classifierModel, availableClassifiers
+        case feedIntervalMinutes
     }
 
     init(from decoder: Decoder) throws {
@@ -454,6 +459,7 @@ nonisolated struct ServerSettingsDTO: Decodable, Sendable, Equatable {
         autoProcessEnabled = (try? c.decodeIfPresent(Bool.self, forKey: .autoProcessEnabled)) ?? true
         classifier = try? c.decodeIfPresent(String.self, forKey: .classifier)
         classifierModel = try? c.decodeIfPresent(String.self, forKey: .classifierModel)
+        feedIntervalMinutes = try? c.decodeIfPresent(Int.self, forKey: .feedIntervalMinutes)
         availableClassifiers = (try? c.decodeIfPresent([String: Bool].self, forKey: .availableClassifiers)) ?? [:]
     }
 }

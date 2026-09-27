@@ -17,6 +17,7 @@ Variable-length id lists are bound as one JSON array and expanded with
 from __future__ import annotations
 
 import dataclasses
+import datetime as dt
 import enum
 import functools
 import json
@@ -27,6 +28,7 @@ from typing import Any, Iterable, Mapping, Protocol, Sequence, TypeVar
 from ..classifier_models import DEFAULT_MODEL, MODEL_IDS
 from ..config import Settings
 from ..transcribe.protocol import Sentence
+from ..timeutil import iso, parse_iso
 from .engine import Params, WriteTx
 
 
@@ -1305,9 +1307,10 @@ class ServerSettings:
     auto_process_enabled: bool
     classifier: str
     classifier_model: str
+    feed_interval_minutes: int
 
 
-SETTING_KEYS = ("ad_analysis_enabled", "auto_process_enabled", "classifier", "classifier_model")
+SETTING_KEYS = ("ad_analysis_enabled", "auto_process_enabled", "classifier", "classifier_model", "feed_interval_minutes")
 
 
 def default_model_for(config: Settings, provider: str) -> str:
@@ -1355,7 +1358,33 @@ def load_server_settings(db: Reader, config: Settings) -> ServerSettings:
         auto_process_enabled=bool(stored.get("auto_process_enabled", True)),
         classifier=classifier,
         classifier_model=model,
+        feed_interval_minutes=int(stored.get("feed_interval_minutes", config.feed_interval_minutes)),
     )
+
+
+def replan_successful_feed_refreshes(tx: WriteTx, *, old_minutes: int, new_minutes: int) -> None:
+    """Scale each successful feed's existing jitter without touching backoff.
+
+    `next_fetch_at` is internal scheduler state, so these writes allocate no
+    sync seq. A newly subscribed feed has no last fetch and stays due now.
+    """
+    rows = tx.read(
+        """
+        SELECT id, last_fetch_at, next_fetch_at FROM podcasts
+        WHERE last_fetch_at IS NOT NULL AND last_fetch_status IN (200, 304)
+          AND consecutive_failures = 0 AND last_fetch_error IS NULL
+        """
+    )
+    for row in rows:
+        last = parse_iso(row["last_fetch_at"])
+        scheduled = parse_iso(row["next_fetch_at"])
+        if last is None or scheduled is None:
+            continue
+        observed = (scheduled - last).total_seconds() / (old_minutes * 60)
+        jitter = min(1.15, max(0.85, observed))
+        next_at = iso(last + dt.timedelta(minutes=new_minutes * jitter))
+        if next_at != row["next_fetch_at"]:
+            tx.execute("UPDATE podcasts SET next_fetch_at = ? WHERE id = ?", (next_at, row["id"]))
 
 
 def update_server_settings(
@@ -1369,6 +1398,10 @@ def update_server_settings(
         raise ValueError("only openrouter classification is supported")
     if "classifier_model" in changes and changes["classifier_model"] not in MODEL_IDS:
         raise ValueError("unsupported classifier model")
+    if "feed_interval_minutes" in changes and (
+        type(changes["feed_interval_minutes"]) is not int or not 1 <= changes["feed_interval_minutes"] <= 1440
+    ):
+        raise ValueError("feed interval must be 1..1440 minutes")
     current = load_server_settings(tx, config)
     target = dict(changes)
     if "classifier" in target and "classifier_model" not in target and target["classifier"] != current.classifier:
@@ -1383,6 +1416,10 @@ def update_server_settings(
                 """,
                 (key, json.dumps(target[key]), now, tx.next_seq()),
             )
+            if key == "feed_interval_minutes":
+                replan_successful_feed_refreshes(
+                    tx, old_minutes=current.feed_interval_minutes, new_minutes=target[key]
+                )
     return load_server_settings(tx, config)
 
 

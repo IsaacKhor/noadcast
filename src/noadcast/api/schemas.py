@@ -101,6 +101,7 @@ class SettingsOut(ApiModel):
     auto_process_enabled: bool
     classifier: str
     classifier_model: str
+    feed_interval_minutes: int
     available_classifiers: dict[str, bool]
 
 
@@ -171,6 +172,7 @@ def settings_out(settings: repo.ServerSettings, available: dict[str, bool]) -> S
         auto_process_enabled=settings.auto_process_enabled,
         classifier=settings.classifier,
         classifier_model=settings.classifier_model,
+        feed_interval_minutes=settings.feed_interval_minutes,
         available_classifiers=available,
     )
 
@@ -453,3 +455,4 @@ class SettingsPatchIn(ApiModel):
     auto_process_enabled: bool | None = None
     classifier: Provider | None = None
     classifier_model: ClassifierModel | None = None
+    feed_interval_minutes: int | None = Field(default=None, ge=1, le=1440, strict=True)

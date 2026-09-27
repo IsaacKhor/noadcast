@@ -9,6 +9,8 @@ from unittest import mock
 
 from noadcast.api import middleware
 from noadcast.api.app import create_app
+from noadcast.db import repo
+from noadcast.db.engine import Database
 from noadcast.logging_setup import current_context
 from noadcast.pipeline.scheduler import DataDirLocked, SchedulerConfig
 from noadcast.timeutil import iso, utc_now
@@ -38,6 +40,7 @@ class SettingsTests(ApiTestCase):
                 "autoProcessEnabled": True,
                 "classifier": "openrouter",
                 "classifierModel": self.settings.openrouter_model,
+                "feedIntervalMinutes": self.settings.feed_interval_minutes,
                 "availableClassifiers": {"openrouter": False},
             },
         )
@@ -63,9 +66,53 @@ class SettingsTests(ApiTestCase):
             self.assertEqual((await self.client.get("/api/v1/settings")).json(), response.json())
 
     async def test_invalid_values_are_rejected(self) -> None:
-        for body in ({"classifier": "gpt"}, {"classifier": "gemini"}, {"classifier": "fake"}, {"classifierModel": "google/gemini-3.5-flash"}, {"classifierModel": ""}, {"autoProcessEnabled": "sometimes"}):
+        for body in ({"classifier": "gpt"}, {"classifier": "gemini"}, {"classifier": "fake"}, {"classifierModel": "google/gemini-3.5-flash"}, {"classifierModel": ""}, {"autoProcessEnabled": "sometimes"}, {"feedIntervalMinutes": 0}, {"feedIntervalMinutes": 1441}, {"feedIntervalMinutes": 2.5}, {"feedIntervalMinutes": "30"}, {"feedIntervalMinutes": True}):
             with self.subTest(body=body):
                 self.assertError(await self.client.patch("/api/v1/settings", json=body), 422, "invalidRequest")
+
+    async def test_interval_patch_replans_successes_but_keeps_failure_backoff(self) -> None:
+        fast = add_podcast(self.ctx, feed_url="https://feeds.example.com/fast.xml")
+        slow = add_podcast(self.ctx, feed_url="https://feeds.example.com/slow.xml")
+        failed = add_podcast(self.ctx, feed_url="https://feeds.example.com/failed.xml")
+        never = add_podcast(self.ctx, feed_url="https://feeds.example.com/never.xml")
+        last = utc_now() - dt.timedelta(minutes=10)
+        last_stamp = iso(last)
+        fast_due = iso(last + dt.timedelta(minutes=27))  # existing 0.90 jitter
+        slow_due = iso(last + dt.timedelta(minutes=33))  # existing 1.10 jitter
+        backoff_due = iso(last + dt.timedelta(hours=2))
+        with self.ctx.db.write() as tx:
+            for podcast, due, status, failures, error in (
+                (fast, fast_due, 200, 0, None),
+                (slow, slow_due, 304, 0, None),
+                (failed, backoff_due, 503, 2, "HTTP 503"),
+            ):
+                tx.execute(
+                    "UPDATE podcasts SET last_fetch_at=?, last_fetch_status=?, consecutive_failures=?, last_fetch_error=?, next_fetch_at=? WHERE id=?",
+                    (last_stamp, status, failures, error, due, podcast.id),
+                )
+        seq = self.ctx.db.current_seq()
+        podcast_seqs = {p.id: p.updated_seq for p in repo.list_podcasts(self.ctx.db)}
+        response = await self.client.patch("/api/v1/settings", json={"feedIntervalMinutes": 60})
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(response.json()["feedIntervalMinutes"], 60)
+        self.assertEqual((await self.client.get("/api/v1/settings")).json()["feedIntervalMinutes"], 60)
+        reopened = Database(self.settings.db_path)
+        try:
+            changed_env = self.settings.with_overrides(feed_interval_minutes=15)
+            self.assertEqual(repo.load_server_settings(reopened, changed_env).feed_interval_minutes, 60)
+        finally:
+            reopened.close()
+        self.assertEqual(self.ctx.db.current_seq(), seq + 1)
+        podcasts = {p.id: p for p in repo.list_podcasts(self.ctx.db)}
+        self.assertEqual(podcasts[fast.id].next_fetch_at, iso(last + dt.timedelta(minutes=54)))
+        self.assertEqual(podcasts[slow.id].next_fetch_at, iso(last + dt.timedelta(minutes=66)))
+        self.assertEqual(podcasts[failed.id].next_fetch_at, backoff_due)
+        self.assertEqual(podcasts[never.id].next_fetch_at, never.next_fetch_at)
+        self.assertEqual({p.id: p.updated_seq for p in podcasts.values()}, podcast_seqs)
+        self.assertEqual((await self.client.patch("/api/v1/settings", json={"feedIntervalMinutes": 60})).status_code, 200)
+        self.assertEqual(self.ctx.db.current_seq(), seq + 1)
+        await self.client.patch("/api/v1/settings", json={"feedIntervalMinutes": 5})
+        self.assertIn(fast.id, repo.due_podcast_ids(self.ctx.db, iso(utc_now())))
 
 
 class UsageTests(ApiTestCase):

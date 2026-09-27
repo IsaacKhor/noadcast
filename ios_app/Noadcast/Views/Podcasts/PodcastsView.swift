@@ -14,6 +14,21 @@ struct PodcastsView: View {
     @State private var sortMode: PodcastSortMode = .latestEpisode
     @State private var lastGlobalRefreshAt: Date?
     @State private var unsubscribeError: String?
+    @State private var isRefreshing = false
+    @State private var refreshError: String?
+
+    private let refreshAction: @MainActor (ModelContext) async throws -> Void
+    private let serverIsConfigured: @MainActor () -> Bool
+
+    init(
+        refreshAction: @escaping @MainActor (ModelContext) async throws -> Void = {
+            try await SubscriptionService.shared.refreshAll(context: $0)
+        },
+        serverIsConfigured: @escaping @MainActor () -> Bool = { APIConfiguration.isConfigured }
+    ) {
+        self.refreshAction = refreshAction
+        self.serverIsConfigured = serverIsConfigured
+    }
 
     private var visiblePodcasts: [Podcast] {
         let source = sortedPodcasts.isEmpty && !podcasts.isEmpty ? podcasts : sortedPodcasts
@@ -41,7 +56,7 @@ struct PodcastsView: View {
         NavigationStack {
             Group {
                 if podcasts.isEmpty {
-                    if APIConfiguration.isConfigured {
+                    if serverIsConfigured() {
                         ContentUnavailableView {
                             Label("No podcasts yet", systemImage: "rectangle.stack.badge.plus")
                         } description: {
@@ -61,7 +76,7 @@ struct PodcastsView: View {
                         if let lastRefresh = lastGlobalRefreshAt, searchText.isEmpty {
                             Section {
                                 HStack {
-                                    Label("Last refresh", systemImage: "arrow.clockwise")
+                                    Label("Refresh requested", systemImage: "arrow.clockwise")
                                         .foregroundStyle(.secondary)
                                     Spacer()
                                     Text(TimeFormatting.refreshTimestamp(lastRefresh))
@@ -91,21 +106,33 @@ struct PodcastsView: View {
             .searchable(text: $searchText, prompt: "Search podcasts")
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) { sortMenu }
-                ToolbarItem(placement: .topBarTrailing) {
+                ToolbarItemGroup(placement: .topBarTrailing) {
+                    Button {
+                        Task { await refreshFeeds() }
+                    } label: {
+                        if isRefreshing {
+                            ProgressView()
+                        } else {
+                            Label("Refresh all feeds", systemImage: "arrow.clockwise")
+                        }
+                    }
+                    .accessibilityLabel("Refresh all feeds")
+                    .help("Ask the server to check every podcast for new episodes now")
+                    .disabled(isRefreshing || !serverIsConfigured())
                     Button {
                         showAdd = true
                     } label: {
                         Image(systemName: "plus")
                     }
-                    .disabled(!APIConfiguration.isConfigured)
+                    .accessibilityLabel("Add podcast")
+                    .disabled(!serverIsConfigured())
                 }
             }
             .sheet(isPresented: $showAdd) {
                 AddPodcastView()
             }
             .refreshable {
-                await SubscriptionService.shared.refreshAll(context: context)
-                refreshSettingsSnapshot()
+                await refreshFeeds()
             }
             .onAppear { refreshSettingsSnapshot() }
             .onChange(of: podcasts) { _, _ in refreshSort() }
@@ -115,6 +142,23 @@ struct PodcastsView: View {
             }, message: {
                 Text(unsubscribeError ?? "")
             })
+            .alert("Couldn't refresh feeds", isPresented: .constant(refreshError != nil), actions: {
+                Button("OK") { refreshError = nil }
+            }, message: {
+                Text(refreshError ?? "")
+            })
+        }
+    }
+
+    private func refreshFeeds() async {
+        guard !isRefreshing else { return }
+        isRefreshing = true
+        defer { isRefreshing = false }
+        do {
+            try await refreshAction(context)
+            refreshSettingsSnapshot()
+        } catch {
+            refreshError = error.localizedDescription
         }
     }
 

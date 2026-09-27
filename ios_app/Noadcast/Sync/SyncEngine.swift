@@ -844,6 +844,10 @@ actor SyncEngine {
             settings.serverClassifierModel = dto.classifierModel
             changed = true
         }
+        if settings.serverFeedIntervalMinutes != dto.feedIntervalMinutes {
+            settings.serverFeedIntervalMinutes = dto.feedIntervalMinutes
+            changed = true
+        }
         let openRouterAvailable = dto.availableClassifiers["openrouter"]
         if settings.serverOpenRouterAvailable != openRouterAvailable {
             settings.serverOpenRouterAvailable = openRouterAvailable

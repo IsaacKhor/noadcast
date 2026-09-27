@@ -82,22 +82,15 @@ final class SubscriptionService {
         sync.scheduleFollowUpSyncs()
     }
 
-    /// Pull-to-refresh on the library: `POST /api/v1/refresh`, then sync.
-    func refreshAll(context: ModelContext) async {
-        guard APIConfiguration.isConfigured else { return }
-        var requested = true
-        do {
-            try await api.refreshAll()
-        } catch {
-            requested = false
-            Log.feed.notice("Refresh-all request failed: \(error.localizedDescription, privacy: .public)")
-        }
+    /// Requests an immediate server fetch for every feed, then syncs the
+    /// mirror. The timestamp records acceptance; feed jobs finish asynchronously.
+    func refreshAll(context: ModelContext) async throws {
+        guard APIConfiguration.isConfigured else { throw APIError.notConfigured }
+        try await api.refreshAll()
+        let settings = AppSettings.current(in: context)
+        settings.lastGlobalRefreshAt = .now
+        try? context.save()
         await sync.syncNow(.pullToRefresh)
-        if requested, sync.lastError == nil {
-            let settings = AppSettings.current(in: context)
-            settings.lastGlobalRefreshAt = .now
-            try? context.save()
-        }
         sync.scheduleFollowUpSyncs()
     }
 

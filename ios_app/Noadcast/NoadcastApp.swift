@@ -11,7 +11,8 @@ struct NoadcastApp: App {
     #if DEBUG
     private static var isUnitTesting: Bool {
         if ProcessInfo.processInfo.arguments.contains("--ui-test-queue")
-            || ProcessInfo.processInfo.arguments.contains("--ui-test-status") {
+            || ProcessInfo.processInfo.arguments.contains("--ui-test-status")
+            || ProcessInfo.processInfo.arguments.contains("--ui-test-refresh") {
             return false
         }
         return ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil
@@ -41,6 +42,10 @@ struct NoadcastApp: App {
         if ProcessInfo.processInfo.arguments.contains("--ui-test-status") {
             sharedModelContainer = StatusUITestFixture.makeContainer()
             PlayerService.shared.setModelContainer(sharedModelContainer)
+            return
+        }
+        if ProcessInfo.processInfo.arguments.contains("--ui-test-refresh") {
+            sharedModelContainer = PodcastsUITestFixture.makeContainer()
             return
         }
         #endif
@@ -88,6 +93,8 @@ struct NoadcastApp: App {
                 )
             } else if ProcessInfo.processInfo.arguments.contains("--ui-test-status") {
                 StatusView(subscription: StatusUITestFixture.subscription, isUITestFixture: true)
+            } else if ProcessInfo.processInfo.arguments.contains("--ui-test-refresh") {
+                PodcastsView(refreshAction: PodcastsUITestFixture.refresh, serverIsConfigured: { true })
             } else {
                 ContentView()
             }

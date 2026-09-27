@@ -52,7 +52,7 @@ def normalize_feed_url(url: str) -> str:
 
 def next_interval_fetch(ctx: AppContext, now: dt.datetime, rng: random.Random | None = None) -> str:
     jitter = (rng or random).uniform(1 - INTERVAL_JITTER, 1 + INTERVAL_JITTER)
-    return iso(now + dt.timedelta(minutes=ctx.settings.feed_interval_minutes * jitter))
+    return iso(now + dt.timedelta(minutes=ctx.server_settings().feed_interval_minutes * jitter))
 
 
 def next_backoff_fetch(

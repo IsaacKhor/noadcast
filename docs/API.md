@@ -132,6 +132,7 @@ phone, playback speed) are not server fields.
   "autoProcessEnabled": true,
   "classifier": "openrouter",
   "classifierModel": "deepseek/deepseek-v4.1-flash",
+  "feedIntervalMinutes": 30,
   "availableClassifiers": {"openrouter": false}
 }
 ```
@@ -319,7 +320,7 @@ arrives via `/sync`.
 ### Settings, usage, OPML
 
 - `GET /api/v1/settings` → `200 Settings`; `PATCH /api/v1/settings`
-  `{"adAnalysisEnabled"?, "autoProcessEnabled"?, "classifier"?, "classifierModel"?}` → `200 Settings`.
+  `{"adAnalysisEnabled"?, "autoProcessEnabled"?, "classifier"?, "classifierModel"?, "feedIntervalMinutes"?}` → `200 Settings`.
   `classifier` accepts only `openrouter`; `OPENROUTER_API_KEY` is required on the server.
   `classifierModel` (and reanalyze `model`) accepts three presets:
   `deepseek/deepseek-v4.1-flash` (default), `qwen/qwen3.8-flash`, and
@@ -327,6 +328,14 @@ arrives via `/sync`.
   by the preset, so no separate settings field is needed.
   `NOADCAST_OPENROUTER_MODEL` overrides the default model. Existing historical
   classifications retain their original provider, model, markers, and costs.
+  `feedIntervalMinutes` is an integer from 1 to 1440, defaulting to
+  `NOADCAST_FEED_INTERVAL_MINUTES` (30 if unset). Successful feeds are polled
+  at that interval with ±15% jitter. Changing it immediately replans feeds
+  after their last successful fetch, preserving each feed's jitter; overdue
+  feeds become due on the scheduler's next check (normally within 5 seconds).
+  Feeds in failure backoff, including a host's `Retry-After`, keep their
+  existing retry time. A running refresh uses the new interval when it
+  succeeds. The persisted API setting overrides the environment default.
 - `GET /api/v1/usage?days=30` →
   `200 {"days": [{"date": "2026-09-22", "calls", "inputTokens", "thoughtTokens", "outputTokens", "costUsd"}], "byModel": [{"provider", "model", "calls", "inputTokens", "thoughtTokens", "outputTokens", "costUsd"}], "totals": {…}}`.
   OpenRouter costs use the billed `usage.cost` reported by the provider, summed

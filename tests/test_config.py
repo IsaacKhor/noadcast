@@ -6,6 +6,14 @@ from noadcast.config import Settings
 
 
 class ClassificationConfigTests(unittest.TestCase):
+    def test_feed_interval_environment_default_and_bounds(self) -> None:
+        base = {"NOADCAST_ALLOW_NO_AUTH": "1"}
+        self.assertEqual(Settings.from_mapping(base).feed_interval_minutes, 30)
+        self.assertEqual(Settings.from_mapping({**base, "NOADCAST_FEED_INTERVAL_MINUTES": "7"}).feed_interval_minutes, 7)
+        for value in ("0", "1441", "-1"):
+            with self.subTest(value=value), self.assertRaises(ValueError):
+                Settings.from_mapping({**base, "NOADCAST_FEED_INTERVAL_MINUTES": value})
+
     def test_openrouter_configuration_and_secret_redaction(self) -> None:
         settings = Settings.from_mapping({
             "NOADCAST_ALLOW_NO_AUTH": "1",

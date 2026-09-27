@@ -37,6 +37,14 @@ class ContractShapeTests(ApiTestCase):
         )
         self.assertEqual(body["instanceId"], self.ctx.db.instance_id)
 
+    async def test_interval_patch_is_in_next_sync_settings(self) -> None:
+        cursor = (await self.client.get("/api/v1/sync")).json()["nextSince"]
+        response = await self.client.patch("/api/v1/settings", json={"feedIntervalMinutes": 11})
+        self.assertEqual(response.status_code, 200, response.text)
+        delta = (await self.client.get("/api/v1/sync", params={"since": cursor})).json()
+        self.assertEqual(delta["settings"]["feedIntervalMinutes"], 11)
+        self.assertEqual(delta["nextSince"], cursor + 1)
+
     async def test_episode_values(self) -> None:
         episode = (await self.client.get(f"/api/v1/episodes/{self.episode_id}")).json()
         self.assertEqual(episode["podcastId"], self.podcast.id)
