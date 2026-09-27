@@ -209,7 +209,7 @@ class DownloadTranscribeClassifyTests(StageTestCase):
         self.assertEqual((classification.total_cost_usd, classification.input_tokens), (0.003, 1000))
         raw = json.loads(gzip.decompress((self.settings.data_dir / classification.raw_response_path).read_bytes()))
         self.assertIn("segments", raw)
-        request = self.ctx.classifiers.classifiers["fake"].requests[0]
+        request = self.ctx.classifiers.classifiers["openrouter"].requests[0]
         self.assertEqual(request.silences[-1].kind, "tail")
         self.assertEqual(request.episode_duration, 600.0)
 
@@ -224,13 +224,13 @@ class DownloadTranscribeClassifyTests(StageTestCase):
                 (self.episode.id, stamp, stamp),
             )
             job_id = commands.reanalyze_episode(
-                tx, self.episode.id, server=self.ctx.server_settings(), now=stamp, provider="claude", model="claude-x"
+                tx, self.episode.id, server=self.ctx.server_settings(), now=stamp, provider="openrouter", model="qwen/qwen3.8-flash"
             )
         self.assertEqual(jobs.get_job(self.ctx.db, job_id).kind, "classify")
         await self.run_next("classify")
         history = repo.list_classifications(self.ctx.db, self.episode.id)
-        self.assertEqual([(c.provider, c.is_active) for c in history], [("claude", True), ("fake", False)])
-        self.assertEqual(self.ctx.classifiers.requested[-1][:2], ("claude", "claude-x"))
+        self.assertEqual([(c.model, c.is_active) for c in history], [("qwen/qwen3.8-flash", True), ("deepseek/deepseek-v4.1-flash", False)])
+        self.assertEqual(self.ctx.classifiers.requested[-1][:2], ("openrouter", "qwen/qwen3.8-flash"))
         sources = sorted(m.source for m in repo.markers_for_episode(self.ctx.db, self.episode.id))
         self.assertEqual(sources, ["auto", "auto", "manual"])
         self.assertEqual(self.fresh().marker_revision, 2)
@@ -358,38 +358,22 @@ class DownloadTranscribeClassifyTests(StageTestCase):
         self.assertEqual((final.audio_state, final.pipeline_state, final.marker_revision), ("evicted", "ready", 2))
         self.assertEqual(len(self.origin.calls), 1)
 
-    async def test_the_audio_control_arm_downloads_evicted_audio_first(self) -> None:
+    async def test_retired_backend_in_pending_job_fails_without_fetching_audio(self) -> None:
         self.process()
         await self.run_chain()
-        path = self.ctx.store.abspath(self.fresh().audio_path)
         with self.ctx.db.write() as tx:
-            job_id = commands.reanalyze_episode(
-                tx, self.episode.id, server=self.ctx.server_settings(), now=now_iso(), provider="gemini-audio"
-            )
-        self.assertEqual(jobs.get_job(self.ctx.db, job_id).kind, "classify")
-        path.unlink()  # lost behind the server's back while the job waited
+            job_id = jobs.enqueue(tx, "classify", self.episode.id, params={"provider": "gemini-audio", "force": True}, now=now_iso()).job_id
         await self.run_next("classify")
-        # Without a file to listen to, the arm fetches the audio first.
-        download = jobs.live_job(self.ctx.db, "download", self.episode.id)
-        self.assertEqual(download.params["provider"], "gemini-audio")
-        await self.run_next("download")
-        await self.run_next("classify")
-        request = self.ctx.classifiers.classifiers["gemini-audio"].requests[0]
-        self.assertTrue(request.audio_path and Path(request.audio_path).is_file())
-        history = repo.list_classifications(self.ctx.db, self.episode.id)
-        self.assertEqual([(c.provider, c.is_active) for c in history], [("gemini-audio", True), ("fake", False)])
-        with self.ctx.db.write() as tx:  # and once evicted, reanalysis with the arm downloads up front
-            repo.mark_audio_evicted(tx, self.episode.id, reason="manual", now=now_iso())
-            job_id = commands.reanalyze_episode(
-                tx, self.episode.id, server=self.ctx.server_settings(), now=now_iso(), provider="gemini-audio"
-            )
-        self.assertEqual(jobs.get_job(self.ctx.db, job_id).kind, "download")
+        failed = jobs.get_job(self.ctx.db, job_id)
+        self.assertEqual(failed.state, "failed")
+        self.assertIn("unsupported classifier", failed.last_error)
+        self.assertIsNone(jobs.live_job(self.ctx.db, "download", self.episode.id))
 
     async def test_classifier_errors_follow_the_retry_policy(self) -> None:
         self.process()
         await self.run_next("download")
         await self.run_next("transcribe")
-        classifier = self.ctx.classifiers.get("fake")
+        classifier = self.ctx.classifiers.get("openrouter")
         classifier.error = ClassifierError("rate limited", retry_after=7.0)
         job = await self.run_next("classify")
         self.assertEqual(job.state, "pending")

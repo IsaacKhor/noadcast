@@ -8,10 +8,6 @@ import SwiftData
 struct DownloadsView: View {
     @Environment(\.modelContext) private var context
     @State private var showCancelAllConfirm = false
-    @State private var inProgressEpisodes: [Episode] = []
-    @State private var failedEpisodes: [Episode] = []
-    @State private var downloadedEpisodes: [Episode] = []
-    @State private var totalBytes: Int64 = 0
 
     // One SwiftData query covers the whole tab. `isBusy` is the denormalized
     // "server job active OR device download active" flag, so the predicate
@@ -29,6 +25,29 @@ struct DownloadsView: View {
     private var visibleEpisodes: [Episode]
 
     private let sync = SyncService.shared
+
+    // Observe the fields that determine section membership. Query membership
+    // can stay identical as a download moves from queued to failed or ready.
+    // Fine-grained progress is still read only by EpisodeRow.
+    private var inProgressEpisodes: [Episode] {
+        visibleEpisodes.filter(\.isBusy)
+    }
+
+    private var failedEpisodes: [Episode] {
+        visibleEpisodes.filter { episode in
+            !episode.isBusy && (episode.downloadState == .failed || episode.serverState == .failed)
+        }
+    }
+
+    private var downloadedEpisodes: [Episode] {
+        visibleEpisodes
+            .filter(\.isMarkedDownloaded)
+            .sorted { ($0.fileSizeBytes ?? 0) > ($1.fileSizeBytes ?? 0) }
+    }
+
+    private var totalBytes: Int64 {
+        downloadedEpisodes.reduce(0) { $0 + ($1.fileSizeBytes ?? 0) }
+    }
 
     var body: some View {
         NavigationStack {
@@ -116,14 +135,12 @@ struct DownloadsView: View {
                 await sync.syncNow(.pullToRefresh)
             }
             .onAppear {
-                refreshSections()
                 // 2 s job-progress polling while this tab is on screen.
                 sync.setDownloadsTabVisible(true)
             }
             .onDisappear {
                 sync.setDownloadsTabVisible(false)
             }
-            .onChange(of: visibleEpisodes) { _, _ in refreshSections() }
             .toolbar {
                 if inProgressEpisodes.contains(where: { $0.downloadState.isActive }) {
                     ToolbarItem(placement: .topBarTrailing) {
@@ -146,17 +163,6 @@ struct DownloadsView: View {
 
     private var activeDeviceDownloads: [Episode] {
         inProgressEpisodes.filter { $0.downloadState.isActive }
-    }
-
-    private func refreshSections() {
-        inProgressEpisodes = visibleEpisodes.filter(\.isBusy)
-        failedEpisodes = visibleEpisodes.filter { episode in
-            !episode.isBusy && (episode.downloadState == .failed || episode.serverState == .failed)
-        }
-        downloadedEpisodes = visibleEpisodes
-            .filter(\.isMarkedDownloaded)
-            .sorted { ($0.fileSizeBytes ?? 0) > ($1.fileSizeBytes ?? 0) }
-        totalBytes = downloadedEpisodes.reduce(0) { $0 + ($1.fileSizeBytes ?? 0) }
     }
 
     private func cancelAllDownloads() {

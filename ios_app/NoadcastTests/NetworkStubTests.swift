@@ -43,6 +43,44 @@ struct NetworkStubTests {
         #expect(requests.first?.value(forHTTPHeaderField: "Authorization") == "Bearer test-token")
     }
 
+    @Test(arguments: ClassifierModel.allCases)
+    func modelSelectionSendsOpenRouterAndExactModel(_ model: ClassifierModel) async throws {
+        let host = StubServer.uniqueHost()
+        defer { StubServer.shared.unregister(host: host) }
+        let body = LockedBox<Data?>(nil)
+        let response = #"{"adAnalysisEnabled":true,"autoProcessEnabled":true,"classifier":"openrouter","classifierModel":"\#(model.rawValue)","availableClassifiers":{"openrouter":true}}"#
+        StubServer.shared.register(host: host) { request, _ in
+            body.withLock { $0 = Self.requestBody(request) }
+            return .json(response)
+        }
+        let client = try makeStubClient(host: host)
+
+        let settings = try await client.updateSettings(classifierModel: model.rawValue)
+
+        #expect(settings.classifierModel == model.rawValue)
+        let request = try #require(StubServer.shared.requests(for: host).first)
+        #expect(request.httpMethod == "PATCH")
+        #expect(request.url?.path == "/api/v1/settings")
+        let sent = try JSONDecoder().decode([String: String].self, from: #require(body.value))
+        #expect(sent == ["classifier": "openrouter", "classifierModel": model.rawValue])
+    }
+
+    /// URLSession may move a request's body into a stream before URLProtocol sees it.
+    private nonisolated static func requestBody(_ request: URLRequest) -> Data? {
+        if let body = request.httpBody { return body }
+        guard let stream = request.httpBodyStream else { return nil }
+        stream.open()
+        defer { stream.close() }
+        var data = Data()
+        var buffer = [UInt8](repeating: 0, count: 1024)
+        while true {
+            let count = stream.read(&buffer, maxLength: buffer.count)
+            guard count > 0 else { break }
+            data.append(contentsOf: buffer.prefix(count))
+        }
+        return data
+    }
+
     @Test func clientReportsUnauthorizedOnceAndNeverRetriesIt() async throws {
         let host = StubServer.uniqueHost()
         defer { StubServer.shared.unregister(host: host) }
@@ -80,6 +118,53 @@ struct NetworkStubTests {
     }
 
     // MARK: - SyncService
+
+    @Test @MainActor func acceptedModelSelectionPersistsTheServerResponse() async throws {
+        let host = StubServer.uniqueHost()
+        defer { StubServer.shared.unregister(host: host) }
+        let response = #"{"adAnalysisEnabled":true,"autoProcessEnabled":true,"classifier":"openrouter","classifierModel":"qwen/qwen3.8-flash","availableClassifiers":{"openrouter":true}}"#
+        let sync = StubJSON.syncPage(instanceId: "model-selection", nextSince: 1, hasMore: false)
+        StubServer.shared.register(host: host) { request, _ in
+            request.url?.path == "/api/v1/settings" ? .json(response) : .json(sync)
+        }
+        let harness = try SyncHarness(host: host)
+        defer { harness.cleanUp() }
+        let settings = AppSettings.current(in: harness.container.mainContext)
+        settings.serverClassifierModel = ClassifierModel.deepSeekFlash.rawValue
+        try harness.container.mainContext.save()
+
+        try await harness.service.setClassifierModel(.qwenFlash)
+
+        let persisted = AppSettings.current(in: ModelContext(harness.container))
+        #expect(persisted.serverClassifierModel == ClassifierModel.qwenFlash.rawValue)
+        #expect(persisted.serverClassifier == "openrouter")
+        #expect(persisted.serverOpenRouterAvailable == true)
+        #expect(harness.service.pendingClassifierModel == nil)
+    }
+
+    @Test @MainActor func rejectedModelSelectionPreservesTheStoredChoice() async throws {
+        let host = StubServer.uniqueHost()
+        defer { StubServer.shared.unregister(host: host) }
+        StubServer.shared.register(host: host) { _, _ in
+            .json(StubJSON.error(code: "invalidRequest", message: "Model unavailable"), status: 400)
+        }
+        let harness = try SyncHarness(host: host)
+        defer { harness.cleanUp() }
+        let settings = AppSettings.current(in: harness.container.mainContext)
+        settings.serverClassifierModel = ClassifierModel.deepSeekFlash.rawValue
+        try harness.container.mainContext.save()
+
+        do {
+            try await harness.service.setClassifierModel(.gptLunaHigh)
+            Issue.record("Expected the rejected model change to throw")
+        } catch let error as APIError {
+            #expect(error == .invalidRequest(code: "invalidRequest", message: "Model unavailable"))
+        }
+
+        let persisted = AppSettings.current(in: ModelContext(harness.container))
+        #expect(persisted.serverClassifierModel == ClassifierModel.deepSeekFlash.rawValue)
+        #expect(harness.service.pendingClassifierModel == nil)
+    }
 
     @Test @MainActor func syncFollowsHasMoreAndPersistsTheFinalCursor() async throws {
         let host = StubServer.uniqueHost()

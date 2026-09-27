@@ -26,7 +26,7 @@ from .db import repo
 from .db.engine import Database
 from .feeds.fetcher import USER_AGENT
 from .media.store import MediaStore
-from .timeutil import utc_now
+from .timeutil import iso, utc_now
 from .transcribe.protocol import Transcriber
 
 
@@ -88,6 +88,8 @@ async def open_context(
     for directory in (settings.data_dir, settings.audio_dir, settings.llm_dir, settings.tmp_dir):
         directory.mkdir(parents=True, exist_ok=True)
     db = Database(settings.db_path)
+    with db.write() as tx:
+        repo.normalize_classifier_settings(tx, settings, now=iso(utc_now()))
     own_http = http is None
     own_classifiers = classifiers is None
     client = build_http_client() if http is None else http

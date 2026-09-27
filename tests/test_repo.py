@@ -225,18 +225,64 @@ class RepoTests(unittest.TestCase):
 
     def test_server_settings_overlay_defaults_and_bump_per_changed_key(self) -> None:
         defaults = repo.load_server_settings(self.db, self.settings)
-        self.assertEqual((defaults.classifier, defaults.classifier_model, defaults.ad_analysis_enabled), ("fake", "fake", True))
+        self.assertEqual((defaults.classifier, defaults.classifier_model, defaults.ad_analysis_enabled), ("openrouter", "deepseek/deepseek-v4.1-flash", True))
         start = self.seq()
         with self.db.write() as tx:
             repo.update_server_settings(tx, self.settings, {"ad_analysis_enabled": True}, now=now_iso())
         self.assertEqual(self.seq(), start, "an unchanged value writes nothing")
         with self.db.write() as tx:
-            updated = repo.update_server_settings(tx, self.settings, {"classifier": "claude", "auto_process_enabled": False}, now=now_iso())
-        self.assertEqual(self.seq(), start + 3, "one seq per changed row: classifier, its model, auto-process")
-        self.assertEqual((updated.classifier, updated.classifier_model), ("claude", self.settings.claude_model))
+            updated = repo.update_server_settings(tx, self.settings, {"classifier_model": "qwen/qwen3.8-flash", "auto_process_enabled": False}, now=now_iso())
+        self.assertEqual(self.seq(), start + 2, "one seq per changed row: model, auto-process")
+        self.assertEqual((updated.classifier, updated.classifier_model), ("openrouter", "qwen/qwen3.8-flash"))
         with self.assertRaises(ValueError):
             with self.db.write() as tx:
                 repo.update_server_settings(tx, self.settings, {"api_key": "x"}, now=now_iso())
+
+    def test_retired_saved_selection_normalizes_once_with_per_row_sequences(self) -> None:
+        with self.db.write() as tx:
+            for key, value in (("classifier", '"gemini"'), ("classifier_model", '"gemini-3.5-flash"')):
+                tx.execute("INSERT INTO settings (key, value_json, updated_at, updated_seq) VALUES (?, ?, ?, ?)",
+                           (key, value, now_iso(), tx.next_seq()))
+        before = self.seq()
+        with self.db.write() as tx:
+            repo.normalize_classifier_settings(tx, self.settings, now=now_iso())
+        self.assertEqual(self.seq(), before + 2)
+        rows = self.db.read("SELECT updated_seq FROM settings ORDER BY updated_seq")
+        self.assertEqual([r["updated_seq"] for r in rows], [before + 1, before + 2])
+        selected = repo.load_server_settings(self.db, self.settings)
+        self.assertEqual((selected.classifier, selected.classifier_model),
+                         ("openrouter", "deepseek/deepseek-v4.1-flash"))
+        with self.db.write() as tx:
+            repo.normalize_classifier_settings(tx, self.settings, now=now_iso())
+        self.assertEqual(self.seq(), before + 2)
+
+    def test_supported_saved_model_survives_normalization(self) -> None:
+        with self.db.write() as tx:
+            repo.normalize_classifier_settings(tx, self.settings, now=now_iso())
+            repo.update_server_settings(tx, self.settings, {"classifier_model": "openai/gpt-6-luna"}, now=now_iso())
+        before = self.seq()
+        with self.db.write() as tx:
+            repo.normalize_classifier_settings(tx, self.settings, now=now_iso())
+        self.assertEqual(self.seq(), before)
+        self.assertEqual(repo.load_server_settings(self.db, self.settings).classifier_model, "openai/gpt-6-luna")
+
+    def test_config_only_upgrade_announces_new_defaults_after_existing_cursor(self) -> None:
+        seed_podcast(self.db)
+        cursor = self.seq()  # The old client already mirrored its config-only Gemini selection.
+        self.assertFalse(repo.sync_page(self.db, since=cursor, limit=100).settings_changed)
+        with self.db.write() as tx:
+            repo.normalize_classifier_settings(tx, self.settings, now=now_iso())
+        delta = repo.sync_page(self.db, since=cursor, limit=100)
+        self.assertTrue(delta.settings_changed)
+        self.assertEqual(delta.next_since, cursor + 2)
+        selected = repo.load_server_settings(self.db, self.settings)
+        self.assertEqual((selected.classifier, selected.classifier_model),
+                         ("openrouter", "deepseek/deepseek-v4.1-flash"))
+        rows = self.db.read("SELECT updated_seq FROM settings ORDER BY updated_seq")
+        self.assertEqual([row["updated_seq"] for row in rows], [cursor + 1, cursor + 2])
+        with self.db.write() as tx:
+            repo.normalize_classifier_settings(tx, self.settings, now=now_iso())
+        self.assertEqual(self.seq(), cursor + 2)
 
     def test_delete_podcast_cascades_and_leaves_one_tombstone(self) -> None:
         podcast = seed_podcast(self.db)

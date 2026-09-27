@@ -388,11 +388,6 @@ class ClassifyStage:
             return
         provider = job.params.get("provider") or server.classifier
         audio = _audio_file(ctx, episode)
-        if provider in commands.AUDIO_CLASSIFIERS and audio is None:
-            # The control arm listens to the file: download it again first; the
-            # chain params bring this provider back once the audio is here.
-            _advance_instead(ctx, running, audio_missing=True)
-            return
         with ctx.db.write() as tx:
             repo.set_episode_states(
                 tx,
@@ -414,7 +409,7 @@ class ClassifyStage:
             audio_content_type=episode.audio_content_type,
         )
         model = job.params.get("model") or (server.classifier_model if provider == server.classifier else None)
-        thinking = job.params.get("thinking") or ctx.settings.thinking_level
+        thinking = job.params.get("thinking")
         result = await ctx.classifiers.get(provider, model, thinking).classify(request)
         segments = sanitize.finalize(result.segments, request, snap=ctx.settings.snap_to_silence)
         cost = costs.cost_for(result.provider, result.model, result.usage)

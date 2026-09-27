@@ -12,6 +12,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Mapping
 
+from ..classifier_models import MODEL_IDS
 from ..db import repo
 from ..db.engine import WriteTx
 from . import jobs, states
@@ -23,8 +24,6 @@ from . import jobs, states
 #   reclassify:   redo classification although markers exist
 #   host:         download jobs only; enclosure host for the per-host limit
 CHAIN_KEYS = ("provider", "model", "thinking", "force", "retranscribe", "reclassify")
-# Providers that classify from the audio file itself (the control arm).
-AUDIO_CLASSIFIERS = frozenset({"gemini-audio"})
 
 
 class NotFound(LookupError):
@@ -74,9 +73,7 @@ def _next_step(episode: repo.Episode, podcast: repo.Podcast, server: repo.Server
 
 
 def _needs_audio(step: str | None, server: repo.ServerSettings, chain: Mapping[str, Any]) -> bool:
-    if step == states.TRANSCRIBE:
-        return True
-    return step == states.CLASSIFY and (chain.get("provider") or server.classifier) in AUDIO_CLASSIFIERS
+    return step == states.TRANSCRIBE
 
 
 def advance(
@@ -171,6 +168,10 @@ def reanalyze_episode(
     """Run a fresh classification (optionally a fresh transcription first).
     Earlier classifications are kept for comparison. If a job of the needed
     kind is already live its id is returned and this request folds into it."""
+    if provider is not None and provider != "openrouter":
+        raise ValueError("only openrouter classification is supported")
+    if model is not None and model not in MODEL_IDS:
+        raise ValueError("unsupported classifier model")
     episode, podcast = _load(tx, episode_id)
     params: dict[str, Any] = {"force": True, "reclassify": True}
     if provider:

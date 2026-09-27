@@ -810,6 +810,11 @@ actor SyncEngine {
             settings.serverClassifierModel = dto.classifierModel
             changed = true
         }
+        let openRouterAvailable = dto.availableClassifiers["openrouter"]
+        if settings.serverOpenRouterAvailable != openRouterAvailable {
+            settings.serverOpenRouterAvailable = openRouterAvailable
+            changed = true
+        }
         report.settingsChanged = changed
     }
 

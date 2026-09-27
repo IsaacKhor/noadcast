@@ -14,12 +14,17 @@ from noadcast.classify.chunking import (
     plan_chunks,
     stitch_chunks,
 )
-from noadcast.classify.gemini import GeminiClassifier
+from noadcast.classify.openrouter import OpenRouterClassifier
 from noadcast.classify.prompts import get_prompt
 from noadcast.classify.render import render_transcript
-from tests.test_classify_helpers import RecordingSleep, gemini_body, no_jitter, request, segment, segments_json, sentence, silence
+from tests.test_classify_helpers import RecordingSleep, no_jitter, request, segment, segments_json, sentence, silence
 
 WORDS = "so the thing about this story is that nobody really knew what was going on at the time".split()
+
+
+def response(text, prompt=1000):
+    return {"choices": [{"message": {"content": text}, "finish_reason": "stop"}],
+            "usage": {"prompt_tokens": prompt, "completion_tokens": 80}}
 
 
 def long_episode(hours: float, sentence_s: float = 6.0) -> list:
@@ -58,11 +63,11 @@ class GuardTests(unittest.IsolatedAsyncioTestCase):
 
         def handler(req: httpx.Request) -> httpx.Response:
             calls.append(req)
-            return httpx.Response(200, json=gemini_body(segments_json()))
+            return httpx.Response(200, json=response(segments_json()))
 
         client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
         self.addAsyncCleanup(client.aclose)
-        classifier = GeminiClassifier(api_key="k", client=client, model="gemini-3.5-flash", sleep=RecordingSleep(),
+        classifier = OpenRouterClassifier(api_key="k", client=client, model="deepseek/deepseek-v4.1-flash", sleep=RecordingSleep(),
                                       prompt_version="segments-v2", render_format="index", include_silence=True)
         result = await classifier.classify(request(sents, silences, duration=end + 20.0))
         self.assertEqual((result.chunk_count, len(calls)), (1, 1))
@@ -140,14 +145,14 @@ class ForcedChunkingTests(unittest.IsolatedAsyncioTestCase):
         texts: list[str] = []
 
         def handler(req: httpx.Request) -> httpx.Response:
-            text = json.loads(req.content)["contents"][0]["parts"][0]["text"]
+            text = json.loads(req.content)["messages"][1]["content"]
             texts.append(text)
             [rows] = [rows for part, rows in answers.items() if part in text]
-            return httpx.Response(200, json=gemini_body(segments_json(*rows), prompt=20_000))
+            return httpx.Response(200, json=response(segments_json(*rows), prompt=20_000))
 
         client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
         self.addAsyncCleanup(client.aclose)
-        classifier = GeminiClassifier(api_key="k", client=client, model="gemini-3.5-flash", max_input_tokens=1_000,
+        classifier = OpenRouterClassifier(api_key="k", client=client, model="deepseek/deepseek-v4.1-flash", max_input_tokens=1_000,
                                       sleep=RecordingSleep(), rand=no_jitter, prompt_version="segments-v2",
                                       render_format="index", include_silence=True)
         with self.assertLogs("noadcast.classify.core", level="WARNING"):

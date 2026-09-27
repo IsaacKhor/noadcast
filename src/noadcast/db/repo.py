@@ -24,6 +24,7 @@ import sqlite3
 from dataclasses import dataclass
 from typing import Any, Iterable, Mapping, Protocol, Sequence, TypeVar
 
+from ..classifier_models import DEFAULT_MODEL, MODEL_IDS
 from ..config import Settings
 from ..transcribe.protocol import Sentence
 from .engine import Params, WriteTx
@@ -1218,33 +1219,64 @@ SETTING_KEYS = ("ad_analysis_enabled", "auto_process_enabled", "classifier", "cl
 
 
 def default_model_for(config: Settings, provider: str) -> str:
-    if provider == "claude":
-        return config.claude_model
-    if provider == "fake":
-        return "fake"
-    return config.gemini_model  # gemini and the gemini-audio control arm
+    if provider != "openrouter":
+        raise ValueError(f"unsupported classifier provider {provider!r}")
+    return config.openrouter_model
+
+
+def normalize_classifier_settings(tx: WriteTx, config: Settings, *, now: str) -> None:
+    """Upgrade persisted selections without touching classification history.
+
+    Materialize defaults too: an existing client may have mirrored defaults
+    from an older release without any settings row to announce their change.
+    Each inserted or changed row receives its own sync sequence; repeated
+    startup is a no-op.
+    """
+    stored = {row["key"]: json.loads(row["value_json"]) for row in tx.read("SELECT key, value_json FROM settings")}
+    provider = stored.get("classifier", config.classifier)
+    model = stored.get("classifier_model", config.openrouter_model)
+    changes = {key: value for key, value in (("classifier", provider), ("classifier_model", model)) if key not in stored}
+    if provider != "openrouter":
+        changes["classifier"] = "openrouter"
+        changes["classifier_model"] = DEFAULT_MODEL
+    elif model not in MODEL_IDS:
+        changes["classifier_model"] = DEFAULT_MODEL
+    for key, value in changes.items():
+        if stored.get(key) == value:
+            continue
+        tx.execute(
+            """INSERT INTO settings (key, value_json, updated_at, updated_seq) VALUES (?, ?, ?, ?)
+               ON CONFLICT (key) DO UPDATE SET value_json=excluded.value_json,
+               updated_at=excluded.updated_at, updated_seq=excluded.updated_seq""",
+            (key, json.dumps(value), now, tx.next_seq()),
+        )
 
 
 def load_server_settings(db: Reader, config: Settings) -> ServerSettings:
     stored = {row["key"]: json.loads(row["value_json"]) for row in db.read("SELECT key, value_json FROM settings")}
     classifier = stored.get("classifier", config.classifier)
+    model = stored.get("classifier_model") or config.openrouter_model
+    if classifier != "openrouter" or model not in MODEL_IDS:
+        classifier, model = "openrouter", DEFAULT_MODEL
     return ServerSettings(
         ad_analysis_enabled=bool(stored.get("ad_analysis_enabled", True)),
         auto_process_enabled=bool(stored.get("auto_process_enabled", True)),
         classifier=classifier,
-        classifier_model=stored.get("classifier_model") or default_model_for(config, classifier),
+        classifier_model=model,
     )
 
 
 def update_server_settings(
     tx: WriteTx, config: Settings, changes: Mapping[str, Any], *, now: str
 ) -> ServerSettings:
-    """Upsert changed keys, one seq per changed row. Switching the classifier
-    without naming a model resets the model to that provider's default, so a
-    Claude arm is never asked to run a Gemini model id."""
+    """Upsert changed keys, one sequence per changed row."""
     unknown = set(changes) - set(SETTING_KEYS)
     if unknown:
         raise ValueError(f"unknown settings: {sorted(unknown)}")
+    if "classifier" in changes and changes["classifier"] != "openrouter":
+        raise ValueError("only openrouter classification is supported")
+    if "classifier_model" in changes and changes["classifier_model"] not in MODEL_IDS:
+        raise ValueError("unsupported classifier model")
     current = load_server_settings(tx, config)
     target = dict(changes)
     if "classifier" in target and "classifier_model" not in target and target["classifier"] != current.classifier:

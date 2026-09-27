@@ -6,7 +6,7 @@ import unittest
 from pathlib import Path
 from typing import Any
 
-from noadcast.classify.fake import FakeClassifier, load_fixtures, slugify
+from tests.support.classifier_replay import FakeClassifier, load_fixtures, slugify
 from noadcast.classify.retry import ClassifyFailed
 from noadcast.classify.sanitize import finalize
 from tests.test_classify_helpers import (
@@ -75,7 +75,7 @@ class LookupTests(FakeTestCase, unittest.IsolatedAsyncioTestCase):
             [("intro", 0.0, 30.0), ("outro", 150.2, 185.0)],
         )
         self.assertEqual((result.provider, result.model, result.attempts, result.usage.input_tokens),
-                         ("fake", "fake", 1, 0))
+                         ("openrouter", "deepseek/deepseek-v4.1-flash", 1, 0))
         final = finalize(result.segments, episode())
         self.assertEqual((final[0].start_seconds, final[-1].end_seconds), (0.0, 185.0))
 

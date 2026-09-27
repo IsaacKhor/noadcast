@@ -4,6 +4,20 @@ The server runs as a systemd **user** unit on `laurel`, bound to loopback and
 the tailnet address (never `0.0.0.0`). Nothing here is installed
 automatically; run these commands once, as the user that owns the checkout.
 
+## Storage on laurel
+
+Bulk runtime storage lives on the SSD pool. The checkout uses these symlinks:
+
+```
+/home/ikhor/code/noadcast/data   -> /mnt/ssd-pool/services/noadcast/data
+/home/ikhor/code/noadcast/.cache -> /mnt/ssd-pool/services/noadcast/cache
+```
+
+This keeps the database, downloaded audio, model files, classifier responses,
+temporary files, and dependency/model caches on the pool while preserving the
+paths used by the service and CLI. Stop the service before relocating either
+directory. The API token and provider keys remain in `secrets.env` (mode 600).
+
 ## First-time setup
 
 ```bash
@@ -38,7 +52,7 @@ journalctl --user -u noadcast -f             # JSON lines, one per event
 journalctl --user -u noadcast -o cat | jq -c 'select(.episode_id == 42)'   # one episode end to end
 .venv/bin/noadcast status                    # queues, disk, spend, failures (reads the database)
 .venv/bin/noadcast refresh                   # queue a refresh of every feed now
-.venv/bin/noadcast reprocess 42 --provider claude   # a new classification; old ones are kept
+.venv/bin/noadcast reprocess 42 --model qwen/qwen3.8-flash   # old classifications are kept
 curl -s http://127.0.0.1:8765/health
 ```
 

@@ -40,7 +40,11 @@ final class QueueScrollingTests: XCTestCase {
         let row = app.cells.containing(.staticText, identifier: "Queue episode 20").firstMatch
         XCTAssertTrue(row.exists)
         if fullSwipe {
-            row.swipeRight()
+            // XCTest's default swipe can travel only half the row width,
+            // revealing the action instead of committing a full swipe.
+            let start = row.coordinate(withNormalizedOffset: CGVector(dx: 0.05, dy: 0.5))
+            let end = row.coordinate(withNormalizedOffset: CGVector(dx: 0.95, dy: 0.5))
+            start.press(forDuration: 0.05, thenDragTo: end)
         } else {
             let start = row.coordinate(withNormalizedOffset: CGVector(dx: 0.05, dy: 0.5))
             let end = row.coordinate(withNormalizedOffset: CGVector(dx: 0.4, dy: 0.5))

@@ -36,7 +36,45 @@ from noadcast.config import Settings  # noqa: E402
 DURATION = 200.0
 AD_WORD = {"tiny.en": "Akmee", "small.en": "Acme"}
 TITLES = {1: "Episode one", 2: "Episode two"}
-ARM = "fake:fake-model"
+ARM = "openrouter:deepseek/deepseek-v4.1-flash"
+
+
+class EvalArmTests(unittest.TestCase):
+    def test_only_openrouter_presets_can_be_recorded(self) -> None:
+        self.assertIsNone(harness.parse_arm(ARM)["thinking"])
+        self.assertIsNone(harness.parse_arm("openrouter:qwen/qwen3.8-flash")["thinking"])
+        self.assertEqual(harness.parse_arm("openrouter:openai/gpt-6-luna")["thinking"], "high")
+        for retired in ("fake:fake", "gemini:gemini-3.5-flash", "claude:claude-sonnet-5",
+                        "openrouter:google/gemini-3.5-flash", "openrouter:openai/gpt-6-luna:low"):
+            with self.subTest(arm=retired), self.assertRaises(VerificationError):
+                harness.parse_arm(retired)
+
+
+class UsageTotalsTests(unittest.TestCase):
+    def test_billed_cost_requires_every_call_to_report_it(self) -> None:
+        cases = [
+            ([{}, {}], None),
+            ([{"billed_cost_usd": None}, {"billed_cost_usd": None}], None),
+            ([{"billed_cost_usd": 0.01}, {}], None),
+            ([{}, {"billed_cost_usd": 0.01}], None),
+            ([{"billed_cost_usd": 0.01}, {"billed_cost_usd": None}], None),
+            ([{"billed_cost_usd": 0.01}, {"billed_cost_usd": 0.02}], 0.03),
+            ([{"billed_cost_usd": 0.0}, {"billed_cost_usd": 0.0}], 0.0),
+        ]
+        for reported, expected in cases:
+            with self.subTest(reported=reported):
+                rows = {
+                    score_ad_eval.Cell("tiny.en", 1, "seconds", ARM, repeat): {
+                        "usage": {"input_tokens": 100, "output_tokens": 10, **usage},
+                        "attempts": 1, "cost_usd": 0.04, "latency_ms": 10,
+                    }
+                    for repeat, usage in enumerate(reported, start=1)
+                }
+                totals = score_ad_eval.usage_totals({"arms": [{"label": ARM}]}, rows)[ARM]
+                self.assertEqual(totals["billed_cost_usd"], expected)
+                self.assertEqual(totals["input_tokens"], 200)
+                self.assertEqual(totals["output_tokens"], 20)
+                self.assertEqual(totals["cost_usd"], 0.08)
 
 
 def sections(variant: str) -> list[tuple[float, list[str]]]:
@@ -234,7 +272,7 @@ class DryRunTest(HarnessTestCase):
         self.assertEqual(span["mean_votes"], {"tiny.en": 0.0, "small.en": 1.0})
         self.assertEqual(span["text"], {"tiny.en": "", "small.en": ""})
         report = (self.eval_dir / "AD_EVAL.md").read_text()
-        self.assertTrue(report.split("\n")[2].startswith("**SUFFICES: with fake:fake-model and the index+silence"))
+        self.assertTrue(report.split("\n")[2].startswith(f"**SUFFICES: with {ARM} and the index+silence"))
         self.assertIn("The TAL corpus contains no third-party advertisements", report)
         self.assertIn("measures intro/outro/house-promo agreement, not ad detection", report)
         verification = json.loads((self.eval_dir / "ad-eval-verification.json").read_text())

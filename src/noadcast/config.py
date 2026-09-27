@@ -16,6 +16,8 @@ from dataclasses import dataclass, field, fields, replace
 from pathlib import Path
 from typing import Mapping
 
+from .classifier_models import DEFAULT_MODEL, MODEL_IDS
+
 log = logging.getLogger(__name__)
 
 GIB = 1024**3
@@ -70,18 +72,15 @@ class Settings:
     audio_url_ttl_seconds: int = 12 * 3600
 
     # Classification
-    classifier: str = "gemini"  # gemini | claude | gemini-audio | fake
-    gemini_model: str = "gemini-3.5-flash"
-    claude_model: str = "claude-sonnet-5"
-    thinking_level: str | None = None  # minimal | low | medium | high
+    classifier: str = "openrouter"
+    openrouter_model: str = DEFAULT_MODEL
     prompt_version: str = "segments-v3"
     transcript_format: str = "sentences"  # production: [22.24-23.88] A complete sentence.
     include_silence: bool = False  # older evaluation formats may interleave silence rows
     snap_to_silence: bool = True
     classifier_max_input_tokens: int = 120_000
-    gemini_api_key: str | None = field(default=None, repr=False)
-    anthropic_api_key: str | None = field(default=None, repr=False)
-    gemini_api_base: str = "https://generativelanguage.googleapis.com"
+    openrouter_api_key: str | None = field(default=None, repr=False)
+    openrouter_api_base: str = "https://openrouter.ai/api/v1"
 
     # Transcription
     asr_model_dir: Path = Path("data/models/tiny.en")
@@ -176,17 +175,14 @@ class Settings:
             "NOADCAST_ALLOW_NO_AUTH": ("allow_no_auth", _bool),
             "NOADCAST_AUDIO_URL_TTL_SECONDS": ("audio_url_ttl_seconds", int),
             "NOADCAST_CLASSIFIER": ("classifier", str),
-            "NOADCAST_GEMINI_MODEL": ("gemini_model", str),
-            "NOADCAST_CLAUDE_MODEL": ("claude_model", str),
-            "NOADCAST_THINKING_LEVEL": ("thinking_level", _optional),
+            "NOADCAST_OPENROUTER_MODEL": ("openrouter_model", str),
             "NOADCAST_PROMPT_VERSION": ("prompt_version", str),
             "NOADCAST_TRANSCRIPT_FORMAT": ("transcript_format", str),
             "NOADCAST_INCLUDE_SILENCE": ("include_silence", _bool),
             "NOADCAST_SNAP_TO_SILENCE": ("snap_to_silence", _bool),
             "NOADCAST_CLASSIFIER_MAX_INPUT_TOKENS": ("classifier_max_input_tokens", int),
-            "GEMINI_API_KEY": ("gemini_api_key", _optional),
-            "ANTHROPIC_API_KEY": ("anthropic_api_key", _optional),
-            "GEMINI_API_BASE": ("gemini_api_base", str),
+            "OPENROUTER_API_KEY": ("openrouter_api_key", _optional),
+            "OPENROUTER_API_BASE": ("openrouter_api_base", str),
             "NOADCAST_ASR_MODEL_DIR": ("asr_model_dir", Path),
             "NOADCAST_ASR_MODEL_ID": ("asr_model_id", str),
             "NOADCAST_ASR_LANGUAGE": ("asr_language", _optional),
@@ -250,8 +246,10 @@ class Settings:
                 raise ValueError("NOADCAST_API_TOKEN is required (or set NOADCAST_ALLOW_NO_AUTH=1 for local testing)")
             if len(self.api_token) < 32:
                 raise ValueError("NOADCAST_API_TOKEN must be at least 32 characters")
-        if self.classifier not in {"gemini", "claude", "gemini-audio", "fake"}:
+        if self.classifier != "openrouter":
             raise ValueError(f"unknown NOADCAST_CLASSIFIER {self.classifier!r}")
+        if self.openrouter_model not in MODEL_IDS:
+            raise ValueError(f"unsupported NOADCAST_OPENROUTER_MODEL {self.openrouter_model!r}; expected one of {MODEL_IDS}")
         if self.transcript_format not in {"index", "seconds", "sentences"}:
             raise ValueError(f"unknown NOADCAST_TRANSCRIPT_FORMAT {self.transcript_format!r}")
         if self.transcript_format == "sentences" and self.include_silence:

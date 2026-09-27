@@ -7,7 +7,6 @@ from pathlib import Path
 from typing import Any, Sequence
 
 import httpx
-import httpx2
 
 from noadcast.classify.base import ClassifyRequest, DetectedSegment
 from noadcast.transcribe.protocol import Sentence, SilenceRegion
@@ -153,18 +152,6 @@ def httpx_client(recorder: Recorder) -> httpx.AsyncClient:
         return httpx.Response(status, json=body, headers=headers[0] if headers else None)
 
     return httpx.AsyncClient(transport=httpx.MockTransport(handler))
-
-
-def httpx2_client(recorder: Recorder) -> httpx2.AsyncClient:
-    def handler(request: httpx2.Request) -> httpx2.Response:
-        recorder.requests.append(request)
-        reply = recorder.next_reply()
-        if isinstance(reply, BaseException):
-            raise reply
-        status, body, *headers = reply
-        return httpx2.Response(status, json=body, headers=headers[0] if headers else None)
-
-    return httpx2.AsyncClient(transport=httpx2.MockTransport(handler))
 
 
 class RecordingSleep:

@@ -3,14 +3,14 @@
 A self-hosted podcast system that skips ads, intros, and outros. A Python
 server polls RSS feeds, downloads each episode once, transcribes it locally
 with faster-whisper `tiny.en` using word-level timestamps joined into
-sentences, and asks a cloud model (Gemini or Claude) to find the skippable
+sentences, and asks a cloud model through OpenRouter to find the skippable
 segments from the transcript text alone — audio never leaves the machine
 except to the phone. The iOS app is a thin client: it syncs podcasts,
 episodes, and skip markers from the server, and streams or downloads the
 audio the server stores.
 
 ```
-            RSS feeds                       Gemini / Claude
+            RSS feeds                         OpenRouter
                 │                         (transcript text only)
                 ▼                                   ▲
  ┌──────────────────────────── laurel ──────────────┼──────────────┐
@@ -38,11 +38,17 @@ classify, evict), a pool of spawned faster-whisper workers, and the HTTP API.
 Configuration lives in `secrets.env` (see `secrets.env.example` and
 `src/noadcast/config.py`); API keys never leave the server.
 
+Set `OPENROUTER_API_KEY`; OpenRouter is the only classification provider.
+The default is DeepSeek 4.1 Flash (`deepseek/deepseek-v4.1-flash`). Select
+Qwen 3.8 Flash (`qwen/qwen3.8-flash`) or GPT 6 Luna (`openai/gpt-6-luna`)
+in iOS Settings or with `NOADCAST_OPENROUTER_MODEL`. GPT 6 Luna always uses
+high reasoning effort. Only transcript text is sent for classification.
+
 ```bash
 export UV_CACHE_DIR="$PWD/.cache/uv" TMPDIR="$PWD/.cache/tmp"
 uv pip install --python .venv/bin/python -e .
 cp secrets.env.example secrets.env && chmod 600 secrets.env
-.venv/bin/noadcast token        # paste into NOADCAST_API_TOKEN; add GEMINI_API_KEY / ANTHROPIC_API_KEY
+.venv/bin/noadcast token        # paste into NOADCAST_API_TOKEN; add OPENROUTER_API_KEY
 .venv/bin/noadcast models link benchmarks/tal/models/tiny.en   # or: noadcast models fetch
 .venv/bin/noadcast migrate
 .venv/bin/noadcast serve
@@ -65,7 +71,7 @@ How an episode flows:
    (`src/noadcast/transcribe/joiner.py`) and stored along with the words.
 4. **Classify** joins pause and length fragments through their next punctuation
    boundary, then sends lines such as `[22.24-23.88] A complete sentence.`
-   to Gemini or Claude. Each returned intro, ad, or outro has start and end
+   to OpenRouter. Each returned intro, ad, or outro has start and end
    timestamps and a summary of its content. The server sanitises boundaries
    against the transcript and true audio length, then exposes the segments
    as episode markers for the app.
@@ -121,8 +127,8 @@ noise; no human labels exist, so it reports agreement, not accuracy. The
 benchmarks/tal/models/small.en --model-id Systran/faster-whisper-small.en
 --model-revision d1d751a5f8271d482d14ca55d9e2deeebbae577f --word-timestamps
 --run-id small-en-words-20260922` on a shared host, so its timings are not a
-benchmark. **It has not been run yet: it needs `GEMINI_API_KEY` (and
-`ANTHROPIC_API_KEY` for `--arm claude:claude-sonnet-5`) in `secrets.env`.**
+benchmark. Recording requires `OPENROUTER_API_KEY` in `secrets.env`;
+`--arm openrouter:deepseek/deepseek-v4.1-flash` selects the default model.
 Record once, then score and report offline:
 
 ```bash

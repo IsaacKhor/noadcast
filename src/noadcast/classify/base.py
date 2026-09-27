@@ -39,14 +39,29 @@ class TokenUsage:
     output_tokens: int = 0
     cached_input_tokens: int = 0
     cache_write_tokens: int = 0
+    # OpenRouter's actual account charge. Kept separate from token counts;
+    # retries and chunks accumulate it just as they accumulate billed tokens.
+    billed_cost_usd: float | None = None
 
     def __add__(self, other: "TokenUsage") -> "TokenUsage":
+        # Empty retry/accumulator usage is neutral. If an actual billed
+        # response omitted its cost, keep the aggregate unknown so pricing
+        # can fall back for the whole call instead of recording a partial sum.
+        missing_charge = any(
+            item.billed_cost_usd is None
+            and (item.input_tokens or item.thought_tokens or item.output_tokens)
+            for item in (self, other)
+        )
+        billed_cost = None
+        if not missing_charge and (self.billed_cost_usd is not None or other.billed_cost_usd is not None):
+            billed_cost = (self.billed_cost_usd or 0.0) + (other.billed_cost_usd or 0.0)
         return TokenUsage(
             self.input_tokens + other.input_tokens,
             self.thought_tokens + other.thought_tokens,
             self.output_tokens + other.output_tokens,
             self.cached_input_tokens + other.cached_input_tokens,
             self.cache_write_tokens + other.cache_write_tokens,
+            billed_cost,
         )
 
 

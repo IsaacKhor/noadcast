@@ -32,6 +32,7 @@ import noadcast
 from noadcast.classify import base as classify_base, costs, render as classify_render, sanitize
 from noadcast.classify.base import ClassifierError, ClassifyRequest, ClassifyResult, DetectedSegment, TokenUsage
 from noadcast.classify.registry import ClassifierRegistry
+from noadcast.classifier_models import MODEL_IDS, thinking_for_model
 from noadcast.config import Settings
 from noadcast.timeutil import now_iso
 from noadcast.transcribe import joiner
@@ -54,7 +55,7 @@ RENDERS = {
 # Repeat numbers compared by each pairing: self is the LLM noise floor on one transcript, cross_seed
 # checks that floor on another repeat pair, variant compares a candidate transcript to the reference.
 PAIRINGS = {"self": (1, 2), "cross_seed": (1, 3), "variant": (1, 1)}
-PROVIDERS = ("gemini", "claude", "fake")
+PROVIDERS = ("openrouter",)
 DEFAULT_CORPUS = "benchmarks/tal"
 DEFAULT_VARIANTS = (
     "tiny.en=benchmarks/tal/runs/wt-crossover-2-on-20260922",
@@ -124,7 +125,10 @@ def parse_arm(label: str) -> dict:
     model, _, thinking = rest.partition(":")
     require(provider in PROVIDERS and bool(model),
             f"arm must be PROVIDER:MODEL[:THINKING] with PROVIDER in {', '.join(PROVIDERS)}: {label!r}")
-    return {"label": label, "provider": provider, "model": model, "thinking": thinking or None}
+    require(model in MODEL_IDS, f"model must be one of {MODEL_IDS}: {label!r}")
+    expected_thinking = thinking_for_model(model)
+    require(not thinking or thinking == expected_thinking, f"thinking is fixed by the model preset: {label!r}")
+    return {"label": label, "provider": provider, "model": model, "thinking": expected_thinking}
 
 
 def eval_settings() -> Settings:
@@ -506,7 +510,7 @@ def main() -> int:
                        help="ASR run with word timestamps; repeatable (default tiny.en and small.en TAL runs)")
     setup.add_argument("--reference", help=f"variant the others are compared against (default {DEFAULT_REFERENCE})")
     setup.add_argument("--arm", action="append", metavar="PROVIDER:MODEL[:THINKING]",
-                       help="classifier arm; repeatable (default gemini with NOADCAST_GEMINI_MODEL)")
+                       help="OpenRouter model preset; repeatable (default NOADCAST_OPENROUTER_MODEL)")
     setup.add_argument("--repeats", type=int, help="calls per cell (default 3)")
     setup.add_argument("--episodes", help="comma-separated corpus indexes (default: all)")
     parser.set_defaults(mode="replay")
@@ -523,7 +527,7 @@ def main() -> int:
         return prepare(
             eval_dir, resolve(args.corpus or DEFAULT_CORPUS), dict(map(parse_variant, args.variant or DEFAULT_VARIANTS)),
             args.reference or DEFAULT_REFERENCE,
-            [parse_arm(label) for label in args.arm or [f"gemini:{settings.gemini_model}"]], args.repeats or 3,
+            [parse_arm(label) for label in args.arm or [f"openrouter:{settings.openrouter_model}"]], args.repeats or 3,
             [int(item) for item in args.episodes.split(",")] if args.episodes else None, settings)
 
     results = run_eval(eval_dir, args.mode, create=create, concurrency=args.concurrency)

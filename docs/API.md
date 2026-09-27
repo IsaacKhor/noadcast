@@ -130,9 +130,9 @@ phone, playback speed) are not server fields.
 {
   "adAnalysisEnabled": true,
   "autoProcessEnabled": true,
-  "classifier": "gemini",
-  "classifierModel": "gemini-3.5-flash",
-  "availableClassifiers": {"gemini": false, "claude": false, "gemini-audio": false, "fake": true}
+  "classifier": "openrouter",
+  "classifierModel": "deepseek/deepseek-v4.1-flash",
+  "availableClassifiers": {"openrouter": false}
 }
 ```
 
@@ -241,7 +241,7 @@ arrives via `/sync`.
   transcribed and classified. Idempotent; `jobId` is null when nothing is
   left to do. Clients call this when the user plays or downloads an episode
   whose `audioState` is not `present`.
-- `POST /api/v1/episodes/{id}/reanalyze` `{"provider"?: "gemini"|"claude"|"gemini-audio"|"fake", "model"?: str, "thinking"?: str, "retranscribe"?: bool}`
+- `POST /api/v1/episodes/{id}/reanalyze` `{"provider"?: "openrouter", "model"?: str, "thinking"?: str, "retranscribe"?: bool}`
   → `202 {"jobId": n}`; `422` if the provider has no server-side key. Keeps prior
   classifications for comparison. One classify job runs per episode at a time, so a
   second request while one is live folds into it.
@@ -283,9 +283,22 @@ arrives via `/sync`.
 
 - `GET /api/v1/settings` → `200 Settings`; `PATCH /api/v1/settings`
   `{"adAnalysisEnabled"?, "autoProcessEnabled"?, "classifier"?, "classifierModel"?}` → `200 Settings`.
+  `classifier` accepts only `openrouter`; `OPENROUTER_API_KEY` is required on the server.
+  `classifierModel` (and reanalyze `model`) accepts three presets:
+  `deepseek/deepseek-v4.1-flash` (default), `qwen/qwen3.8-flash`, and
+  `openai/gpt-6-luna` (always high reasoning effort). Reasoning is determined
+  by the preset, so no separate settings field is needed.
+  `NOADCAST_OPENROUTER_MODEL` overrides the default model. Existing historical
+  classifications retain their original provider, model, markers, and costs.
 - `GET /api/v1/usage?days=30` →
   `200 {"days": [{"date": "2026-09-22", "calls", "inputTokens", "thoughtTokens", "outputTokens", "costUsd"}], "byModel": [{"provider", "model", "calls", "inputTokens", "thoughtTokens", "outputTokens", "costUsd"}], "totals": {…}}`.
-  `thoughtTokens` is Gemini-only; Anthropic counts thinking inside `outputTokens`.
+  OpenRouter costs use the billed `usage.cost` reported by the provider, summed
+  across requests and stored with price-table version `openrouter-reported-v1`.
+  Its input/thought/output cost breakdown is unavailable (stored as zero), while
+  the total remains billed cost. If the response omits billed cost, the server
+  falls back to its price table for known models.
+  `thoughtTokens` records separately reported reasoning usage. Historical
+  provider rows preserve their original token accounting.
 - `POST /api/v1/opml` (body: OPML XML) → `200 {"added": [Podcast], "existing": [Podcast], "failed": [{"feedUrl", "error"}]}`.
   Subscribes without inline fetches; refreshes are enqueued.
 - `GET /api/v1/opml` → OPML export (`text/x-opml`).

@@ -30,7 +30,7 @@ from typing import Any, AsyncIterator
 import httpx
 
 from noadcast.api.app import create_app
-from noadcast.classify.registry import ClassifierRegistry
+from tests.support.classifier_replay import ReplayRegistry
 from noadcast.config import Settings, settings_for_tests
 from noadcast.db import repo
 from noadcast.pipeline import jobs as job_table
@@ -76,7 +76,7 @@ def local_feed(base_url: str) -> tuple[bytes, list[dict[str, Any]]]:
 
 def e2e_settings(data_dir: Path) -> Settings:
     return settings_for_tests(
-        data_dir, allow_no_auth=False, api_token=TOKEN, classifier="fake", signing_secret=b"e2e-signing-secret"
+        data_dir, allow_no_auth=False, api_token=TOKEN, classifier="openrouter", signing_secret=b"e2e-signing-secret"
     )
 
 
@@ -102,7 +102,7 @@ class Server:
         self.app = create_app(
             settings,
             transcriber=transcriber,
-            classifiers=ClassifierRegistry(settings, fake_fixtures=LLM_FIXTURES),
+            classifiers=ReplayRegistry(settings, LLM_FIXTURES),
             scheduler_config=FAST,
         )
         self.api = httpx.AsyncClient(

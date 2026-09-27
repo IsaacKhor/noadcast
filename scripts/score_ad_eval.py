@@ -275,9 +275,16 @@ def usage_totals(config: dict, rows: dict[Cell, dict]) -> dict:
     totals = {}
     for arm in config["arms"]:
         selected = [row for cell, row in rows.items() if cell.arm == arm["label"]]
+        token_fields = {field for row in selected for field in row["usage"]} - {"billed_cost_usd"}
+        billed_costs = [row["usage"].get("billed_cost_usd") for row in selected]
+        # Old cassettes lack billed cost, and providers may report null. A
+        # partial sum would understate the total; preserve unknown as null.
+        billed_cost = (sum(billed_costs) if billed_costs and all(cost is not None for cost in billed_costs)
+                       else None)
         totals[arm["label"]] = {
             "calls": len(selected), "attempts": sum(row["attempts"] for row in selected),
-            **{field: sum(row["usage"][field] for row in selected) for field in selected[0]["usage"]},
+            **{field: sum(row["usage"].get(field, 0) for row in selected) for field in sorted(token_fields)},
+            "billed_cost_usd": billed_cost,
             "cost_usd": sum(row["cost_usd"] for row in selected),
             "median_latency_ms": percentile([row["latency_ms"] for row in selected], 0.5),
         }

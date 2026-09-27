@@ -1,86 +1,53 @@
 from __future__ import annotations
 
-import datetime as dt
 import unittest
 
 from noadcast.classify.base import TokenUsage
 from noadcast.classify.costs import PRICE_TABLE_VERSION, PRICES, cost_for, price_for
-from noadcast.config import Settings
-
-# The Gemini lineup in `git show c1a53ce:ios_app/Noadcast/Models/AdDetectionProvider.swift`.
-APP_GEMINI_MODELS = (
-    "gemini-3-flash-preview",
-    "gemini-3.5-flash",
-    "gemini-3.6-flash",
-    "gemini-3.7-flash",
-    "gemini-3.1-flash-lite",
-    "gemini-2.5-flash",
-    "gemini-2.5-flash-lite",
-)
 
 
 class CostTests(unittest.TestCase):
-    def test_gemini_prices_cached_input_and_thinking(self) -> None:
-        usage = TokenUsage(input_tokens=100_000, thought_tokens=2_000, output_tokens=1_000, cached_input_tokens=40_000)
-        cost = cost_for("gemini", "gemini-3.5-flash", usage)
-        # 60k uncached × $1.50 + 40k cached × $0.15; thinking and output × $9.00.
-        self.assertAlmostEqual(cost.input_usd, 0.096)
-        self.assertAlmostEqual(cost.thought_usd, 0.018)
-        self.assertAlmostEqual(cost.output_usd, 0.009)
-        self.assertAlmostEqual(cost.total_usd, 0.123)
-        self.assertEqual(cost.price_table_version, PRICE_TABLE_VERSION)
+    def test_reported_charge_includes_retries_and_chunks(self) -> None:
+        usage = TokenUsage() + TokenUsage(input_tokens=100, billed_cost_usd=0.001)
+        usage += TokenUsage(input_tokens=200, billed_cost_usd=0.002)
+        cost = cost_for("openrouter", "deepseek/deepseek-v4.1-flash", usage)
+        self.assertEqual(usage.input_tokens, 300)
+        self.assertAlmostEqual(cost.total_usd, 0.003)
+        self.assertEqual(cost.price_table_version, "openrouter-reported-v1")
+        self.assertEqual((cost.input_usd, cost.thought_usd, cost.output_usd), (0, 0, 0))
 
-    def test_claude_prices_cache_reads_and_writes(self) -> None:
-        usage = TokenUsage(input_tokens=30_000, output_tokens=2_000, cached_input_tokens=5_000, cache_write_tokens=1_000)
-        cost = cost_for("claude", "claude-sonnet-5", usage)
-        # 24k × $2 + 5k × $0.20 + 1k × $2.50; output × $10.
-        self.assertAlmostEqual(cost.input_usd, 0.0515)
-        self.assertEqual(cost.thought_usd, 0.0)
-        self.assertAlmostEqual(cost.output_usd, 0.02)
-        self.assertAlmostEqual(cost.total_usd, 0.0715)
-        haiku = cost_for("claude", "claude-haiku-4-5", TokenUsage(input_tokens=1_000_000, output_tokens=1_000_000))
-        self.assertAlmostEqual(haiku.total_usd, 6.0)
+    def test_zero_charge_and_missing_charge_are_distinct(self) -> None:
+        free = cost_for("openrouter", "deepseek/deepseek-v4.1-flash", TokenUsage(input_tokens=100, billed_cost_usd=0.0))
+        self.assertEqual(free.total_usd, 0.0)
+        self.assertEqual(free.price_table_version, "openrouter-reported-v1")
+        missing = TokenUsage() + TokenUsage(input_tokens=1_000_000, output_tokens=1_000_000)
+        self.assertIsNone(missing.billed_cost_usd)
+        fallback = cost_for("openrouter", "deepseek/deepseek-v4.1-flash", missing)
+        self.assertAlmostEqual(fallback.total_usd, 0.325)
+        self.assertEqual(fallback.price_table_version, PRICE_TABLE_VERSION)
+        partial = TokenUsage(input_tokens=100, billed_cost_usd=0.001) + TokenUsage(input_tokens=200)
+        self.assertIsNone(partial.billed_cost_usd)
 
-    def test_a_typical_hour_long_episode_costs_cents(self) -> None:
-        usage = TokenUsage(input_tokens=19_400, thought_tokens=1_500, output_tokens=300)
-        for provider, model in (("gemini", "gemini-3.5-flash"), ("claude", "claude-sonnet-5")):
-            with self.subTest(model=model):
-                self.assertLess(cost_for(provider, model, usage).total_usd, 0.06)
+    def test_fallback_prices_cache_and_reasoning_without_double_counting(self) -> None:
+        usage = TokenUsage(input_tokens=100_000, cached_input_tokens=40_000,
+                           cache_write_tokens=10_000, thought_tokens=2_000, output_tokens=1_000)
+        cost = cost_for("openrouter", "qwen/qwen3.8-flash", usage)
+        self.assertAlmostEqual(cost.input_usd, (50_000 * .15 + 40_000 * .016 + 10_000 * .20) / 1e6)
+        self.assertAlmostEqual(cost.thought_usd, 2_000 * .47 / 1e6)
+        self.assertAlmostEqual(cost.output_usd, 1_000 * .47 / 1e6)
+        self.assertAlmostEqual(cost.total_usd, cost.input_usd + cost.thought_usd + cost.output_usd)
 
-    def test_scheduled_price_changes_apply_by_call_date(self) -> None:
-        usage = TokenUsage(input_tokens=1_000_000, output_tokens=1_000_000)
-        before = dt.datetime(2026, 12, 31, 23, 30, tzinfo=dt.UTC)
-        after = dt.datetime(2027, 1, 1, 0, 30, tzinfo=dt.UTC)
-        self.assertAlmostEqual(cost_for("gemini", "gemini-3.6-flash", usage, at=before).total_usd, 4.50)
-        self.assertAlmostEqual(cost_for("gemini", "gemini-3.6-flash", usage, at=after).total_usd, 9.00)
+    def test_every_supported_model_has_a_documented_fallback(self) -> None:
+        models = {"deepseek/deepseek-v4.1-flash", "qwen/qwen3.8-flash", "openai/gpt-6-luna"}
+        self.assertEqual(set(PRICES), {("openrouter", model) for model in models})
+        for model in models:
+            self.assertIsNotNone(price_for("openrouter", model))
+            self.assertTrue(PRICES[("openrouter", model)][0].source.startswith("https://openrouter.ai/"))
 
-    def test_the_audio_arm_pays_audio_input_rates(self) -> None:
-        usage = TokenUsage(input_tokens=1_000_000)
-        self.assertAlmostEqual(cost_for("gemini", "gemini-2.5-flash", usage).input_usd, 0.30)
-        self.assertAlmostEqual(cost_for("gemini-audio", "gemini-2.5-flash", usage).input_usd, 1.00)
-
-    def test_unknown_models_cost_nothing_and_warn(self) -> None:
-        with self.assertLogs("noadcast.classify.costs", level="WARNING") as logs:
-            cost = cost_for("gemini", "gemini-9-ultra", TokenUsage(input_tokens=5_000, output_tokens=100))
-        self.assertEqual(cost.total_usd, 0.0)
-        self.assertIn("gemini-9-ultra", logs.output[0])
-
-    def test_the_fake_is_free_without_warnings(self) -> None:
-        with self.assertNoLogs("noadcast.classify.costs", level="WARNING"):
-            self.assertEqual(cost_for("fake", "fake", TokenUsage(input_tokens=5_000)).total_usd, 0.0)
-
-    def test_every_configured_model_is_priced(self) -> None:
-        defaults = Settings()
-        self.assertIsNotNone(price_for("gemini", defaults.gemini_model))
-        self.assertIsNotNone(price_for("claude", defaults.claude_model))
-        self.assertIsNotNone(price_for("claude", "claude-haiku-4-5"))
-        for model in APP_GEMINI_MODELS:
-            for provider in ("gemini", "gemini-audio"):
-                with self.subTest(provider=provider, model=model):
-                    self.assertIsNotNone(price_for(provider, model))
-        for entries in PRICES.values():
-            for entry in entries:
-                self.assertTrue(entry.source.startswith("https://"))
+    def test_unknown_model_warns_when_no_charge_was_reported(self) -> None:
+        with self.assertLogs("noadcast.classify.costs", level="WARNING"):
+            cost = cost_for("openrouter", "unlisted", TokenUsage(input_tokens=100))
+        self.assertEqual(cost.total_usd, 0)
 
 
 if __name__ == "__main__":

@@ -133,14 +133,15 @@ class SyncPagingTests(ApiTestCase):
 
     async def test_settings_change_arrives_with_the_next_page(self) -> None:
         cursor = (await self.page(0, 1000))["nextSince"]
-        await self.client.patch("/api/v1/settings", json={"classifier": "claude"})
+        await self.client.patch("/api/v1/settings", json={"classifierModel": "qwen/qwen3.8-flash"})
         body = await self.page(cursor, 200)
-        self.assertEqual(body["settings"]["classifier"], "claude")
-        self.assertEqual(body["settings"]["classifierModel"], self.settings.claude_model)
+        self.assertEqual(body["settings"]["classifier"], "openrouter")
+        self.assertEqual(body["settings"]["classifierModel"], "qwen/qwen3.8-flash")
 
     async def test_limit_is_clamped(self) -> None:
         tiny = await self.page(0, 0)
-        self.assertEqual(len(tiny["podcasts"]) + len(tiny["episodes"]), 1)
+        self.assertEqual(tiny["nextSince"], 1, "limit clamps to one settings row")
+        self.assertIsNotNone(tiny["settings"])
         self.assertIs(tiny["hasMore"], True)
         huge = await self.page(0, 50_000)
         self.assertIs(huge["hasMore"], False)

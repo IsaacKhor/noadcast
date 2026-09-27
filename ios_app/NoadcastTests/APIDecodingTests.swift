@@ -158,6 +158,14 @@ struct APIDecodingTests {
         #expect(settings.availableClassifiers == ["gemini": false, "claude": false, "gemini-audio": false, "fake": true])
     }
 
+    @Test func openRouterSettingsDecode() throws {
+        let json = #"{"adAnalysisEnabled":true,"autoProcessEnabled":true,"classifier":"openrouter","classifierModel":"deepseek/deepseek-v4.1-flash","availableClassifiers":{"openrouter":true}}"#
+        let settings = try APIJSON.makeDecoder().decode(ServerSettingsDTO.self, from: Data(json.utf8))
+        #expect(settings.classifier == "openrouter")
+        #expect(settings.classifierModel == ClassifierModel.defaultValue.rawValue)
+        #expect(settings.availableClassifiers["openrouter"] == true)
+    }
+
     @Test func timestampsAcceptFractionAndOffsetVariants() throws {
         let cases: [(text: String, epoch: Double)] = [
             ("2026-09-22T18:03:11.123Z", 1_790_100_191.123),

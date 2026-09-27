@@ -36,9 +36,9 @@ class SettingsTests(ApiTestCase):
             {
                 "adAnalysisEnabled": True,
                 "autoProcessEnabled": True,
-                "classifier": "gemini",
-                "classifierModel": self.settings.gemini_model,
-                "availableClassifiers": {"gemini": False, "claude": False, "gemini-audio": False, "fake": True},
+                "classifier": "openrouter",
+                "classifierModel": self.settings.openrouter_model,
+                "availableClassifiers": {"openrouter": False},
             },
         )
 
@@ -54,18 +54,16 @@ class SettingsTests(ApiTestCase):
                 self.assertEqual((await self.client.patch("/api/v1/settings", json=body)).status_code, 200)
                 self.assertEqual(self.ctx.db.current_seq(), seq + 1, "no change, no seq")
 
-    async def test_switching_classifier_resets_or_sets_the_model(self) -> None:
-        claude = (await self.client.patch("/api/v1/settings", json={"classifier": "claude"})).json()
-        self.assertEqual((claude["classifier"], claude["classifierModel"]), ("claude", self.settings.claude_model))
-        haiku = (
-            await self.client.patch("/api/v1/settings", json={"classifier": "claude", "classifierModel": "claude-haiku-4-5"})
-        ).json()
-        self.assertEqual(haiku["classifierModel"], "claude-haiku-4-5")
-        audio = (await self.client.patch("/api/v1/settings", json={"classifier": "gemini-audio"})).json()
-        self.assertEqual((audio["classifier"], audio["classifierModel"]), ("gemini-audio", self.settings.gemini_model))
+    async def test_each_supported_model_can_be_selected(self) -> None:
+        from noadcast.classifier_models import MODEL_IDS
+        for model in MODEL_IDS:
+            response = await self.client.patch("/api/v1/settings", json={"classifier": "openrouter", "classifierModel": model})
+            self.assertEqual(response.status_code, 200, response.text)
+            self.assertEqual(response.json()["classifierModel"], model)
+            self.assertEqual((await self.client.get("/api/v1/settings")).json(), response.json())
 
     async def test_invalid_values_are_rejected(self) -> None:
-        for body in ({"classifier": "gpt"}, {"classifierModel": ""}, {"autoProcessEnabled": "sometimes"}):
+        for body in ({"classifier": "gpt"}, {"classifier": "gemini"}, {"classifier": "fake"}, {"classifierModel": "google/gemini-3.5-flash"}, {"classifierModel": ""}, {"autoProcessEnabled": "sometimes"}):
             with self.subTest(body=body):
                 self.assertError(await self.client.patch("/api/v1/settings", json=body), 422, "invalidRequest")
 

@@ -44,10 +44,12 @@ final class AppSettings {
     /// seconds for another segment to chain-skip. Set to 0 to disable.
     var chainSkipGapSeconds: Int = 5
 
-    /// Server mirror (read-only in the UI).
+    /// Server mirror, changed through the settings API.
     var serverAutoProcessEnabled: Bool = true
     var serverClassifier: String?
     var serverClassifierModel: String?
+    /// Unknown until a server reports its OpenRouter key availability.
+    var serverOpenRouterAvailable: Bool?
 
     init(
         defaultPlaybackSpeed: Double = 1.0,

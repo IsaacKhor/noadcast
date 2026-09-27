@@ -41,7 +41,7 @@ nonisolated struct RetryPolicy: Sendable, Equatable {
 ///   retried, so a bad token cannot cause a retry storm.
 /// * Never logs the token or signed audio URLs.
 actor NoadcastAPIClient {
-    static let shared = NoadcastAPIClient(
+    static let shared: NoadcastAPIClient = NoadcastAPIClient(
         session: NoadcastAPIClient.makeDefaultSession(),
         endpointProvider: { APIConfiguration.currentEndpoint },
         retryPolicy: .standard,
@@ -259,10 +259,14 @@ actor NoadcastAPIClient {
         return try decode(ServerSettingsDTO.self, data)
     }
 
-    func updateSettings(adAnalysisEnabled: Bool? = nil, autoProcessEnabled: Bool? = nil) async throws -> ServerSettingsDTO {
+    func updateSettings(adAnalysisEnabled: Bool? = nil, autoProcessEnabled: Bool? = nil, classifierModel: String? = nil) async throws -> ServerSettingsDTO {
         var body: [String: Any] = [:]
         if let adAnalysisEnabled { body["adAnalysisEnabled"] = adAnalysisEnabled }
         if let autoProcessEnabled { body["autoProcessEnabled"] = autoProcessEnabled }
+        if let classifierModel {
+            body["classifier"] = "openrouter"
+            body["classifierModel"] = classifierModel
+        }
         let request = try makeRequest("PATCH", "/api/v1/settings", jsonBody: body)
         let (data, _) = try await send(request)
         return try decode(ServerSettingsDTO.self, data)

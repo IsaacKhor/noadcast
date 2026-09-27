@@ -8,14 +8,17 @@ wheels/
 
 # Virtual environments
 .venv
-.cache/
+.cache
 vendor/
 
 # Server runtime data (database, audio, models) and secrets
-data/
+data
 secrets.env
 
 # Benchmark inputs, models, run directories, and full transcripts are large
 # and regenerable; reports, manifests, the feed snapshot, and small eval
 # fixtures are tracked so results stay reproducible.
 benchmarks/*
+
+# macOS AppleDouble metadata must never enter deployments.
+._*

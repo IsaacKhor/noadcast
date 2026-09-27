@@ -201,7 +201,7 @@ struct UsageHistoryView: View {
         } header: {
             Text("Server Tokens Per Day")
         } footer: {
-            Text("Thought tokens are reported by Gemini only; Claude counts its thinking inside output tokens.")
+            Text("Thought tokens show reasoning usage when reported by OpenRouter.")
         }
     }
 

@@ -61,6 +61,7 @@ struct SettingsView: View {
                 streamingSection
                 if let s = settings {
                     downloadsSection(settings: s)
+                    adAnalysisSection(settings: s)
                 }
                 importSection
             }
@@ -252,6 +253,17 @@ struct SettingsView: View {
                     Text(p.label).tag(p)
                 }
             }
+        } header: {
+            Text("Downloads")
+        }
+    }
+
+    @ViewBuilder
+    private func adAnalysisSection(settings: AppSettings) -> some View {
+        let sync = SyncService.shared
+        let selectedModel = sync.pendingClassifierModel?.rawValue
+            ?? settings.serverClassifierModel ?? ClassifierModel.defaultValue.rawValue
+        Section {
             // Server mirror: SyncService applies the change optimistically
             // and rolls it back if the server refuses.
             Toggle("Detect & skip ads", isOn: Binding(
@@ -259,13 +271,33 @@ struct SettingsView: View {
                 set: { enabled in updateGlobalAdAnalysis(enabled) }
             ))
             .disabled(!isConfigured)
+            Picker("Model", selection: Binding(
+                get: { selectedModel },
+                set: { updateClassifierModel($0) }
+            )) {
+                ForEach(ClassifierModel.allCases) { model in
+                    Text(model.label).tag(model.rawValue)
+                }
+                if ClassifierModel(rawValue: selectedModel) == nil {
+                    Text(selectedModel).tag(selectedModel)
+                }
+            }
+            .pickerStyle(.menu)
+            .accessibilityIdentifier("adAnalysisModelPicker")
+            .disabled(!isConfigured || sync.pendingClassifierModel != nil || settings.serverOpenRouterAvailable == false)
+            if sync.pendingClassifierModel != nil {
+                HStack(spacing: 8) {
+                    ProgressView()
+                    Text("Saving model…").foregroundStyle(.secondary)
+                }
+            }
         } header: {
-            Text("Downloads")
+            Text("Ad analysis")
         } footer: {
             VStack(alignment: .leading, spacing: 4) {
                 Text("Ad detection runs on your server, not on this device. When this is off, the server analyzes no podcast; when it's on, each podcast's own Detect & skip ads toggle still applies.")
-                if let classifier = Self.serverClassifierDescription(settings: settings) {
-                    Text(verbatim: "Server classifier: \(classifier)")
+                if settings.serverOpenRouterAvailable == false {
+                    Text("Add an OpenRouter API key on your server to choose an analysis model.")
                 }
                 if !isConfigured {
                     Text("Connect to your server to change this.")
@@ -274,13 +306,16 @@ struct SettingsView: View {
         }
     }
 
-    /// `classifier · model` from the server's settings mirror, or `nil`
-    /// when the server hasn't reported either.
-    private static func serverClassifierDescription(settings: AppSettings) -> String? {
-        let parts = [settings.serverClassifier, settings.serverClassifierModel]
-            .compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines) }
-            .filter { !$0.isEmpty }
-        return parts.isEmpty ? nil : parts.joined(separator: " · ")
+    private func updateClassifierModel(_ rawValue: String) {
+        guard let model = ClassifierModel(rawValue: rawValue),
+              rawValue != settings?.serverClassifierModel else { return }
+        Task {
+            do {
+                try await SyncService.shared.setClassifierModel(model)
+            } catch {
+                showAlert(title: "Couldn't Change Analysis Model", message: error.localizedDescription)
+            }
+        }
     }
 
     private func updateGlobalAdAnalysis(_ enabled: Bool) {

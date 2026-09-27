@@ -7,6 +7,7 @@ struct PodcastDetailView: View {
     @Query private var sortedEpisodes: [Episode]
     @State private var defaultSpeed: Double = 1.0
     @State private var toggleError: String?
+    @State private var summaryText: String?
 
     init(podcast: Podcast) {
         self.podcast = podcast
@@ -55,8 +56,8 @@ struct PodcastDetailView: View {
                         }
                         Spacer(minLength: 0)
                     }
-                    if let summary = podcast.summary, !summary.isEmpty {
-                        Text(summary).font(.subheadline).foregroundStyle(.secondary)
+                    if let summaryText, !summaryText.isEmpty {
+                        Text(summaryText).font(.subheadline).foregroundStyle(.secondary)
                     }
                 }
                 .listRowInsets(.init(top: 16, leading: 16, bottom: 12, trailing: 16))
@@ -68,17 +69,13 @@ struct PodcastDetailView: View {
                 Toggle("Detect & skip ads", isOn: adAnalysisBinding)
                     .listRowInsets(.init(top: 6, leading: 16, bottom: 6, trailing: 16))
                     .disabled(!APIConfiguration.isConfigured)
-                HStack {
-                    Text("Playback speed")
-                    Spacer()
-                    Picker("Speed", selection: speedBinding) {
-                        Text("Default (\(PlaybackSpeed.label(for: defaultSpeed)))").tag(Double?.none)
-                        ForEach(PlaybackSpeed.options, id: \.self) { rate in
-                            Text(PlaybackSpeed.label(for: rate)).tag(Optional(rate))
-                        }
+                Picker("Playback speed", selection: speedBinding) {
+                    Text("Default (\(PlaybackSpeed.label(for: defaultSpeed)))").tag(Double?.none)
+                    ForEach(PlaybackSpeed.options, id: \.self) { rate in
+                        Text(PlaybackSpeed.label(for: rate)).tag(Optional(rate))
                     }
-                    .pickerStyle(.menu)
                 }
+                .pickerStyle(.menu)
                 .listRowInsets(.init(top: 6, leading: 16, bottom: 6, trailing: 16))
             } header: {
                 Text("Settings")
@@ -115,6 +112,15 @@ struct PodcastDetailView: View {
         .navigationTitle(podcast.title)
         .navigationBarTitleDisplayMode(.inline)
         .onAppear { refreshSettingsSnapshot() }
+        .task(id: podcast.summary) {
+            summaryText = nil
+            guard let raw = podcast.summary, !raw.isEmpty else { return }
+            // Like show notes, parse RSS HTML after navigation starts, then
+            // retain the result until the server changes the summary.
+            try? await Task.sleep(for: .milliseconds(80))
+            guard !Task.isCancelled else { return }
+            summaryText = RSSSummaryText.plainText(raw)
+        }
         .refreshable {
             await SubscriptionService.shared.refresh(podcast: podcast, in: context)
             refreshSettingsSnapshot()

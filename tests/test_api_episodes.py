@@ -51,17 +51,17 @@ class ProcessingCommandTests(ApiTestCase):
         self.assertEqual(response.json(), {"jobId": None})
 
     async def test_reanalyze_folds_repeats_into_one_classify_job(self) -> None:
-        self.registry.available_map["claude"] = True
+        self.registry.available_map["openrouter"] = True
         response = await self.client.post(
             f"/api/v1/episodes/{self.ready_id}/reanalyze",
-            json={"provider": "claude", "model": "claude-haiku-4-5", "thinking": "low", "extra": True},
+            json={"provider": "openrouter", "model": "openai/gpt-6-luna", "thinking": "high", "extra": True},
         )
         self.assertEqual(response.status_code, 202, response.text)
         job = jobs.get_job(self.ctx.db, response.json()["jobId"])
         self.assertEqual(job.kind, "classify")
         self.assertEqual(
             {k: job.params.get(k) for k in ("provider", "model", "thinking", "force", "reclassify")},
-            {"provider": "claude", "model": "claude-haiku-4-5", "thinking": "low", "force": True, "reclassify": True},
+            {"provider": "openrouter", "model": "openai/gpt-6-luna", "thinking": "high", "force": True, "reclassify": True},
         )
         again = await self.client.post(f"/api/v1/episodes/{self.ready_id}/reanalyze")
         self.assertEqual(again.json()["jobId"], job.id)
@@ -71,6 +71,17 @@ class ProcessingCommandTests(ApiTestCase):
         self.assertEqual(response.status_code, 202)
         self.assertEqual(jobs.get_job(self.ctx.db, response.json()["jobId"]).kind, "transcribe")
 
+    async def test_reanalyze_accepts_openrouter_only_when_configured(self) -> None:
+        url = f"/api/v1/episodes/{self.ready_id}/reanalyze"
+        body = {"provider": "openrouter", "model": "deepseek/deepseek-v4.1-flash"}
+        self.assertError(await self.client.post(url, json=body), 422, "invalidRequest")
+        self.registry.available_map["openrouter"] = True
+        response = await self.client.post(url, json=body)
+        self.assertEqual(response.status_code, 202, response.text)
+        job = jobs.get_job(self.ctx.db, response.json()["jobId"])
+        self.assertEqual(job.params["provider"], body["provider"])
+        self.assertEqual(job.params["model"], body["model"])
+
     async def test_reanalyze_validates_the_provider(self) -> None:
         unconfigured = await self.client.post(f"/api/v1/episodes/{self.ready_id}/reanalyze", json={"provider": "gemini"})
         self.assertError(unconfigured, 422, "invalidRequest")
@@ -78,7 +89,7 @@ class ProcessingCommandTests(ApiTestCase):
         self.assertError(unknown, 422, "invalidRequest")
         self.assertEqual([j for j in jobs.list_jobs(self.ctx.db) if j.is_live], [])
         fake = await self.client.post(f"/api/v1/episodes/{self.ready_id}/reanalyze", json={"provider": "fake"})
-        self.assertEqual(fake.status_code, 202)
+        self.assertError(fake, 422, "invalidRequest")
 
 
 class TranscriptTests(ApiTestCase):

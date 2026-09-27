@@ -1,46 +1,9 @@
-"""Replaying classifier (provider ``fake``) for tests and the offline e2e.
+"""Test-only classifier replay for offline integration tests.
 
-It runs the same flow as the real transcript classifiers (rendering, request
-hashing, the chunking guard, retry, parsing, line resolution), but answers
-from recorded provider responses instead of the network. Replies go through
-the real providers' parsers, so fenced JSON, schema violations (one repair
-attempt, then permanent) and every retry path behave as in production.
-
-Lookup, per request:
-
-1. a fixture whose ``request_sha256`` equals the request's, computed by
-   ``core.request_sha256`` with provider ``fake`` and this classifier's model
-   (``FakeClassifier.prepare(req).request_sha256`` gives it for a request);
-2. a fixture whose title slug equals ``slugify(req.episode_title)``;
-3. otherwise a deterministic synthetic answer: an intro over 0-30 s when the
-   first sentence starts within 60 s, and an outro from the start of the
-   last sentence (the one before the tail silence) to the end of the audio.
-
-Fixture format: one JSON object per ``*.json`` file, anywhere under the
-fixtures directory::
-
-    {
-      "episode_title": "449: Middle School",  # optional title key; default: the file stem, as a slug
-      "request_sha256": "…",                  # optional exact-request key
-      "description": "…",                     # optional, ignored
-      "responses": [envelope, …]              # one per provider call, in order; the last repeats
-    }
-
-An envelope is one provider-shaped HTTP exchange, the same record shape as
-``ClassifyResult.raw_response["exchanges"]``, so a live result becomes a
-fixture by copying its exchanges::
-
-    {"format": "gemini",               # "gemini" (generateContent JSON) or "claude" (Messages API JSON); default gemini
-     "status": 200,                    # default 200; 408/409/429/5xx are retried, other errors are permanent
-     "headers": {"Retry-After": "0"},  # optional; retry hints are honoured exactly
-     "body": {...}}                    # the response JSON (or error JSON)
-    {"error": "timeout"}               # or "connection": a transport failure, retried
-
-Each fixture keeps one cursor for the classifier's lifetime, across
-``classify()`` calls: ``[500, 500, 500, 500, 200]`` fails one call after its
-four in-call attempts and succeeds on the next, which is how job-level
-retries get exercised. ``slugify("894: I Couldn't Help but Notice")`` is
-``894-i-couldnt-help-but-notice``.
+Recorded legacy Gemini/Claude fixture envelopes are translated into the
+OpenRouter response format without importing retired SDKs or adapters.
+Missing fixtures yield deterministic intro/outro markers. This double is
+injected explicitly by tests and is never a selectable server backend.
 """
 
 from __future__ import annotations
@@ -52,11 +15,11 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from . import claude, gemini
-from .base import ClassifyRequest, ClassifyResult, DetectedSegment, TokenUsage
-from .core import CallResult, PreparedRequest, TranscriptClassifier
-from .prompts import PromptSpec, valid_episode_endpoint
-from .retry import AttemptError
+from noadcast.classify.base import ClassifyRequest, ClassifyResult, DetectedSegment, TokenUsage
+from noadcast.classify.core import CallResult, PreparedRequest, TranscriptClassifier
+from noadcast.classify.openrouter import interpret_response
+from noadcast.classify.prompts import PromptSpec, valid_episode_endpoint
+from noadcast.classify.retry import AttemptError
 
 SYNTHETIC_INTRO_END_S = 30.0
 SYNTHETIC_INTRO_IF_SPEECH_BY_S = 60.0
@@ -133,9 +96,32 @@ def replay(envelope: dict[str, Any], spec: PromptSpec) -> CallResult:
     status = int(envelope.get("status", 200))
     headers = envelope.get("headers") or {}
     body = envelope["body"]
+    # Historical fixture formats remain data, not executable provider adapters.
+    # Translate their recorded text/usage into the active adapter's response.
+    if not 200 <= status < 300:
+        return interpret_response(status, headers, body, spec)
     if envelope.get("format", "gemini") == "claude":
-        return claude.interpret_response(status, headers, body, spec)
-    return gemini.interpret_response(status, headers, body, spec)
+        text = next((part["text"] for part in body.get("content", []) if part.get("type") == "text"), None)
+        old = body.get("usage", {})
+        usage = {
+            "prompt_tokens": old.get("input_tokens", 0) + old.get("cache_read_input_tokens", 0)
+                             + old.get("cache_creation_input_tokens", 0),
+            "completion_tokens": old.get("output_tokens", 0),
+        }
+    else:
+        candidate = (body.get("candidates") or [{}])[0]
+        text = "".join(part["text"] for part in candidate.get("content", {}).get("parts", [])
+                       if "text" in part and not part.get("thought"))
+        old = body.get("usageMetadata", {})
+        thoughts = old.get("thoughtsTokenCount", 0)
+        usage = {
+            "prompt_tokens": old.get("promptTokenCount", 0),
+            "completion_tokens": old.get("candidatesTokenCount", 0) + thoughts,
+            "completion_tokens_details": {"reasoning_tokens": thoughts},
+        }
+    return interpret_response(status, headers, {
+        "choices": [{"message": {"content": text}, "finish_reason": "stop"}], "usage": usage,
+    }, spec)
 
 
 def synthetic_segments(req: ClassifyRequest) -> list[DetectedSegment]:
@@ -155,9 +141,9 @@ class FakeClassifier(TranscriptClassifier):
     """``options`` are ``TranscriptClassifier``'s; ``fixtures_dir`` may be None
     (every answer synthetic)."""
 
-    provider = "fake"
+    provider = "openrouter"
 
-    def __init__(self, *, fixtures_dir: Path | None = None, model: str = "fake", **options: Any) -> None:
+    def __init__(self, *, fixtures_dir: Path | None = None, model: str = "deepseek/deepseek-v4.1-flash", **options: Any) -> None:
         super().__init__(model=model, **options)
         self._by_sha, self._by_slug = load_fixtures(fixtures_dir) if fixtures_dir is not None else ({}, {})
 
@@ -196,3 +182,23 @@ class FakeClassifier(TranscriptClassifier):
             request_sha256=prepared.request_sha256,
             raw_response={"synthetic": True},
         )
+
+
+class ReplayRegistry:
+    """Explicit injection for offline end-to-end tests; never available to the server CLI."""
+
+    def __init__(self, settings, fixtures_dir: Path) -> None:
+        self.classifier = FakeClassifier(
+            fixtures_dir=fixtures_dir, model=settings.openrouter_model,
+            prompt_version=settings.prompt_version, render_format=settings.transcript_format,
+            include_silence=settings.include_silence,
+        )
+
+    def get(self, provider=None, model=None, thinking=None, **kwargs):
+        return self.classifier
+
+    def available(self):
+        return {"openrouter": True}
+
+    async def aclose(self):
+        await self.classifier.aclose()

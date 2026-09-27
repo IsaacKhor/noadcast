@@ -16,6 +16,7 @@ import httpx
 
 from noadcast.classify.base import ClassifyRequest, ClassifyResult, DetectedSegment, TokenUsage
 from noadcast.config import Settings, settings_for_tests
+from noadcast.classifier_models import DEFAULT_MODEL, MODEL_IDS
 from noadcast.context import AppContext
 from noadcast.db import repo
 from noadcast.db.engine import Database
@@ -43,7 +44,7 @@ def temp_dir(case) -> Path:
 
 
 def make_settings(data_dir: Path, **overrides: Any) -> Settings:
-    return settings_for_tests(data_dir, classifier="fake", **overrides)
+    return settings_for_tests(data_dir, **overrides)
 
 
 def make_context(settings: Settings, **overrides: Any) -> AppContext:
@@ -196,8 +197,8 @@ class ScriptedClassifier:
 
     def __init__(
         self,
-        provider: str = "fake",
-        model: str = "fake",
+        provider: str = "openrouter",
+        model: str = DEFAULT_MODEL,
         segments_for: Callable[[ClassifyRequest], list[DetectedSegment]] | None = None,
     ) -> None:
         self.provider = provider
@@ -248,13 +249,17 @@ class FakeRegistry:
 
     def get(self, provider: str | None = None, model: str | None = None, thinking: str | None = None) -> ScriptedClassifier:
         self.requested.append((provider, model, thinking))
-        name = provider or "fake"
+        name = provider or "openrouter"
+        if name != "openrouter" or (model is not None and model not in MODEL_IDS):
+            from noadcast.classify.base import ClassifierError
+            raise ClassifierError("unsupported classifier selection", permanent=True)
         if name not in self.classifiers:
-            self.classifiers[name] = ScriptedClassifier(provider=name, model=model or name)
+            self.classifiers[name] = ScriptedClassifier(provider=name, model=model or DEFAULT_MODEL)
+        self.classifiers[name].model = model or DEFAULT_MODEL
         return self.classifiers[name]
 
     def available(self) -> dict[str, bool]:
-        return {"gemini": False, "claude": False, "gemini-audio": False, "fake": True}
+        return {"openrouter": True}
 
     async def aclose(self) -> None:
         pass

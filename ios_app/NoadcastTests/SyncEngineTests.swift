@@ -68,6 +68,27 @@ struct SyncEngineTests {
         #expect(try context.fetchCount(FetchDescriptor<SyncCursor>()) == 1)
     }
 
+    @Test @MainActor func syncMirrorsModelAndOptionalKeyAvailability() async throws {
+        let container = try makeTestContainer()
+        let engine = SyncEngine(modelContainer: container)
+        let availabilities: [Bool?] = [true, false, nil]
+        for availability in availabilities {
+            let dto = ServerSettingsDTO(
+                classifier: "openrouter",
+                classifierModel: ClassifierModel.gptLunaHigh.rawValue,
+                availableClassifiers: availability.map { ["openrouter": $0] } ?? [:]
+            )
+            _ = try await engine.apply(
+                page: SyncFixtures.page(settings: dto, nextSince: 10),
+                options: SyncFixtures.options,
+                save: true
+            )
+            let settings = AppSettings.current(in: ModelContext(container))
+            #expect(settings.serverClassifierModel == ClassifierModel.gptLunaHigh.rawValue)
+            #expect(settings.serverOpenRouterAvailable == availability)
+        }
+    }
+
     // MARK: - Write-if-changed
 
     @Test @MainActor func reapplyingAnUnchangedPageWritesNothing() async throws {
@@ -88,8 +109,9 @@ struct SyncEngineTests {
             settings: ServerSettingsDTO(
                 adAnalysisEnabled: false,
                 autoProcessEnabled: true,
-                classifier: "gemini",
-                classifierModel: "gemini-3.5-flash"
+                classifier: "openrouter",
+                classifierModel: ClassifierModel.deepSeekFlash.rawValue,
+                availableClassifiers: ["openrouter": true]
             ),
             nextSince: 500
         )

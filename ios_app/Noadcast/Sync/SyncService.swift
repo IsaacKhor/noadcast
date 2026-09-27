@@ -93,7 +93,7 @@ nonisolated enum PendingReleaseStore {
 @MainActor
 @Observable
 final class SyncService {
-    static let shared = SyncService(
+    static let shared: SyncService = SyncService(
         api: NoadcastAPIClient.shared,
         restoreService: DeviceStateRestoreService.shared,
         performsSideEffects: true,
@@ -117,6 +117,8 @@ final class SyncService {
     /// SwiftData: a 2 s poll must not invalidate any `@Query`.
     private(set) var activeJobs: [Int: ActiveJobDTO] = [:]
     private(set) var instanceId: String?
+    /// Staged UI selection only; the stored mirror changes after server acceptance.
+    private(set) var pendingClassifierModel: ClassifierModel?
 
     // MARK: Dependencies
 
@@ -240,7 +242,7 @@ final class SyncService {
             await running.value
             return
         }
-        let task = Task { @MainActor [weak self] in
+        let task = Task<Void, Never> { @MainActor [weak self] in
             await self?.runSyncLoop(trigger)
         }
         runningSync = task
@@ -691,6 +693,34 @@ final class SyncService {
                 return
             }
         }
+    }
+
+    // MARK: - Server model selection
+
+    func setClassifierModel(_ model: ClassifierModel) async throws {
+        guard isConfigured(), let context = container?.mainContext else {
+            throw APIError.notConfigured
+        }
+        guard pendingClassifierModel == nil else { return }
+        pendingClassifierModel = model
+        defer { pendingClassifierModel = nil }
+        let dto = try await api.updateSettings(classifierModel: model.rawValue)
+        // Let any page fetched before the PATCH finish before applying the
+        // confirmed selection, so an old in-flight sync cannot restore it.
+        if let runningSync { await runningSync.value }
+        let settings = AppSettings.current(in: context)
+        if settings.serverClassifier != dto.classifier {
+            settings.serverClassifier = dto.classifier
+        }
+        if settings.serverClassifierModel != dto.classifierModel {
+            settings.serverClassifierModel = dto.classifierModel
+        }
+        let available = dto.availableClassifiers["openrouter"]
+        if settings.serverOpenRouterAvailable != available {
+            settings.serverOpenRouterAvailable = available
+        }
+        if context.hasChanges { try context.save() }
+        await syncNow(.mutation)
     }
 
     // MARK: - Optimistic server settings

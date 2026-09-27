@@ -41,7 +41,7 @@ class FakeRegistry:
     """Stands in for classify.registry.ClassifierRegistry; the API only asks what is configured."""
 
     def __init__(self, available: dict[str, bool] | None = None) -> None:
-        self.available_map = available or {"gemini": False, "claude": False, "gemini-audio": False, "fake": True}
+        self.available_map = available or {"openrouter": False}
 
     def get(self, provider: str | None = None, model: str | None = None, thinking: str | None = None) -> Any:
         raise AssertionError("API tests never classify")

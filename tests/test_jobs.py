@@ -276,13 +276,13 @@ class RetryCancelCommandTests(unittest.TestCase):
     def test_reanalyze_carries_the_override_through_the_chain(self) -> None:
         with self.db.write() as tx:
             job_id = commands.reanalyze_episode(
-                tx, self.episode.id, server=self.server, now=now_iso(), provider="claude", retranscribe=True
+                tx, self.episode.id, server=self.server, now=now_iso(), provider="openrouter", retranscribe=True
             )
         job = jobs.get_job(self.db, job_id)
         self.assertEqual(job.kind, "download", "audio first")
         self.assertEqual(
             {k: job.params[k] for k in ("provider", "force", "reclassify", "retranscribe")},
-            {"provider": "claude", "force": True, "reclassify": True, "retranscribe": True},
+            {"provider": "openrouter", "force": True, "reclassify": True, "retranscribe": True},
         )
 
 
