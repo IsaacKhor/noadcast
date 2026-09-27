@@ -218,7 +218,8 @@ class TalOfflineTests(unittest.IsolatedAsyncioTestCase):
             podcast = created["podcast"]
             self.assertEqual((podcast["title"], podcast["episodeCount"]), ("This American Life", 15))
             podcasts, episodes, cursor, pages = await server.full_sync(limit=4)
-            self.assertEqual((list(podcasts), len(episodes), pages), ([podcast["id"]], 15, 4))
+            # The two persisted model defaults also consume sync-page slots.
+            self.assertEqual((list(podcasts), len(episodes), pages), ([podcast["id"]], 15, 5))
             by_guid = {e["guid"]: e for e in episodes.values()}
             admitted = [e for e in episodes.values() if e["state"] != "discovered"]
             self.assertEqual(len(admitted), 1, "first subscribe admits only the newest episode")
