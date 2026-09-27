@@ -6,7 +6,6 @@ struct PodcastDetailView: View {
     @Bindable var podcast: Podcast
     @Query private var sortedEpisodes: [Episode]
     @State private var defaultSpeed: Double = 1.0
-    @State private var toggleError: String?
     @State private var summaryText: String?
 
     init(podcast: Podcast) {
@@ -66,9 +65,6 @@ struct PodcastDetailView: View {
             Section {
                 Toggle("Auto-download new episodes", isOn: $podcast.autoDownloadEnabled)
                     .listRowInsets(.init(top: 6, leading: 16, bottom: 6, trailing: 16))
-                Toggle("Detect & skip ads", isOn: adAnalysisBinding)
-                    .listRowInsets(.init(top: 6, leading: 16, bottom: 6, trailing: 16))
-                    .disabled(!APIConfiguration.isConfigured)
                 Picker("Playback speed", selection: speedBinding) {
                     Text("Default (\(PlaybackSpeed.label(for: defaultSpeed)))").tag(Double?.none)
                     ForEach(PlaybackSpeed.options, id: \.self) { rate in
@@ -80,7 +76,7 @@ struct PodcastDetailView: View {
             } header: {
                 Text("Settings")
             } footer: {
-                Text("Ad detection runs on your server; the global Detect & skip ads switch in Settings must also be on. Auto-download adds newly published episodes to your Queue and downloads them to this iPhone under your download settings.")
+                Text("Auto-download adds newly published episodes to your Queue and downloads them to this iPhone under your download settings. Manage ad detection and exclusions in your server's web interface.")
             }
 
             Section("Episodes") {
@@ -125,28 +121,6 @@ struct PodcastDetailView: View {
             await SubscriptionService.shared.refresh(podcast: podcast, in: context)
             refreshSettingsSnapshot()
         }
-        .alert("Couldn't change ad detection", isPresented: .constant(toggleError != nil), actions: {
-            Button("OK") { toggleError = nil }
-        }, message: {
-            Text(toggleError ?? "")
-        })
-    }
-
-    /// Server-owned: applied optimistically, rolled back if the PATCH fails.
-    private var adAnalysisBinding: Binding<Bool> {
-        Binding(
-            get: { podcast.adAnalysisEnabled },
-            set: { enabled in
-                let target = podcast
-                Task {
-                    do {
-                        try await SyncService.shared.setPodcastAdAnalysis(target, enabled: enabled)
-                    } catch {
-                        toggleError = error.localizedDescription
-                    }
-                }
-            }
-        )
     }
 
     private func refreshSettingsSnapshot() {

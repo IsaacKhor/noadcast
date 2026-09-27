@@ -18,6 +18,7 @@ from ..schemas import (
     JobIdOut,
     JobIdsOut,
     PodcastEnvelope,
+    PodcastsOut,
     PodcastPatchIn,
     SubscribeIn,
     json_response,
@@ -25,6 +26,11 @@ from ..schemas import (
 )
 
 router = APIRouter()
+
+
+@router.get("/podcasts")
+async def list_podcasts(ctx: Ctx) -> Response:
+    return json_response(PodcastsOut(items=[podcast_out(p) for p in repo.list_podcasts(ctx.db)]))
 
 
 @router.post("/podcasts")

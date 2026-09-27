@@ -1,6 +1,6 @@
 """Request authentication and signed audio URLs.
 
-Every request except ``/health`` must carry ``Authorization: Bearer
+Every request except ``/health`` and the fixed web shell/assets must carry ``Authorization: Bearer
 <token>``, compared in constant time. The one other credential is a signed
 audio URL, ``?exp=<unix>&sig=<hex>`` with ``sig = HMAC-SHA256(signing_secret,
 "<episode_id>\\n<exp>")``, accepted only on GET/HEAD of that episode's audio:
@@ -27,6 +27,7 @@ from ..config import Settings
 from .errors import error_response
 
 PUBLIC_PATHS = frozenset({"/health"})
+PUBLIC_WEB_PATHS = frozenset({"/", "/web/app.css", "/web/app.js"})
 AUDIO_PATH = re.compile(r"/api/v1/episodes/(\d+)/audio")
 _SIGNED_METHODS = frozenset({"GET", "HEAD"})
 _MAX_EXP_DIGITS = 12
@@ -92,7 +93,8 @@ class AuthMiddleware:
             await self.app(scope, receive, send)
             return
         path = route_path(scope)
-        failure = None if path in PUBLIC_PATHS else self._failure(scope, path)
+        public = path in PUBLIC_PATHS or (path in PUBLIC_WEB_PATHS and scope["method"] in _SIGNED_METHODS)
+        failure = None if public else self._failure(scope, path)
         if failure is None:
             await self.app(scope, receive, send)
             return

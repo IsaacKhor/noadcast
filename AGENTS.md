@@ -20,7 +20,7 @@ src/noadcast/        Server package (Python 3.13)
   transcribe/          Spawned whisper pool, sentence joiner, word codec
   classify/            Prompts, rendering, providers, sanitising, costs
   pipeline/            Job table, stages, scheduler, retention
-  api/                 FastAPI app, auth, sync, routers
+  api/                 FastAPI app, auth, sync, routers, web/ dashboard assets
   server.py, cli.py    `noadcast serve` and the other subcommands
 tests/               unittest suite; tests/e2e drives the real HTTP API
 deploy/              systemd user unit and operating notes
@@ -64,6 +64,13 @@ ios_app/             Xcode project
   numpy must not load before a worker sets its thread counts.
 - **Audio responses are never compressed** (it breaks Range); the gzip
   middleware bypasses audio routes. Audio routes must accept `HEAD`.
+- **The web shell is public, the data is private.** Only exact `GET|HEAD /`,
+  `/web/app.css`, and `/web/app.js` are public for the browser login screen.
+  All `/api/v1` routes, including dashboard lists, stats, and settings,
+  require the bearer token. The browser keeps it in session storage and sends
+  it in the header; never put it in a URL or shipped asset. Keep asset links
+  and API requests relative so a reverse-proxy path prefix works. Static
+  assets are shipped inside the Python package and use a strict CSP.
 - **Migrations are append-only.** Add `db/migrations/NNN_name.sql`; never
   edit one that has been applied.
 
@@ -71,7 +78,8 @@ ios_app/             Xcode project
 
 - OpenRouter is the only classification provider. Models are
   `deepseek/deepseek-v4.1-flash` (default), `qwen/qwen3.8-flash`, and
-  `openai/gpt-6-luna` (always high reasoning). Select the model in iOS Settings,
+  `openai/gpt-6-luna` (always high reasoning). Select the model in the web
+  dashboard or iOS Settings,
   with `NOADCAST_OPENROUTER_MODEL`, or via `POST /episodes/{id}/reanalyze`.
   Offline replay doubles live only under `tests/support/`; historical
   classification rows retain their original provider and model.

@@ -1,11 +1,11 @@
 # Noadcast server HTTP API (v1)
 
 This is the contract between the Python server (`src/noadcast/api/`) and the
-iOS client (`ios_app/`). Change it deliberately, in one commit with both sides.
+iOS client (`ios_app/`) and web dashboard. Change it deliberately, in one commit with the affected clients.
 
 ## Conventions
 
-- **Base path** `/api/v1`, except `GET /health`.
+- **Base path** `/api/v1` for data and settings; `/health` and the web shell/assets are outside it.
 - **Auth**: every `/api/v1` request carries `Authorization: Bearer <token>`,
   compared in constant time. Failure: `401` with `WWW-Authenticate: Bearer`.
   The only other accepted credential is the signed audio URL (below). The raw
@@ -142,6 +142,15 @@ never exposed.
 
 ## Endpoints
 
+### Web dashboard
+
+`GET|HEAD /` serves the self-hosted dashboard shell. `GET|HEAD /web/app.css`
+and `/web/app.js` serve its assets. These three fixed paths are public so the
+login screen can load; they contain no server data or credentials. The browser
+sends the API token as a bearer header to the same protected API endpoints as
+other clients. No token is accepted in a URL. Other methods and paths remain
+protected by the normal default-deny authentication middleware.
+
 ### `GET /health` (no auth)
 
 ```json
@@ -221,6 +230,7 @@ arrives via `/sync`.
 
 ### Podcasts
 
+- `GET /api/v1/podcasts` → `200 {"items": [Podcast, …]}` in title order.
 - `POST /api/v1/podcasts` `{"feedUrl": "…", "autoProcessEnabled"?: bool, "adAnalysisEnabled"?: bool, "initialBackfillCount"?: int}`
   → `201 {"podcast": Podcast}` after fetching and parsing inline (20 s
   budget); `200 {"podcast": Podcast}` if already subscribed (idempotent);
@@ -235,6 +245,13 @@ arrives via `/sync`.
 
 ### Episodes
 
+- `GET /api/v1/episodes?podcastId=&state=&q=&limit=50&offset=0` →
+  `200 {"items": [Episode, …], "total": n, "limit": n, "offset": n}`.
+  Ordered by publication time descending, then ID descending. `q` matches
+  episode titles (ASCII case insensitive); `state` matches the exact pipeline state.
+  Filters are optional; `limit` is 1–100, `offset` is nonnegative. Each item
+  has the same complete marker set as episode detail. An empty page may still
+  have a nonzero `total` when the offset is past the last match.
 - `GET /api/v1/episodes/{id}` → `200 Episode`.
 - `POST /api/v1/episodes/{id}/process` → `202 {"jobId": n | null}`. Ensures
   the audio is on the server (priority download) and, if analysis is enabled,
@@ -310,3 +327,5 @@ arrives via `/sync`.
 - `GET /api/v1/admin/stats` → pool, queue depths and oldest pending age,
   worker memory, disk used/free, audio bytes, 30-day spend by provider/model,
   episode counts per state, recent failures, cross-feed GUID collisions.
+  `disk.usedBytes` describes the whole filesystem that contains the data
+  directory; `audio.storedBytes` is the audio recorded as present by Noadcast.

@@ -228,6 +228,17 @@ class PodcastEnvelope(ApiModel):
     podcast: PodcastOut
 
 
+class PodcastsOut(ApiModel):
+    items: list[PodcastOut]
+
+
+class EpisodesOut(ApiModel):
+    items: list[EpisodeOut]
+    total: int
+    limit: int
+    offset: int
+
+
 class AcceptedPodcast(ApiModel):
     podcast: PodcastOut
     job_id: int

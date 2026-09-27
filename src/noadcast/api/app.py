@@ -30,6 +30,7 @@ from .errors import install_error_handlers
 from .middleware import AccessLogMiddleware, GZipExceptAudio
 from .routers import admin, audio, episodes, health, jobs, podcasts, sync, transcripts
 from .routers import settings as settings_routes
+from . import web_routes
 
 API_PREFIX = "/api/v1"
 
@@ -76,13 +77,14 @@ def create_app(
         title="Noadcast",
         version=__version__,
         lifespan=lifespan,
-        # /health is the only unauthenticated surface; no schema or docs UI.
+        # Only /health and the fixed web shell/assets are unauthenticated.
         openapi_url=None,
         docs_url=None,
         redoc_url=None,
     )
     install_error_handlers(app)
     app.include_router(health.public_router)
+    app.include_router(web_routes.router)
     for module in (health, sync, jobs, podcasts, episodes, transcripts, audio, settings_routes, admin):
         app.include_router(module.router, prefix=API_PREFIX)
     # Added innermost first: requests pass access log -> auth -> gzip -> routes.

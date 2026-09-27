@@ -1,0 +1,91 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <title>Noadcast · Server</title>
+  <link rel="icon" href="data:,">
+  <link rel="stylesheet" href="web/app.css">
+  <script src="web/app.js" defer></script>
+</head>
+<body>
+  <div id="connecting" class="connecting-screen" role="status">Connecting to Noadcast…</div>
+  <div id="login" class="login-screen" hidden>
+    <div class="login-card">
+      <div class="brand-mark" aria-hidden="true"><span></span><span></span><span></span></div>
+      <p class="eyebrow">Noadcast server</p>
+      <h1>Connect to your server</h1>
+      <p class="muted">Enter the API token configured on this server. It stays in this browser tab’s session.</p>
+      <form id="login-form">
+        <label for="token">API token</label>
+        <input id="token" name="token" type="password" autocomplete="off" required spellcheck="false">
+        <p id="login-error" class="form-error" role="alert" hidden></p>
+        <button class="button primary full" type="submit">Connect</button>
+      </form>
+    </div>
+  </div>
+
+  <div id="app" class="app-shell" hidden>
+    <aside class="sidebar">
+      <div class="brand"><div class="brand-mark" aria-hidden="true"><span></span><span></span><span></span></div><span>Noadcast</span></div>
+      <nav class="main-nav" aria-label="Main navigation">
+        <button class="nav-item active" data-view="overview" aria-current="page"><span class="nav-icon">◫</span> Overview</button>
+        <button class="nav-item" data-view="episodes"><span class="nav-icon">☷</span> Episodes</button>
+        <button class="nav-item" data-view="usage"><span class="nav-icon">▥</span> Usage</button>
+        <button class="nav-item" data-view="analysis"><span class="nav-icon">◈</span> Analysis</button>
+      </nav>
+      <div class="sidebar-foot"><span class="server-dot"></span><span id="server-label">Server connected</span></div>
+    </aside>
+
+    <div class="workspace">
+      <header class="topbar">
+        <div class="mobile-brand">Noadcast</div>
+        <span class="topbar-name">Server workspace</span>
+        <div class="topbar-actions"><span id="last-updated" class="muted small"></span><button id="refresh" class="button subtle" type="button">Refresh</button><button id="sign-out" class="button subtle" type="button">Sign out</button></div>
+      </header>
+      <main id="main-content">
+        <div id="page-error" class="banner error" role="alert" hidden><span id="page-error-text"></span><button id="retry" class="button text" type="button">Retry</button></div>
+
+        <section id="view-overview" class="view" aria-labelledby="overview-title">
+          <div class="page-heading"><div><p class="eyebrow">Server health</p><h1 id="overview-title">Overview</h1><p class="heading-copy">Your library, processing activity, and storage at a glance.</p></div></div>
+          <div class="stat-grid">
+            <article class="stat-card"><div class="stat-label">Episodes <span class="stat-glyph">☷</span></div><strong id="stat-episodes">—</strong><span id="stat-episodes-detail" class="stat-note">Across your library</span></article>
+            <article class="stat-card"><div class="stat-label">Podcasts <span class="stat-glyph">◉</span></div><strong id="stat-podcasts">—</strong><span class="stat-note">Subscribed feeds</span></article>
+            <article class="stat-card"><div class="stat-label">Stored audio <span class="stat-glyph">◫</span></div><strong id="stat-audio">—</strong><span id="stat-audio-detail" class="stat-note">On this server</span></article>
+            <article class="stat-card"><div class="stat-label">30-day analysis cost <span class="stat-glyph">◇</span></div><strong id="stat-cost">—</strong><span class="stat-note">Recorded OpenRouter usage</span></article>
+          </div>
+          <div class="overview-grid">
+            <section class="panel"><div class="panel-heading"><div><h2>Processing</h2><p>Current queue activity</p></div></div><div id="queues" class="queue-list"><p class="empty">Loading activity…</p></div></section>
+            <section class="panel"><div class="panel-heading"><div><h2>Storage</h2><p>Filesystem containing Noadcast data</p></div></div><div class="storage-summary"><strong id="storage-used">—</strong><span id="storage-total" class="muted">used of — total volume</span></div><div id="storage-meter" class="meter" role="progressbar" aria-label="Volume space used" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><span></span></div><div class="storage-legend"><span><i class="legend-dot blue"></i> Noadcast audio <strong id="storage-audio">—</strong></span><span><i class="legend-dot gray"></i> Volume free <strong id="storage-free">—</strong></span></div></section>
+          </div>
+          <section class="panel failures-panel"><div class="panel-heading"><div><h2>Recent failures</h2><p>Jobs needing attention</p></div></div><div id="failures" class="failure-list"><p class="empty">Loading failures…</p></div></section>
+        </section>
+
+        <section id="view-episodes" class="view" aria-labelledby="episodes-title" hidden>
+          <div class="page-heading"><div><p class="eyebrow">Library</p><h1 id="episodes-title">Episodes</h1><p class="heading-copy">Browse recent episodes and their processing status.</p></div><span id="episode-count" class="count-badge">—</span></div>
+          <section class="panel list-panel">
+            <div class="toolbar"><label class="search-wrap"><span class="sr-only">Search episodes</span><input id="episode-search" type="search" placeholder="Search episodes" autocomplete="off"></label><label class="select-wrap"><span class="sr-only">Podcast</span><select id="episode-podcast"><option value="">All podcasts</option></select></label><label class="select-wrap"><span class="sr-only">Processing status</span><select id="episode-state"><option value="">All statuses</option><option value="ready">Ready</option><option value="failed">Failed</option><option value="discovered">Discovered</option><option value="download_pending">Download pending</option><option value="downloading">Downloading</option><option value="downloaded">Downloaded</option><option value="transcribe_pending">Transcribe pending</option><option value="transcribing">Transcribing</option><option value="transcribed">Transcribed</option><option value="classify_pending">Classify pending</option><option value="classifying">Classifying</option></select></label></div>
+            <div class="table-scroll"><table><thead><tr><th scope="col">Episode</th><th scope="col">Published</th><th scope="col">Status</th><th scope="col">Audio</th><th scope="col">Markers</th></tr></thead><tbody id="episode-rows"><tr><td colspan="5" class="empty">Loading episodes…</td></tr></tbody></table></div>
+            <div class="pagination"><span id="episode-range" class="muted small"></span><div><button id="episodes-prev" class="button subtle" type="button">Previous</button><button id="episodes-next" class="button subtle" type="button">Next</button></div></div>
+          </section>
+        </section>
+
+        <section id="view-usage" class="view" aria-labelledby="usage-title" hidden>
+          <div class="page-heading"><div><p class="eyebrow">Analysis</p><h1 id="usage-title">Token usage</h1><p class="heading-copy">Historical classification requests and reported cost.</p></div><label class="select-wrap period"><span class="sr-only">Usage period</span><select id="usage-period"><option value="7">Last 7 days</option><option value="30" selected>Last 30 days</option><option value="90">Last 90 days</option></select></label></div>
+          <div class="stat-grid usage-stats"><article class="stat-card"><div class="stat-label">Total calls</div><strong id="usage-calls">—</strong></article><article class="stat-card"><div class="stat-label">Input tokens</div><strong id="usage-input">—</strong></article><article class="stat-card"><div class="stat-label">Reasoning + output</div><strong id="usage-output">—</strong></article><article class="stat-card"><div class="stat-label">Total cost</div><strong id="usage-cost">—</strong></article></div>
+          <section class="panel"><div class="panel-heading"><div><h2>Daily history</h2><p>Calls and tokens by UTC date</p></div></div><div class="table-scroll"><table><thead><tr><th scope="col">Date</th><th scope="col" class="num">Calls</th><th scope="col" class="num">Input</th><th scope="col" class="num">Reasoning</th><th scope="col" class="num">Output</th><th scope="col" class="num">Cost</th></tr></thead><tbody id="usage-days"><tr><td colspan="6" class="empty">Loading usage…</td></tr></tbody></table></div></section>
+          <section class="panel"><div class="panel-heading"><div><h2>By model</h2><p>Usage within the selected period</p></div></div><div class="table-scroll"><table><thead><tr><th scope="col">Model</th><th scope="col" class="num">Calls</th><th scope="col" class="num">Input</th><th scope="col" class="num">Reasoning</th><th scope="col" class="num">Output</th><th scope="col" class="num">Cost</th></tr></thead><tbody id="usage-models"><tr><td colspan="6" class="empty">Loading models…</td></tr></tbody></table></div></section>
+        </section>
+
+        <section id="view-analysis" class="view" aria-labelledby="analysis-title" hidden>
+          <div class="page-heading"><div><p class="eyebrow">Preferences</p><h1 id="analysis-title">Analysis settings</h1><p class="heading-copy">Choose the classifier and exclude podcasts from future automatic ad detection.</p></div></div>
+          <section class="panel global-panel"><div class="global-setting"><div><h2>Ad detection enabled</h2><p>Applies to future automatic analysis across all podcasts. Existing markers remain.</p></div><label class="switch-control"><input id="global-analysis" type="checkbox" aria-label="Ad detection enabled" disabled><span class="switch-track"></span></label></div><p id="global-status" class="field-note" role="status"></p></section>
+          <section class="panel settings-panel"><div class="panel-heading"><div><h2>Classification model</h2><p>Used for new analysis jobs. Existing results keep their original model.</p></div></div><div class="setting-control"><label for="model-select">OpenRouter model</label><div class="inline-control"><select id="model-select" disabled><option value="deepseek/deepseek-v4.1-flash">DeepSeek V4.1 Flash</option><option value="qwen/qwen3.8-flash">Qwen 3.8 Flash</option><option value="openai/gpt-6-luna">GPT-6 Luna · high reasoning</option></select><button id="save-model" class="button primary" type="button" disabled>Save model</button></div><p id="model-status" class="field-note" role="status">Loading setting…</p></div></section>
+          <section class="panel exclusions-panel"><div class="panel-heading"><div><h2>Podcast exclusions</h2><p>Excluded podcasts skip future automatic ad analysis. Existing markers remain.</p></div><span id="excluded-count" class="count-badge">— excluded</span></div><div class="toolbar"><label class="search-wrap"><span class="sr-only">Find a podcast</span><input id="podcast-search" type="search" placeholder="Find a podcast" autocomplete="off"></label><label class="select-wrap"><span class="sr-only">Exclusion filter</span><select id="podcast-filter"><option value="all">All podcasts</option><option value="excluded">Excluded only</option><option value="included">Included only</option></select></label></div><div id="podcast-list" class="podcast-list"><p class="empty">Loading podcasts…</p></div></section>
+        </section>
+      </main>
+    </div>
+  </div>
+</body>
+</html>

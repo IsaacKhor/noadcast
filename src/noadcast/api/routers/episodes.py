@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter
+from typing import Annotated
+
+from fastapi import APIRouter, Query
 from starlette.responses import Response
 
 from ...db import repo
@@ -10,9 +12,37 @@ from ...pipeline import commands
 from ...timeutil import now_iso
 from ..deps import Ctx, episode_or_404
 from ..errors import invalid_request
-from ..schemas import ClassificationsOut, JobIdOut, ReanalyzeIn, classification_out, episode_out, json_response
+from ..schemas import ClassificationsOut, EpisodesOut, JobIdOut, ReanalyzeIn, classification_out, episode_out, json_response
 
 router = APIRouter()
+
+
+@router.get("/episodes")
+async def list_episodes(
+    ctx: Ctx,
+    podcast_id: Annotated[int | None, Query(alias="podcastId", ge=1)] = None,
+    state: Annotated[str | None, Query(max_length=64)] = None,
+    q: Annotated[str | None, Query(max_length=200)] = None,
+    limit: Annotated[int, Query(ge=1, le=100)] = 50,
+    offset: Annotated[int, Query(ge=0)] = 0,
+) -> Response:
+    items, total = repo.list_episodes_page(
+        ctx.db,
+        podcast_id=podcast_id,
+        state=state or None,
+        query=q.strip() if q else None,
+        limit=limit,
+        offset=offset,
+    )
+    markers = repo.markers_for_episodes(ctx.db, [item.id for item in items])
+    return json_response(
+        EpisodesOut(
+            items=[episode_out(item, markers.get(item.id, ())) for item in items],
+            total=total,
+            limit=limit,
+            offset=offset,
+        )
+    )
 
 
 @router.get("/episodes/{episode_id}")

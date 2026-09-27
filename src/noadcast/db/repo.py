@@ -613,6 +613,35 @@ def episodes_for_podcast(db: Reader, podcast_id: int) -> list[Episode]:
     return [_load(Episode, row) for row in rows]
 
 
+def list_episodes_page(
+    db: Reader,
+    *,
+    podcast_id: int | None = None,
+    state: str | None = None,
+    query: str | None = None,
+    limit: int = 50,
+    offset: int = 0,
+) -> tuple[list[Episode], int]:
+    """A stable, bounded dashboard page, newest publication first."""
+    title_pattern = None
+    if query:
+        escaped = query.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+        title_pattern = f"%{escaped}%"
+    where = """
+        WHERE (? IS NULL OR podcast_id = ?)
+          AND (? IS NULL OR pipeline_state = ?)
+          AND (? IS NULL OR title LIKE ? ESCAPE '\\')
+    """
+    params = (podcast_id, podcast_id, state, state, title_pattern, title_pattern)
+    count = db.read_one("SELECT count(*) AS n FROM episodes " + where, params)
+    assert count is not None
+    rows = db.read(
+        "SELECT * FROM episodes " + where + " ORDER BY published_at DESC, id DESC LIMIT ? OFFSET ?",
+        (*params, limit, offset),
+    )
+    return [_load(Episode, row) for row in rows], int(count["n"])
+
+
 def episodes_by_ids(db: Reader, ids: Iterable[int]) -> list[Episode]:
     rows = db.read("SELECT * FROM episodes WHERE id IN (SELECT value FROM json_each(?)) ORDER BY id", (_ids(ids),))
     return [_load(Episode, row) for row in rows]

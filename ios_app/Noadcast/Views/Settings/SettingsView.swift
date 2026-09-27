@@ -18,12 +18,6 @@ struct SettingsView: View {
     @State private var isImportingOPML = false
     @State private var alertTitle = ""
     @State private var alertMessage: String?
-    /// The ad-detection value just picked, shown until the server call
-    /// settles. `setGlobalAdAnalysis` writes its optimistic value on a later
-    /// main-actor turn, so without this the switch would bounce for a frame.
-    @State private var pendingAdAnalysis: Bool?
-    /// Only the latest toggle request clears `pendingAdAnalysis`.
-    @State private var adAnalysisRequestCount = 0
 
     private var settings: AppSettings? { settingsList.first }
 
@@ -264,13 +258,6 @@ struct SettingsView: View {
         let selectedModel = sync.pendingClassifierModel?.rawValue
             ?? settings.serverClassifierModel ?? ClassifierModel.defaultValue.rawValue
         Section {
-            // Server mirror: SyncService applies the change optimistically
-            // and rolls it back if the server refuses.
-            Toggle("Detect & skip ads", isOn: Binding(
-                get: { pendingAdAnalysis ?? settings.adAnalysisEnabled },
-                set: { enabled in updateGlobalAdAnalysis(enabled) }
-            ))
-            .disabled(!isConfigured)
             Picker("Model", selection: Binding(
                 get: { selectedModel },
                 set: { updateClassifierModel($0) }
@@ -295,7 +282,7 @@ struct SettingsView: View {
             Text("Ad analysis")
         } footer: {
             VStack(alignment: .leading, spacing: 4) {
-                Text("Ad detection runs on your server, not on this device. When this is off, the server analyzes no podcast; when it's on, each podcast's own Detect & skip ads toggle still applies.")
+                Text("Manage ad detection and excluded podcasts in your server's web interface.")
                 if settings.serverOpenRouterAvailable == false {
                     Text("Add an OpenRouter API key on your server to choose an analysis model.")
                 }
@@ -314,23 +301,6 @@ struct SettingsView: View {
                 try await SyncService.shared.setClassifierModel(model)
             } catch {
                 showAlert(title: "Couldn't Change Analysis Model", message: error.localizedDescription)
-            }
-        }
-    }
-
-    private func updateGlobalAdAnalysis(_ enabled: Bool) {
-        let request = adAnalysisRequestCount + 1
-        adAnalysisRequestCount = request
-        pendingAdAnalysis = enabled
-        Task {
-            do {
-                try await SyncService.shared.setGlobalAdAnalysis(enabled)
-            } catch {
-                // SyncService has already rolled the mirror back.
-                showAlert(title: "Couldn't Change Ad Detection", message: error.localizedDescription)
-            }
-            if adAnalysisRequestCount == request {
-                pendingAdAnalysis = nil
             }
         }
     }

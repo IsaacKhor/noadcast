@@ -41,7 +41,7 @@ Configuration lives in `secrets.env` (see `secrets.env.example` and
 Set `OPENROUTER_API_KEY`; OpenRouter is the only classification provider.
 The default is DeepSeek 4.1 Flash (`deepseek/deepseek-v4.1-flash`). Select
 Qwen 3.8 Flash (`qwen/qwen3.8-flash`) or GPT 6 Luna (`openai/gpt-6-luna`)
-in iOS Settings or with `NOADCAST_OPENROUTER_MODEL`. GPT 6 Luna always uses
+in the web dashboard, iOS Settings, or with `NOADCAST_OPENROUTER_MODEL`. GPT 6 Luna always uses
 high reasoning effort. Only transcript text is sent for classification.
 
 ```bash
@@ -56,6 +56,17 @@ cp secrets.env.example secrets.env && chmod 600 secrets.env
 
 To run it as a systemd user service, and for day-to-day operation (status,
 logs, reprocessing, backups), see [deploy/README.md](deploy/README.md).
+
+### Web dashboard
+
+Open the server URL in a browser (for example,
+`http://laurel.turkey-galaxy.ts.net:8765/`) and enter the
+`NOADCAST_API_TOKEN` from `secrets.env`. The dashboard shows server health,
+episodes, OpenRouter token and cost history, and storage. Under **Analysis**,
+select the model for future classifications and exclude individual podcasts
+from ad detection. Existing markers and classification history are retained.
+The token stays in the browser tab's session storage; data and settings use
+the authenticated API. See [docs/API.md](docs/API.md) for the endpoints.
 
 How an episode flows:
 
