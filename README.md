@@ -32,7 +32,7 @@ audio the server stores.
 ## Server
 
 The server runs on `laurel`, reachable from the phone over Tailscale at
-`http://laurel.turkey-galaxy.ts.net:8765`. One process owns everything: an
+`http://laurel.turkey-galaxy.ts.net:44007`. One process owns everything: an
 asyncio scheduler over a SQLite job table (refresh, download, transcribe,
 classify, evict), a pool of spawned faster-whisper workers, and the HTTP API.
 Configuration lives in `secrets.env` (see `secrets.env.example` and
@@ -60,7 +60,7 @@ logs, reprocessing, backups), see [deploy/README.md](deploy/README.md).
 ### Web dashboard
 
 Open the server URL in a browser (for example,
-`http://laurel.turkey-galaxy.ts.net:8765/`) and enter the
+`http://laurel.turkey-galaxy.ts.net:44007/`) and enter the
 `NOADCAST_API_TOKEN` from `secrets.env`. The dashboard shows server health,
 episodes, OpenRouter token and cost history, and storage. Under **Analysis**,
 select the model for future classifications and exclude individual podcasts

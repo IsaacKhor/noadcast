@@ -13,7 +13,7 @@ import Foundation
 /// tailnet; `Info.plist` sets `NSAllowsArbitraryLoads`).
 nonisolated enum APIConfiguration {
     /// Shown as the placeholder in the setup UI.
-    static let placeholderBaseURL = "http://laurel.turkey-galaxy.ts.net:8765"
+    static let placeholderBaseURL = "http://laurel.turkey-galaxy.ts.net:44007"
 
     static let baseURLDefaultsKey = "ServerBaseURL"
     static let tokenKeychainAccount = "api-token"

@@ -60,7 +60,7 @@ journalctl --user -u noadcast -o cat | jq -c 'select(.episode_id == 42)'   # one
 .venv/bin/noadcast status                    # queues, disk, spend, failures (reads the database)
 .venv/bin/noadcast refresh                   # queue a refresh of every feed now
 .venv/bin/noadcast reprocess 42 --model qwen/qwen3.8-flash   # old classifications are kept
-curl -s http://127.0.0.1:8765/health
+curl -s http://127.0.0.1:44007/health
 ```
 
 A restart is safe at any point: interrupted jobs are requeued at boot, and a

@@ -63,7 +63,7 @@ class Settings:
     # Comma-separated bind addresses. Loopback by default; add the tailnet
     # address (e.g. 100.80.188.91) to serve the phone. Never 0.0.0.0.
     hosts: tuple[str, ...] = ("127.0.0.1",)
-    port: int = 8765
+    port: int = 44007
 
     # Auth
     api_token: str | None = None

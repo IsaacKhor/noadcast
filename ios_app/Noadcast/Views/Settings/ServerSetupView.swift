@@ -80,7 +80,7 @@ struct ServerSetupView: View {
         } header: {
             Text("Address")
         } footer: {
-            Text("Use your server's Tailscale name, e.g. laurel.turkey-galaxy.ts.net:8765. Tailnet addresses don't need iOS's local-network permission — which the audio player can't request, so streaming from a LAN address (.local or 192.168.x.x) fails silently until it's granted. Test connection makes a plain request, which triggers that permission prompt for LAN users.")
+            Text("Use your server's Tailscale name, e.g. laurel.turkey-galaxy.ts.net:44007. Tailnet addresses don't need iOS's local-network permission — which the audio player can't request, so streaming from a LAN address (.local or 192.168.x.x) fails silently until it's granted. Test connection makes a plain request, which triggers that permission prompt for LAN users.")
         }
     }
 
