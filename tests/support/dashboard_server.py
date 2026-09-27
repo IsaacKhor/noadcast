@@ -39,7 +39,7 @@ def prepare_data_dir(path: Path) -> Path:
 def seed(ctx) -> None:
     existing = repo.list_podcasts(ctx.db)
     if existing:
-        if any(not podcast.feed_url.endswith(".invalid/feed.xml") for podcast in existing):
+        if any(podcast.feed_url not in {"https://atlas.invalid/feed.xml", "https://bluebird.invalid/feed.xml"} for podcast in existing):
             raise ValueError("refusing database with non-fixture podcasts")
         return
     now = now_iso()
