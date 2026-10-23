@@ -28,26 +28,29 @@ class ClassifierRegistry:
         self._http = http_client
         self._owns_http = http_client is None
         self._sleep = sleep
-        self._cache: dict[str, Classifier] = {}
+        self._cache: dict[tuple[str, bool], Classifier] = {}
 
     def get(self, provider: str | None = None, model: str | None = None, thinking: str | None = None,
-            *, prompt_cache: bool = False) -> Classifier:
+            *, prompt_cache: bool = False, flex_enabled: bool | None = None) -> Classifier:
         provider = provider or self.settings.classifier
         if provider != "openrouter":
             raise ClassifierError(f"unsupported classifier provider {provider!r}; use openrouter", permanent=True)
         model = model or self.settings.openrouter_model
         if model not in MODEL_IDS:
             raise ClassifierError(f"unsupported classifier model {model!r}; expected one of {MODEL_IDS}", permanent=True)
-        if model not in self._cache:
+        flex_enabled = self.settings.openrouter_flex_enabled if flex_enabled is None else flex_enabled
+        key = (model, flex_enabled)
+        if key not in self._cache:
             if not self.settings.openrouter_api_key:
                 raise ClassifierError("OPENROUTER_API_KEY is not configured on the server", permanent=True)
             if self._http is None:
                 self._http = httpx.AsyncClient(timeout=httpx.Timeout(REQUEST_TIMEOUT_S, connect=10.0))
-            self._cache[model] = OpenRouterClassifier(
+            self._cache[key] = OpenRouterClassifier(
                 api_key=self.settings.openrouter_api_key,
                 client=self._http,
                 api_base=self.settings.openrouter_api_base,
                 model=model,
+                flex_enabled=flex_enabled,
                 thinking=thinking_for_model(model),
                 prompt_version=self.settings.prompt_version,
                 render_format=self.settings.transcript_format,
@@ -55,7 +58,7 @@ class ClassifierRegistry:
                 max_input_tokens=self.settings.classifier_max_input_tokens,
                 sleep=self._sleep,
             )
-        return self._cache[model]
+        return self._cache[key]
 
     def available(self) -> dict[str, bool]:
         return {"openrouter": bool(self.settings.openrouter_api_key)}

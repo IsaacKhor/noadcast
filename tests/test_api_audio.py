@@ -48,13 +48,36 @@ class AudioUrlTests(AudioTestCase):
         self.assertEqual(response.status_code, 200, response.text)
         body = response.json()
         self.assertEqual(set(body), {"path", "url", "expiresAt"})
-        self.assertRegex(body["path"], rf"^/api/v1/episodes/{self.present_id}/audio\?exp=(\d+)&sig=[0-9a-f]{{64}}$")
+        sha = self.episode(self.present_id).audio_sha256
+        self.assertRegex(
+            body["path"],
+            rf"^/api/v1/episodes/{self.present_id}/audio\?exp=(\d+)&sha={sha}&sig=[0-9a-f]{{64}}$",
+        )
         self.assertEqual(body["url"], "http://test" + body["path"])
         exp = int(body["path"].split("exp=")[1].split("&")[0])
         self.assertAlmostEqual(exp - before, self.settings.audio_url_ttl_seconds, delta=2)
         self.assertRegex(body["expiresAt"], r"^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.000Z$")
         streamed = await self.anon.get(body["path"])
         self.assertEqual(streamed.content, AUDIO_BYTES)
+
+    async def test_audio_change_during_disk_check_mints_current_hash(self) -> None:
+        original = audio_routes.stored_audio
+        replacement = AUDIO_BYTES[::-1]
+        replaced = False
+
+        async def replace_after_check(ctx, episode):
+            nonlocal replaced
+            path = await original(ctx, episode)
+            if not replaced:
+                replaced = True
+                store_audio(ctx, episode.id, replacement)
+            return path
+
+        with mock.patch.object(audio_routes, "stored_audio", replace_after_check):
+            response = await self.client.post(f"/api/v1/episodes/{self.present_id}/audio-url")
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(f"sha={self.episode(self.present_id).audio_sha256}", response.json()["path"])
+        self.assertEqual((await self.anon.get(response.json()["path"])).content, replacement)
 
     async def test_absent_audio_is_409_not_ready_and_enqueues_once(self) -> None:
         response = await self.client.post(f"/api/v1/episodes/{self.absent_id}/audio-url")
@@ -181,6 +204,13 @@ class AudioServingTests(AudioTestCase):
 
 class EvictedRedirectTests(AudioTestCase):
     settings_overrides = {"evicted_redirect": True}
+
+    async def test_signed_url_does_not_redirect_to_potentially_changed_origin(self) -> None:
+        signed = (await self.client.post(f"/api/v1/episodes/{self.present_id}/audio-url")).json()["path"]
+        self.assertEqual((await self.client.delete(f"/api/v1/episodes/{self.present_id}/audio?reason=manual")).status_code, 204)
+        response = await self.anon.get(signed)
+        self.assertAudioMissing(response, "audioEvicted", self.present_id)
+        self.assertNotIn("location", response.headers)
 
     async def test_missing_audio_redirects_to_the_enclosure_and_downloads(self) -> None:
         response = await self.client.get(f"/api/v1/episodes/{self.absent_id}/audio")

@@ -73,9 +73,8 @@ final class Episode {
     /// `nil` means not on disk.
     var localFilename: String?
     var fileSizeBytes: Int64?
-    /// SHA-256 of the local file as reported by the server when it was
-    /// downloaded (the audio `ETag`), or the server's hash when a legacy
-    /// file was adopted after a size match.
+    /// SHA-256 computed from the downloaded or adopted local file's bytes.
+    /// Unknown identity suppresses markers when the server has a known hash.
     var localAudioSha256: String?
 
     /// Last playback position in seconds.
@@ -186,7 +185,8 @@ final class Episode {
     /// episode than the one the server's markers were computed against
     /// (dynamic ad insertion). Markers must not be applied to such a file.
     var localFileMatchesServerAudio: Bool {
-        if let local = localAudioSha256, let server = audioSha256 {
+        if let server = audioSha256 {
+            guard let local = localAudioSha256 else { return false }
             return local.caseInsensitiveCompare(server) == .orderedSame
         }
         if let size = fileSizeBytes, let serverSize = audioBytes {

@@ -34,7 +34,7 @@ from ..timeutil import iso, utc_now
 from ..transcribe import service
 from ..transcribe.codec import decode_words
 from ..transcribe.joiner import derive_silences
-from ..transcribe.protocol import SilenceRegion, TranscribeProgress, TranscribeTask, TranscriptionError
+from ..transcribe.protocol import Mp3Break, SilenceRegion, TranscribeProgress, TranscribeTask, TranscriptionError
 from . import commands, jobs, states
 from .eviction import EvictStage
 from .scheduler import RunningJob, Stage
@@ -452,12 +452,15 @@ class ClassifyStage:
             episode_title=episode.title,
             podcast_title=podcast.title,
             language=transcript.language,
+            mp3_breaks=_mp3_breaks(transcript.asr_options_json, duration),
             audio_path=str(audio) if audio is not None else None,
             audio_content_type=episode.audio_content_type,
         )
         model = job.params.get("model") or (server.classifier_model if provider == server.classifier else None)
         thinking = job.params.get("thinking")
-        result = await ctx.classifiers.get(provider, model, thinking).classify(request)
+        result = await ctx.classifiers.get(
+            provider, model, thinking, flex_enabled=server.openrouter_flex_enabled
+        ).classify(request)
         segments = sanitize.finalize(result.segments, request, snap=ctx.settings.snap_to_silence)
         cost = costs.cost_for(result.provider, result.model, result.usage)
         raw = await asyncio.to_thread(
@@ -534,6 +537,29 @@ class ClassifyStage:
             return
         final = {} if decision.retry or episode.classify_state == "ready" else {"classify_state": "failed"}
         _fail_episode(tx, job, error, decision, **final)
+
+
+def _mp3_breaks(options_json: str, duration: float | None) -> list[Mp3Break]:
+    """Read the decoder's optional, versioned-by-kind structural hints."""
+    try:
+        entries = json.loads(options_json).get("mp3_breaks", [])
+    except (ValueError, AttributeError, TypeError):
+        return []
+    if not isinstance(entries, list):
+        return []
+    breaks: list[Mp3Break] = []
+    for entry in entries:
+        if not isinstance(entry, dict):
+            continue
+        seconds, kind = entry.get("seconds"), entry.get("kind")
+        if (
+            isinstance(seconds, (int, float)) and not isinstance(seconds, bool)
+            and math.isfinite(seconds) and seconds > 0.5
+            and (duration is None or seconds < duration)
+            and kind in {"embedded_id3", "encoder_header", "format_change", "decode_error"}
+        ):
+            breaks.append(Mp3Break(float(seconds), kind))
+    return sorted(breaks, key=lambda item: item.seconds)
 
 
 def _silences(words_blob: bytes, duration: float | None) -> list[SilenceRegion]:

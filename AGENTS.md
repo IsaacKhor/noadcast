@@ -83,11 +83,14 @@ ios_app/             Xcode project
   with `NOADCAST_OPENROUTER_MODEL`, or via `POST /episodes/{id}/reanalyze`.
   Offline replay doubles live only under `tests/support/`; historical
   classification rows retain their original provider and model.
-- Prompt versions live in `classify/prompts.py` (`segments-v3` default,
+- Prompt versions live in `classify/prompts.py` (`segments-v4` default,
   for the `sentences` render format: `[22.24-23.88] A complete sentence.`).
   Every classification row is kept with its
   prompt version, render format, token counts, and cost at the price-table
   version in effect, so comparisons are SQL joins, not re-runs.
+  MP3 structural breaks are timestamped hints, not automatic ad labels.
+  OpenRouter Flex is opt-in and off by default; savings depend on endpoint
+  availability for the selected model.
 - Markers are produced by `classify.sanitize.finalize`: intros start at 0,
   outros extend to the measured audio end only across silence, and
   boundaries snap toward silence midpoints.
@@ -107,7 +110,7 @@ ios_app/Noadcast/
   Downloads/    DownloadManager (background URLSession, resume data) and AudioStorage
   Playback/     PlaybackSourceResolver (local file, stream, or unavailable)
                 and AdSkipPlanner (chain skip)
-  Migration/    One-time import of the pre-server store and device-state restore
+  Migration/    Legacy-store bypass and current device-state restore
   Services/     PlayerService, SubscriptionService, artwork, search, OPML, reachability
   Views/        SwiftUI views, one folder per tab
   Util/         Small helpers (time formatting, logging, etc.)
@@ -192,7 +195,8 @@ needs live progress (see `EpisodeRow`'s `showProgress`).
 
 - Episodes stream from the server or play from a downloaded copy; a local
   file always wins.
-- Ad analysis is a server setting, globally and per podcast.
+- Ad analysis is a global server setting. Legacy per-podcast exclusions are
+  retired; their compatibility API field is always true.
 - Markers remain visible even when skipping is disabled, and are not applied
   to a local file whose size or hash differs from the server's audio.
 - The queue auto-advances to the first playable episode, in queue order.

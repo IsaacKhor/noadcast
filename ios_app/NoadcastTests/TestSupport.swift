@@ -128,6 +128,7 @@ enum SyncFixtures {
         title: String? = nil,
         state: ServerEpisodeState = .ready,
         audioState: ServerAudioState = .present,
+        audioSHA256: String? = nil,
         markerRevision: Int = 0,
         markers: [AdMarkerDTO] = []
     ) -> EpisodeDTO {
@@ -144,7 +145,7 @@ enum SyncFixtures {
             enclosureType: "audio/mpeg",
             audioState: audioState,
             audioBytes: 28_800_000,
-            audioSha256: "sha256-\(id)",
+            audioSha256: audioSHA256 ?? "sha256-\(id)",
             audioContentType: "audio/mpeg",
             state: state,
             transcriptState: .ready,

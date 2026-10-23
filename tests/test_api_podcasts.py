@@ -84,14 +84,14 @@ class SubscribeTests(ApiTestCase):
         self.assertEqual(set(again.json()), {"podcast"})
         self.assertEqual(again.json()["podcast"]["id"], first.json()["podcast"]["id"])
 
-    async def test_backfill_count_and_switches(self) -> None:
+    async def test_backfill_count_and_legacy_analysis_switch(self) -> None:
         self.remote[FEED_URL] = answer(body=rss(items=4))
         response = await self.client.post(
             "/api/v1/podcasts",
             json={"feedUrl": FEED_URL, "initialBackfillCount": 2, "adAnalysisEnabled": False, "ignored": "field"},
         )
         self.assertEqual(response.status_code, 201, response.text)
-        self.assertIs(response.json()["podcast"]["adAnalysisEnabled"], False)
+        self.assertIs(response.json()["podcast"]["adAnalysisEnabled"], True)
         self.assertEqual(len(self.live_jobs("download")), 2)
 
     async def test_auto_process_off_admits_nothing(self) -> None:
@@ -152,19 +152,22 @@ class PodcastCommandTests(ApiTestCase):
         self.episode_ids = add_episodes(self.ctx, self.podcast.id, 3)
 
     async def test_patch_switches(self) -> None:
+        before = self.ctx.db.current_seq()
         response = await self.client.patch(f"/api/v1/podcasts/{self.podcast.id}", json={"adAnalysisEnabled": False})
         self.assertEqual(response.status_code, 200, response.text)
         body = response.json()
         self.assertEqual(set(body), set(doc_example("### Podcast")))
-        self.assertIs(body["adAnalysisEnabled"], False)
+        self.assertIs(body["adAnalysisEnabled"], True)
         self.assertIs(body["autoProcessEnabled"], True)
-        self.assertGreater(body["seq"], self.podcast.updated_seq)
+        self.assertEqual(body["seq"], self.podcast.updated_seq)
+        self.assertEqual(self.ctx.db.current_seq(), before)
         unchanged = await self.client.patch(f"/api/v1/podcasts/{self.podcast.id}", json={"somethingElse": 1})
         self.assertEqual(unchanged.json()["seq"], body["seq"])
         both = await self.client.patch(
-            f"/api/v1/podcasts/{self.podcast.id}", json={"auto_process_enabled": False, "adAnalysisEnabled": True}
+            f"/api/v1/podcasts/{self.podcast.id}", json={"auto_process_enabled": False, "adAnalysisEnabled": False}
         )
         self.assertEqual((both.json()["autoProcessEnabled"], both.json()["adAnalysisEnabled"]), (False, True))
+        self.assertGreater(both.json()["seq"], body["seq"])
         self.assertError(
             await self.client.patch(f"/api/v1/podcasts/{self.podcast.id}", json={"adAnalysisEnabled": "maybe"}),
             422,

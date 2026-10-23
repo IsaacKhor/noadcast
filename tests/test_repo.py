@@ -49,18 +49,43 @@ class RepoTests(unittest.TestCase):
         self.assertEqual(seqs, list(range(1, 7)))
         self.assertTrue(all(e.pipeline_state == "discovered" for e in episodes))
 
-    def test_switches_bump_only_on_change(self) -> None:
+    def test_legacy_analysis_switch_is_ignored(self) -> None:
         podcast = seed_podcast(self.db)
         before = self.seq()
         with self.db.write() as tx:
-            same = repo.set_podcast_switches(tx, podcast, auto_process_enabled=True, ad_analysis_enabled=None, now=now_iso())
+            same = repo.set_podcast_switches(tx, podcast, auto_process_enabled=True, ad_analysis_enabled=False, now=now_iso())
         self.assertEqual((self.seq(), same.updated_seq), (before, podcast.updated_seq))
         with self.db.write() as tx:
             changed = repo.set_podcast_switches(
-                tx, podcast, auto_process_enabled=None, ad_analysis_enabled=False, now=now_iso()
+                tx, podcast, auto_process_enabled=False, ad_analysis_enabled=False, now=now_iso()
             )
         self.assertEqual(changed.updated_seq, before + 1)
-        self.assertFalse(changed.ad_analysis_enabled)
+        self.assertFalse(changed.auto_process_enabled)
+        self.assertTrue(changed.ad_analysis_enabled)
+        self.assertTrue(seed_podcast(self.db, "https://feeds.example.com/legacy.xml", ad_analysis_enabled=False).ad_analysis_enabled)
+
+    def test_migration_reenables_each_excluded_podcast_with_its_own_seq(self) -> None:
+        path = self.settings.data_dir / "legacy-analysis.db"
+        legacy = Database(path)
+        podcasts = [seed_podcast(legacy, f"https://feeds.example.com/{index}.xml") for index in range(3)]
+        with legacy.write() as tx:
+            for podcast in podcasts[:2]:
+                tx.execute(
+                    "UPDATE podcasts SET ad_analysis_enabled = 0, updated_seq = ? WHERE id = ?",
+                    (tx.next_seq(), podcast.id),
+                )
+            tx.execute("DELETE FROM schema_migrations WHERE version = 3")
+        prior_seq = legacy.current_seq()
+        untouched_seq = podcasts[2].updated_seq
+        legacy.close()
+
+        migrated = Database(path)
+        self.addCleanup(migrated.close)
+        rows = [repo.get_podcast(migrated, podcast.id) for podcast in podcasts]
+        self.assertTrue(all(row is not None and row.ad_analysis_enabled for row in rows))
+        self.assertEqual(migrated.current_seq(), prior_seq + 2)
+        self.assertEqual([row.updated_seq for row in rows[:2]], [prior_seq + 1, prior_seq + 2])
+        self.assertEqual(rows[2].updated_seq, untouched_seq)
 
     def test_fetch_bookkeeping_is_quiet_unless_the_error_changes(self) -> None:
         podcast = seed_podcast(self.db)
@@ -238,6 +263,27 @@ class RepoTests(unittest.TestCase):
             with self.db.write() as tx:
                 repo.update_server_settings(tx, self.settings, {"api_key": "x"}, now=now_iso())
 
+    def test_flex_override_persists_and_announces_only_changes(self) -> None:
+        self.assertFalse(repo.load_server_settings(self.db, self.settings).openrouter_flex_enabled)
+        configured = self.settings.with_overrides(openrouter_flex_enabled=True)
+        self.assertTrue(repo.load_server_settings(self.db, configured).openrouter_flex_enabled)
+        start = self.seq()
+        with self.db.write() as tx:
+            repo.update_server_settings(tx, configured, {"openrouter_flex_enabled": False}, now=now_iso())
+        self.assertEqual(self.seq(), start + 1)
+        self.assertTrue(repo.sync_page(self.db, since=start, limit=100).settings_changed)
+        reopened = Database(self.settings.db_path)
+        try:
+            self.assertFalse(repo.load_server_settings(reopened, configured).openrouter_flex_enabled)
+        finally:
+            reopened.close()
+        with self.db.write() as tx:
+            repo.update_server_settings(tx, configured, {"openrouter_flex_enabled": False}, now=now_iso())
+        self.assertEqual(self.seq(), start + 1)
+        with self.assertRaises(ValueError):
+            with self.db.write() as tx:
+                repo.update_server_settings(tx, configured, {"openrouter_flex_enabled": "false"}, now=now_iso())
+
     def test_retired_saved_selection_normalizes_once_with_per_row_sequences(self) -> None:
         with self.db.write() as tx:
             for key, value in (("classifier", '"gemini"'), ("classifier_model", '"gemini-3.5-flash"')):
@@ -246,15 +292,15 @@ class RepoTests(unittest.TestCase):
         before = self.seq()
         with self.db.write() as tx:
             repo.normalize_classifier_settings(tx, self.settings, now=now_iso())
-        self.assertEqual(self.seq(), before + 2)
+        self.assertEqual(self.seq(), before + 3)
         rows = self.db.read("SELECT updated_seq FROM settings ORDER BY updated_seq")
-        self.assertEqual([r["updated_seq"] for r in rows], [before + 1, before + 2])
+        self.assertEqual([r["updated_seq"] for r in rows], [before + 1, before + 2, before + 3])
         selected = repo.load_server_settings(self.db, self.settings)
         self.assertEqual((selected.classifier, selected.classifier_model),
                          ("openrouter", "deepseek/deepseek-v4.1-flash"))
         with self.db.write() as tx:
             repo.normalize_classifier_settings(tx, self.settings, now=now_iso())
-        self.assertEqual(self.seq(), before + 2)
+        self.assertEqual(self.seq(), before + 3)
 
     def test_supported_saved_model_survives_normalization(self) -> None:
         with self.db.write() as tx:
@@ -274,15 +320,15 @@ class RepoTests(unittest.TestCase):
             repo.normalize_classifier_settings(tx, self.settings, now=now_iso())
         delta = repo.sync_page(self.db, since=cursor, limit=100)
         self.assertTrue(delta.settings_changed)
-        self.assertEqual(delta.next_since, cursor + 2)
+        self.assertEqual(delta.next_since, cursor + 3)
         selected = repo.load_server_settings(self.db, self.settings)
         self.assertEqual((selected.classifier, selected.classifier_model),
                          ("openrouter", "deepseek/deepseek-v4.1-flash"))
         rows = self.db.read("SELECT updated_seq FROM settings ORDER BY updated_seq")
-        self.assertEqual([row["updated_seq"] for row in rows], [cursor + 1, cursor + 2])
+        self.assertEqual([row["updated_seq"] for row in rows], [cursor + 1, cursor + 2, cursor + 3])
         with self.db.write() as tx:
             repo.normalize_classifier_settings(tx, self.settings, now=now_iso())
-        self.assertEqual(self.seq(), cursor + 2)
+        self.assertEqual(self.seq(), cursor + 3)
 
     def test_delete_podcast_cascades_and_leaves_one_tombstone(self) -> None:
         podcast = seed_podcast(self.db)

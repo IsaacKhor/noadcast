@@ -4,10 +4,10 @@ import Foundation
 /// survives a mirror wipe (server ids are reissued when the server database
 /// is rebuilt, and did not exist at all in the previous on-device store).
 ///
-/// Written in three situations, and re-applied by `DeviceStateRestoreService`
-/// after the next full sync:
-/// * `legacyStore` — exported once from the previous build's SwiftData store
-///   (`Application Support/legacy-export.json`).
+/// Written when the server instance changes or the local cache is reset,
+/// then re-applied by `DeviceStateRestoreService` after the next full sync.
+/// `legacyStore` remains in the file format so old restore jobs can be
+/// identified and retired during startup.
 /// * `instanceChange` — the server's `instanceId` changed.
 /// * `localReset` — the user reset the local cache.
 ///
@@ -20,8 +20,7 @@ nonisolated struct DeviceStateSnapshot: Codable, Sendable, Equatable {
         var title: String?
         var autoDownloadEnabled: Bool
         var customPlaybackSpeed: Double?
-        /// The previous build's per-podcast "Detect & skip ads" (only set by
-        /// the legacy export; restored to the server when it was off).
+        /// Retained for decoding snapshots written by older app builds.
         var adAnalysisEnabled: Bool?
 
         nonisolated enum CodingKeys: String, CodingKey {
@@ -112,7 +111,7 @@ nonisolated struct DeviceStateSnapshot: Codable, Sendable, Equatable {
     /// Queue order, first = next up.
     var queue: [EpisodeKey]
     var lastPlayed: EpisodeKey?
-    /// Legacy export only: restored at first launch, no server needed.
+    /// Old legacy export fields retained for decoding earlier snapshots.
     var stats: Stats?
     var usageDays: [UsageDay]?
     var preferences: Preferences?

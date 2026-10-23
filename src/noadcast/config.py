@@ -74,7 +74,8 @@ class Settings:
     # Classification
     classifier: str = "openrouter"
     openrouter_model: str = DEFAULT_MODEL
-    prompt_version: str = "segments-v3"
+    openrouter_flex_enabled: bool = False
+    prompt_version: str = "segments-v4"
     transcript_format: str = "sentences"  # production: [22.24-23.88] A complete sentence.
     include_silence: bool = False  # older evaluation formats may interleave silence rows
     snap_to_silence: bool = True
@@ -176,6 +177,7 @@ class Settings:
             "NOADCAST_AUDIO_URL_TTL_SECONDS": ("audio_url_ttl_seconds", int),
             "NOADCAST_CLASSIFIER": ("classifier", str),
             "NOADCAST_OPENROUTER_MODEL": ("openrouter_model", str),
+            "NOADCAST_OPENROUTER_FLEX_ENABLED": ("openrouter_flex_enabled", _bool),
             "NOADCAST_PROMPT_VERSION": ("prompt_version", str),
             "NOADCAST_TRANSCRIPT_FORMAT": ("transcript_format", str),
             "NOADCAST_INCLUDE_SILENCE": ("include_silence", _bool),

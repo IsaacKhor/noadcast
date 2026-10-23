@@ -19,6 +19,8 @@ add a new one.
   can be compared independently.
 - ``segments-v3``: production prompt for joined sentence lines with precise
   start/end timestamps and a required content summary for each segment.
+- ``segments-v4``: v3 plus optional MP3 structural break hints; those hints
+  can locate a splice but never establish that the neighboring content is an ad.
 - ``audio-v1``: the iOS app's audio prompt verbatim (``segmentsOnlyPrompt``
   in ``git show c1a53ce:ios_app/Noadcast/Services/CloudAdDetectionService.swift``),
   used only by the Gemini audio control arm.
@@ -215,6 +217,19 @@ V3_SENTENCES_PROMPT = "\n\n".join(
 )
 
 V3_SENTENCES_USER_PREAMBLE = "Classify the following joined-sentence transcript."
+
+V4_SENTENCES_PROMPT = V3_SENTENCES_PROMPT + "\n\n" + (
+    "Some transcripts include `[123.45] --- MP3 structure changes here ... ---` "
+    "lines. These are decoder-timed signs of an embedded ID3 tag, a restarted "
+    "encoder header, a frame format change, or a damaged MP3 packet. "
+    "They may indicate a production "
+    "splice, including dynamic insertion, but also occur for other reasons. "
+    "Use them only as clues to inspect the words on both sides. A break alone "
+    "does not establish an ad or a skippable boundary. Ground every returned "
+    "segment in content evidence and the transcript timestamps."
+)
+
+V4_SENTENCES_USER_PREAMBLE = "Classify the following joined-sentence transcript and any MP3 structure hints."
 
 LINE_RESPONSE_SCHEMA: dict[str, Any] = {
     "type": "OBJECT",
@@ -501,6 +516,15 @@ PROMPTS: dict[tuple[str, str], PromptSpec] = {
         render_format="sentences",
         system=V3_SENTENCES_PROMPT,
         user_preamble=V3_SENTENCES_USER_PREAMBLE,
+        gemini_schema=RESPONSE_SCHEMA,
+        response_model=ContentSegmentsResponse,
+        cites_lines=False,
+    ),
+    ("segments-v4", "sentences"): PromptSpec(
+        version="segments-v4",
+        render_format="sentences",
+        system=V4_SENTENCES_PROMPT,
+        user_preamble=V4_SENTENCES_USER_PREAMBLE,
         gemini_schema=RESPONSE_SCHEMA,
         response_model=ContentSegmentsResponse,
         cites_lines=False,

@@ -76,7 +76,7 @@ struct PodcastDetailView: View {
             } header: {
                 Text("Settings")
             } footer: {
-                Text("Auto-download adds newly published episodes to your Queue and downloads them to this iPhone under your download settings. Manage ad detection and exclusions in your server's web interface.")
+                Text("Auto-download adds newly published episodes to your Queue and downloads them to this iPhone under your download settings. Manage ad detection in your server's web interface.")
             }
 
             Section("Episodes") {

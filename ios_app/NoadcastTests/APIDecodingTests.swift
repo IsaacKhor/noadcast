@@ -164,6 +164,10 @@ struct APIDecodingTests {
         #expect(settings.classifier == "openrouter")
         #expect(settings.classifierModel == ClassifierModel.defaultValue.rawValue)
         #expect(settings.availableClassifiers["openrouter"] == true)
+        #expect(settings.openrouterFlexEnabled == nil)
+        let flexJSON = json.replacingOccurrences(of: "\"classifier\":", with: "\"openrouterFlexEnabled\":true,\"classifier\":")
+        let flexSettings = try APIJSON.makeDecoder().decode(ServerSettingsDTO.self, from: Data(flexJSON.utf8))
+        #expect(flexSettings.openrouterFlexEnabled == true)
     }
 
     @Test func timestampsAcceptFractionAndOffsetVariants() throws {

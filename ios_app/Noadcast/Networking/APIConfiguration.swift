@@ -38,7 +38,7 @@ nonisolated enum APIConfiguration {
         }
 
         /// Resolves a server-issued path that may carry its own query string
-        /// (e.g. the signed audio path `/api/v1/episodes/42/audio?exp=…&sig=…`)
+        /// (e.g. the signed audio path `/api/v1/episodes/42/audio?exp=…&sha=…&sig=…`)
         /// against the configured base URL.
         func resolve(pathAndQuery: String) -> URL? {
             var base = baseURL.absoluteString

@@ -152,6 +152,25 @@ struct SyncEngineTests {
 
     // MARK: - Ownership
 
+    @Test @MainActor func audioHashChangeNotifiesTheLoadedPlayerEvenWhenMarkersAreUnchanged() async throws {
+        let container = try makeTestContainer()
+        let engine = SyncEngine(modelContainer: container)
+        let marker = SyncFixtures.marker(100, 160)
+        let first = SyncFixtures.page(
+            podcasts: [SyncFixtures.podcast(1)],
+            episodes: [SyncFixtures.episode(10, podcast: 1, audioSHA256: "old", markerRevision: 1, markers: [marker])],
+            nextSince: 1
+        )
+        _ = try await engine.apply(page: first, options: SyncFixtures.options, save: true)
+        let changed = SyncFixtures.page(
+            episodes: [SyncFixtures.episode(10, podcast: 1, audioSHA256: "new", markerRevision: 1, markers: [marker])],
+            nextSince: 2
+        )
+        let report = try await engine.apply(page: changed, options: SyncFixtures.options, save: true)
+        #expect(report.audioChangedEpisodeIDs == [10])
+        #expect(report.markersChangedEpisodeIDs.isEmpty)
+    }
+
     @Test @MainActor func syncNeverClobbersDeviceLocalFields() async throws {
         let container = try makeTestContainer()
         let engine = SyncEngine(modelContainer: container)

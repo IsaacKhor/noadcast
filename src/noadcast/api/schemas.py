@@ -101,6 +101,7 @@ class SettingsOut(ApiModel):
     auto_process_enabled: bool
     classifier: str
     classifier_model: str
+    openrouter_flex_enabled: bool
     feed_interval_minutes: int
     available_classifiers: dict[str, bool]
 
@@ -116,7 +117,7 @@ def podcast_out(podcast: repo.Podcast) -> PodcastOut:
         language=podcast.language,
         link=podcast.link,
         auto_process_enabled=podcast.auto_process_enabled,
-        ad_analysis_enabled=podcast.ad_analysis_enabled,
+        ad_analysis_enabled=True,
         episode_count=podcast.episode_count,
         latest_episode_at=podcast.latest_episode_at,
         last_fetch_at=podcast.last_fetch_at,
@@ -172,6 +173,7 @@ def settings_out(settings: repo.ServerSettings, available: dict[str, bool]) -> S
         auto_process_enabled=settings.auto_process_enabled,
         classifier=settings.classifier,
         classifier_model=settings.classifier_model,
+        openrouter_flex_enabled=settings.openrouter_flex_enabled,
         feed_interval_minutes=settings.feed_interval_minutes,
         available_classifiers=available,
     )
@@ -455,4 +457,5 @@ class SettingsPatchIn(ApiModel):
     auto_process_enabled: bool | None = None
     classifier: Provider | None = None
     classifier_model: ClassifierModel | None = None
+    openrouter_flex_enabled: bool | None = None
     feed_interval_minutes: int | None = Field(default=None, ge=1, le=1440, strict=True)

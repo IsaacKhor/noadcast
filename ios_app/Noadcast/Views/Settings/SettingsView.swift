@@ -281,7 +281,7 @@ struct SettingsView: View {
             Text("Ad analysis")
         } footer: {
             VStack(alignment: .leading, spacing: 4) {
-                Text("Manage ad detection and excluded podcasts in your server's web interface.")
+                Text("Manage ad detection in your server's web interface.")
                 if settings.serverOpenRouterAvailable == false {
                     Text("Add an OpenRouter API key on your server to choose an analysis model.")
                 }

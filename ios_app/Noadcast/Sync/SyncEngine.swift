@@ -45,6 +45,7 @@ nonisolated struct SyncApplyReport: Sendable, Equatable {
     var changedEpisodeIDs: [Int] = []
     var autoQueueEpisodeIDs: [Int] = []
     var markersChangedEpisodeIDs: [Int] = []
+    var audioChangedEpisodeIDs: [Int] = []
     var audioBecamePresentEpisodeIDs: [Int] = []
     var deletedPodcastIDs: [Int] = []
     var deletedEpisodeIDs: [Int] = []
@@ -73,6 +74,7 @@ nonisolated struct SyncApplyReport: Sendable, Equatable {
         changedEpisodeIDs += other.changedEpisodeIDs
         autoQueueEpisodeIDs += other.autoQueueEpisodeIDs
         markersChangedEpisodeIDs += other.markersChangedEpisodeIDs
+        audioChangedEpisodeIDs += other.audioChangedEpisodeIDs
         audioBecamePresentEpisodeIDs += other.audioBecamePresentEpisodeIDs
         deletedPodcastIDs += other.deletedPodcastIDs
         deletedEpisodeIDs += other.deletedEpisodeIDs
@@ -531,6 +533,7 @@ actor SyncEngine {
             report.seenEpisodeIDs.insert(id)
             if let episode = existing[id] {
                 let wasPresent = episode.audioState.isPresent
+                let previousAudioSHA256 = episode.audioSha256
                 var changed = false
                 if episode.podcastServerID != dto.podcastId, let podcast = podcasts[dto.podcastId] {
                     episode.podcast = podcast
@@ -547,6 +550,9 @@ actor SyncEngine {
                 }
                 if markers.contentChanged {
                     report.markersChangedEpisodeIDs.append(id)
+                }
+                if episode.audioSha256 != previousAudioSHA256 {
+                    report.audioChangedEpisodeIDs.append(id)
                 }
                 if changed {
                     report.changedEpisodeIDs.append(id)

@@ -59,7 +59,7 @@ nonisolated struct RestoreJob: Codable, Sendable, Equatable {
 /// `feedURL + guid` once the server's rows exist locally.
 ///
 /// Runs after every successful sync while jobs are pending. Audio files are
-/// adopted **only** when their byte size equals the server's `audioBytes`:
+/// adopted only when their size and, when available, SHA-256 match the server:
 /// with dynamic ad insertion a different render has its ads in different
 /// places, so the server's markers would be wrong by tens of seconds against
 /// it. Mismatched files are deleted; if the episode is queued it is simply
@@ -81,8 +81,8 @@ final class DeviceStateRestoreService {
     /// entries stop holding up the queue.
     static let missingFeedGrace: TimeInterval = 24 * 3_600
     static let maxProcessRequestsPerPass = 20
-    static let statusDefaultsKey = "LegacyMigrationStatus"
-    static let legacyImportedDefaultsKey = "LegacyExportImported"
+    nonisolated static let statusDefaultsKey = "LegacyMigrationStatus"
+    nonisolated static let legacyImportedDefaultsKey = "LegacyExportImported"
 
     /// One-line migration status for Settings (nil when nothing to say).
     private(set) var statusLine: String?
@@ -91,29 +91,32 @@ final class DeviceStateRestoreService {
     let jobsDirectory: URL
     let performsSideEffects: Bool
     let isConfigured: () -> Bool
+    let saveContext: (ModelContext) throws -> Void
 
     @ObservationIgnored private var container: ModelContainer?
     @ObservationIgnored private var jobs: [RestoreJob] = []
     @ObservationIgnored private var isRunning = false
 
-    init(api: NoadcastAPIClient, jobsDirectory: URL, performsSideEffects: Bool, isConfigured: @escaping () -> Bool) {
+    init(
+        api: NoadcastAPIClient,
+        jobsDirectory: URL,
+        performsSideEffects: Bool,
+        isConfigured: @escaping () -> Bool,
+        saveContext: @escaping (ModelContext) throws -> Void = { try $0.save() }
+    ) {
         self.api = api
         self.jobsDirectory = jobsDirectory
         self.performsSideEffects = performsSideEffects
         self.isConfigured = isConfigured
+        self.saveContext = saveContext
         try? FileManager.default.createDirectory(at: jobsDirectory, withIntermediateDirectories: true)
         self.jobs = Self.loadJobs(from: jobsDirectory)
         refreshStatusLine()
     }
 
-    /// Wires the container and, once, imports the legacy export: the parts
-    /// that need no server (preferences, lifetime stats, daily history)
-    /// immediately, the rest as a pending job.
+    /// Wires the container. Store startup retires old legacy exports and jobs.
     func configure(container: ModelContainer) {
         self.container = container
-        if performsSideEffects {
-            importLegacyExportIfNeeded(context: container.mainContext)
-        }
         refreshStatusLine()
     }
 
@@ -169,7 +172,7 @@ final class DeviceStateRestoreService {
 
     /// Runs one pass of every pending job. Returns `true` when a follow-up
     /// sync would help (feeds were just subscribed, or the server was asked
-    /// to fetch audio so a file can be size-checked).
+    /// to fetch audio so a file can be verified).
     @discardableResult
     func runPendingRestores() async -> Bool {
         guard !isRunning, !jobs.isEmpty, isConfigured(), let context = container?.mainContext else {
@@ -184,6 +187,17 @@ final class DeviceStateRestoreService {
             guard var job = jobs.first(where: { $0.id == jobID }) else { continue }
             let outcome = await runPass(&job, context: context)
             wantsFollowUpSync = wantsFollowUpSync || outcome.wantsFollowUpSync
+            do {
+                if context.hasChanges {
+                    try saveContext(context)
+                }
+            } catch {
+                // The job on disk must never claim a change that SwiftData
+                // failed to commit. A later pass can retry the same snapshot.
+                context.rollback()
+                Log.migration.error("Could not save restored state: \(Log.describe(error), privacy: .public)")
+                break
+            }
             restoredLastPlayed = restoredLastPlayed || outcome.restoredLastPlayed
             if outcome.isComplete {
                 finish(job)
@@ -191,9 +205,6 @@ final class DeviceStateRestoreService {
                 jobs[index] = job
                 persist(job)
             }
-        }
-        if context.hasChanges {
-            try? context.save()
         }
         if restoredLastPlayed, performsSideEffects {
             PlayerService.shared.restoreLastPlayedEpisode(context: context)
@@ -279,17 +290,6 @@ final class DeviceStateRestoreService {
             if podcast.customPlaybackSpeed != state.customPlaybackSpeed {
                 podcast.customPlaybackSpeed = state.customPlaybackSpeed
             }
-            if state.adAnalysisEnabled == false, podcast.adAnalysisEnabled {
-                // The user had turned analysis off for this show on-device.
-                do {
-                    let dto = try await api.updatePodcast(id: podcast.serverID, adAnalysisEnabled: false)
-                    if podcast.adAnalysisEnabled != dto.adAnalysisEnabled {
-                        podcast.adAnalysisEnabled = dto.adAnalysisEnabled
-                    }
-                } catch {
-                    continue
-                }
-            }
             resolvedFeeds.insert(key)
         }
         job.resolvedPodcastFeeds = Array(resolvedFeeds)
@@ -341,9 +341,22 @@ final class DeviceStateRestoreService {
                     AudioStorage.deleteFile(named: filename)
                     job.discardedFiles += 1
                 } else if let serverBytes = episode.audioBytes {
+                    let expectedHash = episode.audioSha256
                     if AudioStorage.fileSize(named: filename) == serverBytes {
-                        adopt(filename: filename, size: serverBytes, into: episode)
-                        job.adoptedFiles += 1
+                        let localHash = await Self.verifiedLocalHash(
+                            at: AudioStorage.fileURL(for: filename),
+                            expectedServerHash: expectedHash
+                        )
+                        // Sync can replace the server audio while hashing is
+                        // off actor. Compare again on the next pass instead.
+                        guard episode.audioBytes == serverBytes, episode.audioSha256 == expectedHash else { continue }
+                        if let localHash {
+                            adopt(filename: filename, size: serverBytes, hash: localHash, into: episode)
+                            job.adoptedFiles += 1
+                        } else {
+                            AudioStorage.deleteFile(named: filename)
+                            job.discardedFiles += 1
+                        }
                     } else {
                         AudioStorage.deleteFile(named: filename)
                         job.discardedFiles += 1
@@ -355,7 +368,7 @@ final class DeviceStateRestoreService {
                     // The server has not fetched this episode's audio, so
                     // there is nothing to compare the file against yet. Ask
                     // it to (the user had it downloaded, so wants it) and
-                    // keep the file protected until the size is known.
+                    // keep the file protected until its identity is known.
                     if !state.isPlayed, !processRequested.contains(key), processBudget > 0 {
                         processBudget -= 1
                         do {
@@ -445,7 +458,7 @@ final class DeviceStateRestoreService {
         return PassOutcome(isComplete: complete, wantsFollowUpSync: wantsFollowUpSync, restoredLastPlayed: restoredLastPlayed)
     }
 
-    /// Size-gated adoption for the no-export fallback. Returns whether the
+    /// Byte-verified adoption for the no-export fallback. Returns whether the
     /// server was asked to fetch audio.
     private func scanLegacyFiles(
         _ job: inout RestoreJob,
@@ -476,9 +489,20 @@ final class DeviceStateRestoreService {
             let name = AudioStorage.legacyFilename(guid: episode.guid, mimeType: episode.audioMimeType)
             guard remaining.contains(name) else { continue }
             if let serverBytes = episode.audioBytes {
+                let expectedHash = episode.audioSha256
                 if AudioStorage.fileSize(named: name) == serverBytes {
-                    adopt(filename: name, size: serverBytes, into: episode)
-                    job.adoptedFiles += 1
+                    let localHash = await Self.verifiedLocalHash(
+                        at: AudioStorage.fileURL(for: name),
+                        expectedServerHash: expectedHash
+                    )
+                    guard episode.audioBytes == serverBytes, episode.audioSha256 == expectedHash else { continue }
+                    if let localHash {
+                        adopt(filename: name, size: serverBytes, hash: localHash, into: episode)
+                        job.adoptedFiles += 1
+                    } else {
+                        AudioStorage.deleteFile(named: name)
+                        job.discardedFiles += 1
+                    }
                 } else {
                     AudioStorage.deleteFile(named: name)
                     job.discardedFiles += 1
@@ -502,10 +526,25 @@ final class DeviceStateRestoreService {
         return wantsFollowUp
     }
 
-    private func adopt(filename: String, size: Int64, into episode: Episode) {
+    /// Hashing a downloaded file can take seconds, so it runs off the main
+    /// actor. The returned digest always describes the local bytes, never a
+    /// value copied from the server mirror.
+    static func verifiedLocalHash(at url: URL, expectedServerHash: String?) async -> String? {
+        let localHash = await Task.detached(priority: .utility) {
+            try? AudioStorage.sha256(of: url)
+        }.value
+        guard let localHash else { return nil }
+        if let expectedServerHash,
+           localHash.caseInsensitiveCompare(expectedServerHash) != .orderedSame {
+            return nil
+        }
+        return localHash
+    }
+
+    private func adopt(filename: String, size: Int64, hash: String, into episode: Episode) {
         episode.localFilename = filename
         episode.fileSizeBytes = size
-        episode.localAudioSha256 = episode.audioSha256
+        episode.localAudioSha256 = hash
         episode.setDownloadState(.downloaded)
         if episode.downloadProgress != 1 {
             episode.downloadProgress = 1
@@ -535,61 +574,6 @@ final class DeviceStateRestoreService {
             start = end
         }
         return result
-    }
-
-    // MARK: - Legacy phase 1
-
-    private func importLegacyExportIfNeeded(context: ModelContext) {
-        let defaults = UserDefaults.standard
-        guard !defaults.bool(forKey: Self.legacyImportedDefaultsKey) else { return }
-        defer { defaults.set(true, forKey: Self.legacyImportedDefaultsKey) }
-        switch LocalStoreGeneration.outcome {
-        case .exported?:
-            guard let data = try? Data(contentsOf: LocalStoreGeneration.legacyExportURL),
-                  let snapshot = try? DeviceStateSnapshot.decode(data)
-            else {
-                defaults.set("The previous library's export could not be read; a backup of it is in legacy-store-backup.", forKey: Self.statusDefaultsKey)
-                enqueueLegacyFilenameScan()
-                return
-            }
-            applyLocalOnlyState(snapshot, context: context)
-            enqueue(snapshot, subscribeMissingFeeds: true)
-        case .exportFailed?:
-            defaults.set("The previous library couldn't be read; a backup of it is in legacy-store-backup.", forKey: Self.statusDefaultsKey)
-            enqueueLegacyFilenameScan()
-        case .noLegacyStore?, nil:
-            break
-        }
-    }
-
-    /// Preferences, lifetime stats and daily listening history need no
-    /// server, so they are restored at the first launch.
-    private func applyLocalOnlyState(_ snapshot: DeviceStateSnapshot, context: ModelContext) {
-        let settings = AppSettings.current(in: context)
-        if let preferences = snapshot.preferences {
-            settings.defaultPlaybackSpeed = preferences.defaultPlaybackSpeed
-            if let policy = AutoDownloadPolicy(rawValue: preferences.autoDownloadPolicy) {
-                settings.autoDownloadPolicy = policy
-            }
-            settings.autoDeleteAfterPlayed = preferences.autoDeleteAfterPlayed
-            if let mode = PodcastSortMode(rawValue: preferences.podcastSortMode) {
-                settings.podcastSortMode = mode
-            }
-            settings.skipAds = preferences.skipAds
-            settings.skipIntrosAndOutros = preferences.skipIntrosAndOutros
-            settings.chainSkipGapSeconds = preferences.chainSkipGapSeconds
-        }
-        if let stats = snapshot.stats {
-            settings.lifetimePlayedSeconds += stats.lifetimePlayedSeconds
-            settings.lifetimeAdSkipSeconds += stats.lifetimeAdSkipSeconds
-        }
-        for day in snapshot.usageDays ?? [] {
-            let row = UsageHistoryDay(dayStart: day.dayStart)
-            row.playbackSeconds = day.playbackSeconds
-            row.adSkippedSeconds = day.adSkippedSeconds
-            context.insert(row)
-        }
-        try? context.save()
     }
 
     // MARK: - Persistence
@@ -630,7 +614,9 @@ final class DeviceStateRestoreService {
         var loaded: [RestoreJob] = []
         for name in names where name.hasSuffix(".json") {
             let url = directory.appendingPathComponent(name)
-            if let data = try? Data(contentsOf: url), let job = try? JSONDecoder().decode(RestoreJob.self, from: data) {
+            if let data = try? Data(contentsOf: url),
+               let job = try? JSONDecoder().decode(RestoreJob.self, from: data),
+               job.snapshot.source != .legacyStore {
                 loaded.append(job)
             }
         }

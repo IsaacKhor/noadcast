@@ -13,7 +13,7 @@ final class AppSettings {
     var autoDownloadPolicyRaw: String
     /// Server mirror of the global ad-analysis switch (`GET /settings`).
     /// Changed through an optimistic `PATCH /api/v1/settings`. When off, the
-    /// server skips analysis even if an individual podcast's setting is on.
+    /// server skips automatic analysis for every podcast.
     var adAnalysisEnabled: Bool = true
     /// Retained for store compatibility. Played audio is always removed now.
     var autoDeleteAfterPlayed: Bool

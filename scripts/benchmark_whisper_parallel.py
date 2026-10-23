@@ -257,7 +257,7 @@ def worker_main(worker_id, affinity, config, warmup_path, task_queue, result_que
             episode = task["episode"]
             episode_start = time.perf_counter()
             decode_start = time.perf_counter()
-            audio, decode_skipped_packets = decode_audio(task["audio_path"])
+            audio, decode_skipped_packets, _mp3_breaks = decode_audio(task["audio_path"])
             full_decoded_audio_seconds = len(audio) / 16000
             decode_seconds = time.perf_counter() - decode_start
             if config["sample_seconds"]:

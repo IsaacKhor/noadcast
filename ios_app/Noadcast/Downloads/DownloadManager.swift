@@ -476,7 +476,7 @@ final class DownloadManager {
         }
         episode.localFilename = filename
         episode.fileSizeBytes = size
-        episode.localAudioSha256 = sha256 ?? episode.audioSha256
+        episode.localAudioSha256 = sha256
         episode.setDownloadState(.downloaded)
         if episode.downloadProgress != 1 {
             episode.downloadProgress = 1
@@ -769,7 +769,34 @@ nonisolated final class DownloadSessionDelegate: NSObject, URLSessionDownloadDel
             return
         }
         let size = AudioStorage.fileSize(named: filename) ?? 0
-        let sha256 = response?.value(forHTTPHeaderField: "ETag").flatMap(Self.sha256(fromETag:))
+        let sha256: String
+        do {
+            sha256 = try AudioStorage.sha256(of: destination)
+        } catch {
+            AudioStorage.deleteFile(named: filename)
+            onEvent(.failed(
+                serverID: serverID,
+                taskID: downloadTask.taskIdentifier,
+                errorCode: -1,
+                message: "Couldn't verify the downloaded file: \(error.localizedDescription)",
+                resumeData: nil,
+                cancelled: false
+            ))
+            return
+        }
+        if let etag = response?.value(forHTTPHeaderField: "ETag"),
+           let expected = Self.sha256(fromETag: etag), expected != sha256 {
+            AudioStorage.deleteFile(named: filename)
+            onEvent(.failed(
+                serverID: serverID,
+                taskID: downloadTask.taskIdentifier,
+                errorCode: -1,
+                message: "The downloaded file differs from the server's audio. Retry the download.",
+                resumeData: nil,
+                cancelled: false
+            ))
+            return
+        }
         onEvent(.finished(serverID: serverID, taskID: downloadTask.taskIdentifier, filename: filename, size: size, sha256: sha256))
     }
 
@@ -809,7 +836,10 @@ nonisolated final class DownloadSessionDelegate: NSObject, URLSessionDownloadDel
             value.removeFirst(2)
         }
         value = value.trimmingCharacters(in: CharacterSet(charactersIn: "\""))
-        return value.isEmpty ? nil : value.lowercased()
+        guard value.count == 64, value.utf8.allSatisfy({
+            (48...57).contains($0) || (65...70).contains($0) || (97...102).contains($0)
+        }) else { return nil }
+        return value.lowercased()
     }
 
     // MARK: - Throttle (0.5 s / 512 KB / 1 %)

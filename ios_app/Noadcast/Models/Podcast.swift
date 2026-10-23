@@ -31,10 +31,8 @@ final class Podcast {
     /// are then downloaded under `AppSettings.autoDownloadPolicy`).
     var autoDownloadEnabled: Bool
 
-    /// Server mirror: processed episodes are transcribed and classified. The
-    /// global `AppSettings.adAnalysisEnabled` switch can still disable
-    /// analysis for every podcast at once. Changed through
-    /// `PATCH /api/v1/podcasts/{id}` (optimistically).
+    /// Deprecated server mirror retained for store compatibility. The server
+    /// always reports true; global analysis is controlled by AppSettings.
     var adAnalysisEnabled: Bool = true
 
     /// Server mirror: new episodes are downloaded and processed on the server

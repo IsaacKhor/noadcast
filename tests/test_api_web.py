@@ -81,7 +81,7 @@ class WebDashboardTests(ApiTestCase):
             with self.subTest(params=params):
                 self.assertError(await self.client.get("/api/v1/episodes", params=params), 422, "invalidRequest")
 
-    async def test_analysis_settings_and_podcast_exclusion_workflow(self) -> None:
+    async def test_analysis_settings_ignore_legacy_podcast_exclusion(self) -> None:
         podcast = add_podcast(self.ctx)
         episode_id = add_episodes(self.ctx, podcast.id, 1)[0]
         set_markers(self.ctx, episode_id, [(0.0, 9.0, "intro", "Sponsor")])
@@ -98,12 +98,12 @@ class WebDashboardTests(ApiTestCase):
         self.assertEqual(response.status_code, 200, response.text)
         listed = (await self.client.get("/api/v1/podcasts")).json()["items"]
         self.assertEqual(len(listed), 1)
-        self.assertIs(listed[0]["adAnalysisEnabled"], False)
+        self.assertIs(listed[0]["adAnalysisEnabled"], True)
         markers = (await self.client.get("/api/v1/episodes", params={"podcastId": podcast.id})).json()["items"][0]["adMarkers"]
         self.assertEqual([marker["summary"] for marker in markers], ["Sponsor"])
-        seq_after_exclusion = self.ctx.db.current_seq()
+        seq_after_legacy_patch = self.ctx.db.current_seq()
         self.assertEqual(
             (await self.client.patch(f"/api/v1/podcasts/{podcast.id}", json={"adAnalysisEnabled": False})).status_code,
             200,
         )
-        self.assertEqual(self.ctx.db.current_seq(), seq_after_exclusion)
+        self.assertEqual(self.ctx.db.current_seq(), seq_after_legacy_patch)

@@ -96,6 +96,7 @@ class SyncPagingTests(ApiTestCase):
 
     async def test_paging_sees_every_row_exactly_once_and_keeps_closure(self) -> None:
         since, pages, seen_episodes, seen_podcasts, deletions, settings = 0, 0, [], set(), [], []
+        setting_seqs = [row["updated_seq"] for row in self.ctx.db.read("SELECT updated_seq FROM settings")]
         while True:
             body = await self.page(since, 2)
             pages += 1
@@ -107,6 +108,11 @@ class SyncPagingTests(ApiTestCase):
             seen_episodes += [e["id"] for e in body["episodes"]]
             seen_podcasts |= page_podcasts
             deletions += body["deletions"]
+            self.assertEqual(
+                body["settings"] is not None,
+                since == 0 or any(since < seq <= body["nextSince"] for seq in setting_seqs),
+                "settings accompany each page containing a changed settings row",
+            )
             settings.append(body["settings"])
             since = body["nextSince"]
             if not body["hasMore"]:
@@ -118,7 +124,6 @@ class SyncPagingTests(ApiTestCase):
         self.assertEqual(deletions, [{"entity": "podcast", "id": self.doomed_id}])
         self.assertIsNotNone(settings[0], "since=0 always carries settings")
         self.assertIs(settings[-1]["adAnalysisEnabled"], False)
-        self.assertTrue(all(s is None for s in settings[1:-1]))
         self.assertEqual(since, self.ctx.db.current_seq())
         idle = await self.page(since, 2)
         self.assertEqual((idle["podcasts"], idle["episodes"], idle["deletions"]), ([], [], []))

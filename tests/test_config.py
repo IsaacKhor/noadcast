@@ -20,11 +20,13 @@ class ClassificationConfigTests(unittest.TestCase):
             "NOADCAST_CLASSIFIER": "openrouter",
             "OPENROUTER_API_KEY": "test-openrouter-secret",
             "NOADCAST_OPENROUTER_MODEL": "qwen/qwen3.8-flash",
+            "NOADCAST_OPENROUTER_FLEX_ENABLED": "true",
             "OPENROUTER_API_BASE": "https://router.example/api/v1",
         })
         self.assertEqual(settings.classifier, "openrouter")
         self.assertEqual(settings.openrouter_api_key, "test-openrouter-secret")
         self.assertEqual(settings.openrouter_model, "qwen/qwen3.8-flash")
+        self.assertTrue(settings.openrouter_flex_enabled)
         self.assertEqual(settings.openrouter_api_base, "https://router.example/api/v1")
         self.assertNotIn("test-openrouter-secret", repr(settings))
 
@@ -33,6 +35,7 @@ class ClassificationConfigTests(unittest.TestCase):
         self.assertEqual(settings.classifier, "openrouter")
         self.assertIsNone(settings.openrouter_api_key)
         self.assertEqual(settings.openrouter_model, "deepseek/deepseek-v4.1-flash")
+        self.assertFalse(settings.openrouter_flex_enabled)
         self.assertEqual(settings.openrouter_api_base, "https://openrouter.ai/api/v1")
 
     def test_rejects_retired_provider_or_unknown_model(self) -> None:
@@ -40,3 +43,7 @@ class ClassificationConfigTests(unittest.TestCase):
                          {"NOADCAST_OPENROUTER_MODEL": "google/gemini-3.5-flash"}):
             with self.subTest(override=override), self.assertRaises(ValueError):
                 Settings.from_mapping({"NOADCAST_ALLOW_NO_AUTH": "1", **override})
+
+    def test_rejects_invalid_flex_flag(self) -> None:
+        with self.assertRaises(ValueError):
+            Settings.from_mapping({"NOADCAST_ALLOW_NO_AUTH": "1", "NOADCAST_OPENROUTER_FLEX_ENABLED": "sometimes"})

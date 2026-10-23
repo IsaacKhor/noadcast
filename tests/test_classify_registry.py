@@ -48,8 +48,9 @@ class RegistryTests(unittest.IsolatedAsyncioTestCase):
         classifier = self.registry(openrouter_api_key="test").get()
         self.assertIsInstance(classifier, OpenRouterClassifier)
         self.assertEqual(classifier.model, DEFAULT_MODEL)
-        self.assertEqual((classifier.prompt.version, classifier.prompt.render_format), ("segments-v3", "sentences"))
+        self.assertEqual((classifier.prompt.version, classifier.prompt.render_format), ("segments-v4", "sentences"))
         self.assertFalse(classifier.include_silence)
+        self.assertFalse(classifier.flex_enabled)
 
     def test_three_presets_enforce_reasoning_and_cache_by_model(self) -> None:
         registry = self.registry(openrouter_api_key="test")
@@ -58,6 +59,19 @@ class RegistryTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(classifier.thinking, "high" if model == "openai/gpt-6-luna" else None)
             self.assertIs(classifier, registry.get(model=model, thinking="high", prompt_cache=True))
         self.assertEqual(len(registry._cache), 3)
+
+    def test_flex_preference_has_separate_cached_client(self) -> None:
+        registry = self.registry(openrouter_api_key="test")
+        default = registry.get()
+        flex = registry.get(flex_enabled=True)
+        self.assertFalse(default.flex_enabled)
+        self.assertTrue(flex.flex_enabled)
+        self.assertIs(default, registry.get(flex_enabled=False))
+        self.assertIs(flex, registry.get(flex_enabled=True))
+        self.assertEqual(len(registry._cache), 2)
+        configured = self.registry(openrouter_api_key="test", openrouter_flex_enabled=True)
+        self.assertTrue(configured.get().flex_enabled)
+        self.assertFalse(configured.get(flex_enabled=False).flex_enabled)
 
     async def test_injected_client_classifies_and_stays_open(self) -> None:
         recorder = Recorder((200, response()))

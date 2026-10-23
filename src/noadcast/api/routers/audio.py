@@ -62,7 +62,13 @@ def _record_missing(ctx: AppContext, episode: repo.Episode, found_bytes: int | N
     re-downloads it."""
     with ctx.db.write() as tx:
         current = repo.get_episode(tx, episode.id)
-        if current is not None and current.audio_state == "present" and current.audio_path == episode.audio_path:
+        if (
+            current is not None
+            and current.audio_state == "present"
+            and current.audio_path == episode.audio_path
+            and current.audio_bytes == episode.audio_bytes
+            and current.audio_sha256 == episode.audio_sha256
+        ):
             repo.mark_audio_evicted(tx, episode.id, reason="missing", now=now_iso())
     log.warning(
         "stored audio missing or truncated",
@@ -83,6 +89,26 @@ async def stored_audio(ctx: AppContext, episode: repo.Episode) -> Path | None:
         return path
     _record_missing(ctx, episode, size)
     return None
+
+
+async def current_stored_audio(ctx: AppContext, episode_id: int) -> tuple[repo.Episode, Path | None]:
+    """Keep the row and disk check together across a concurrent download.
+
+    Disk stat yields to the event loop. A download can move the episode to
+    partial or replace its file during that yield; a stale snapshot must not
+    mint a URL or serve a new file with the previous version's ETag.
+    """
+    while True:
+        episode = episode_or_404(ctx, episode_id)
+        path = await stored_audio(ctx, episode)
+        current = episode_or_404(ctx, episode_id)
+        if (
+            current.audio_state == episode.audio_state
+            and current.audio_path == episode.audio_path
+            and current.audio_bytes == episode.audio_bytes
+            and current.audio_sha256 == episode.audio_sha256
+        ):
+            return current, path
 
 
 async def request_audio(
@@ -124,21 +150,27 @@ async def audio_unavailable(ctx: AppContext, episode_id: int, *, implicit: bool 
 @router.post("/episodes/{episode_id}/audio-url")
 async def audio_url(request: Request, episode_id: int, ctx: Ctx) -> Response:
     """A signed URL for players that cannot send an Authorization header."""
-    episode = episode_or_404(ctx, episode_id)
-    if await stored_audio(ctx, episode) is None:
+    episode, path = await current_stored_audio(ctx, episode_id)
+    if path is None:
         raise await audio_unavailable(ctx, episode_id)
-    path, expires = signed_audio_path(ctx.settings, episode_id, now=time.time())
-    url = str(request.base_url).rstrip("/") + path
-    return json_response(AudioUrlOut(path=path, url=url, expires_at=iso(expires)))
+    assert episode.audio_sha256 is not None
+    signed_path, expires = signed_audio_path(ctx.settings, episode_id, episode.audio_sha256, now=time.time())
+    url = str(request.base_url).rstrip("/") + signed_path
+    return json_response(AudioUrlOut(path=signed_path, url=url, expires_at=iso(expires)))
 
 
 @router.api_route("/episodes/{episode_id}/audio", methods=["GET", "HEAD"])
 async def stream_audio(request: Request, episode_id: int, ctx: Ctx) -> Response:
     """Authenticated by the bearer header or a signed URL (see auth.py). Never gzip-encoded."""
-    episode = episode_or_404(ctx, episode_id)
-    path = await stored_audio(ctx, episode)
+    episode, path = await current_stored_audio(ctx, episode_id)
+    # A signed URL is a capability for one immutable set of bytes. Once a
+    # re-download changes the hash, even a still-unexpired URL is stale.
+    if "sig" in request.query_params and request.query_params.get("sha") != episode.audio_sha256:
+        raise ApiError(409, "audioVersionChanged", "the audio changed; request a new audio URL")
     if path is None:
-        if ctx.settings.evicted_redirect:
+        # An origin URL has no promise to return the hash in a signed URL:
+        # dynamic ads can make the same enclosure serve different bytes.
+        if ctx.settings.evicted_redirect and "sig" not in request.query_params:
             current, job_id = await request_audio(ctx, episode_id, implicit=True)
             if current.release_reason != "played":
                 return RedirectResponse(current.enclosure_url, status_code=307)

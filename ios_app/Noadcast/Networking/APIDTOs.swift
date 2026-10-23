@@ -429,6 +429,8 @@ nonisolated struct ServerSettingsDTO: Decodable, Sendable, Equatable {
     let classifierModel: String?
     /// Optional for compatibility with servers predating polling settings.
     let feedIntervalMinutes: Int?
+    /// Dashboard-managed preference; absent on older servers.
+    let openrouterFlexEnabled: Bool?
     /// Which providers have server-side keys. Keys themselves are never sent.
     let availableClassifiers: [String: Bool]
 
@@ -438,6 +440,7 @@ nonisolated struct ServerSettingsDTO: Decodable, Sendable, Equatable {
         classifier: String? = nil,
         classifierModel: String? = nil,
         feedIntervalMinutes: Int? = nil,
+        openrouterFlexEnabled: Bool? = nil,
         availableClassifiers: [String: Bool] = [:]
     ) {
         self.adAnalysisEnabled = adAnalysisEnabled
@@ -445,12 +448,13 @@ nonisolated struct ServerSettingsDTO: Decodable, Sendable, Equatable {
         self.classifier = classifier
         self.classifierModel = classifierModel
         self.feedIntervalMinutes = feedIntervalMinutes
+        self.openrouterFlexEnabled = openrouterFlexEnabled
         self.availableClassifiers = availableClassifiers
     }
 
     nonisolated enum CodingKeys: String, CodingKey {
         case adAnalysisEnabled, autoProcessEnabled, classifier, classifierModel, availableClassifiers
-        case feedIntervalMinutes
+        case feedIntervalMinutes, openrouterFlexEnabled
     }
 
     init(from decoder: Decoder) throws {
@@ -460,6 +464,7 @@ nonisolated struct ServerSettingsDTO: Decodable, Sendable, Equatable {
         classifier = try? c.decodeIfPresent(String.self, forKey: .classifier)
         classifierModel = try? c.decodeIfPresent(String.self, forKey: .classifierModel)
         feedIntervalMinutes = try? c.decodeIfPresent(Int.self, forKey: .feedIntervalMinutes)
+        openrouterFlexEnabled = try? c.decodeIfPresent(Bool.self, forKey: .openrouterFlexEnabled)
         availableClassifiers = (try? c.decodeIfPresent([String: Bool].self, forKey: .availableClassifiers)) ?? [:]
     }
 }

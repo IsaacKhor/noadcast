@@ -6,7 +6,7 @@
   const healthUrl = new URL("health", location.href);
   const number = new Intl.NumberFormat();
   const money = new Intl.NumberFormat(undefined, { style: "currency", currency: "USD", minimumFractionDigits: 2, maximumFractionDigits: 4 });
-  const state = { token: sessionStorage.getItem("noadcastToken") || "", authRequired: true, view: "overview", podcasts: [], settings: null, episodeOffset: 0, episodeTotal: 0, episodeRequest: 0, podcastRequest: 0, analysisRequest: 0, usageRequest: 0, sessionGeneration: 0, busy: new Set(), settingsBusy: false, timer: null };
+  const state = { token: sessionStorage.getItem("noadcastToken") || "", authRequired: true, view: "overview", podcasts: [], settings: null, episodeOffset: 0, episodeTotal: 0, episodeRequest: 0, podcastRequest: 0, analysisRequest: 0, usageRequest: 0, sessionGeneration: 0, settingsBusy: false, timer: null };
   const pageSize = 50;
 
   function put(id, value) { $(id).textContent = value; }
@@ -201,7 +201,6 @@
     });
   }
   async function loadPodcasts() {
-    if (state.busy.size) return;
     const serial = ++state.podcastRequest;
     const data = await request("podcasts");
     if (serial !== state.podcastRequest) return;
@@ -210,7 +209,6 @@
     $("episode-podcast").replaceChildren(new Option("All podcasts", ""));
     state.podcasts.slice().sort((a, b) => a.title.localeCompare(b.title)).forEach((podcast) => $("episode-podcast").add(new Option(podcast.title, podcast.id)));
     $("episode-podcast").value = current;
-    renderPodcasts();
   }
   async function loadEpisodes() {
     const serial = ++state.episodeRequest;
@@ -281,6 +279,7 @@
     $("global-analysis").disabled = disabled;
     $("model-select").disabled = disabled;
     $("save-model").disabled = disabled || $("model-select").value === state.settings?.classifierModel;
+    $("openrouter-flex").disabled = disabled;
     $("feed-interval").disabled = disabled;
     const interval = feedIntervalValue();
     $("save-feed-interval").disabled = disabled || interval === null || interval === state.settings?.feedIntervalMinutes;
@@ -295,60 +294,24 @@
     updateSettingsControls();
   }
   async function loadAnalysis() {
-    if (state.settingsBusy || state.busy.size) return;
+    if (state.settingsBusy) return;
     const serial = ++state.analysisRequest;
     try {
-      const [settings] = await Promise.all([request("settings"), loadPodcasts()]);
+      const settings = await request("settings");
       if (serial !== state.analysisRequest) return;
       state.settings = settings;
       $("global-analysis").checked = !!settings.adAnalysisEnabled;
       put("global-status", settings.adAnalysisEnabled ? "Enabled for future analysis." : "Paused for all podcasts.");
       $("model-select").value = settings.classifierModel;
       put("model-status", "Current model saved.");
+      $("openrouter-flex").checked = !!settings.openrouterFlexEnabled;
+      put("openrouter-flex-status", settings.openrouterFlexEnabled ? "Flex preference enabled for future analysis." : "Flex preference off.");
       $("feed-interval").value = String(settings.feedIntervalMinutes ?? 30);
       $("feed-interval-status").classList.remove("error");
       put("feed-interval-status", "Current interval saved.");
       updateSettingsControls();
       clearError();
     } catch (error) { if (!$("app").hidden) showError(`Analysis settings: ${messageFor(error)}`); }
-  }
-  function renderPodcasts() {
-    const holder = $("podcast-list"), query = $("podcast-search").value.trim().toLocaleLowerCase(), filter = $("podcast-filter").value;
-    const excluded = state.podcasts.filter((podcast) => podcast.adAnalysisEnabled === false);
-    put("excluded-count", `${fmt(excluded.length)} excluded`);
-    const visible = state.podcasts.filter((podcast) => {
-      if (filter === "excluded" && podcast.adAnalysisEnabled) return false;
-      if (filter === "included" && !podcast.adAnalysisEnabled) return false;
-      return !query || `${podcast.title} ${podcast.author || ""}`.toLocaleLowerCase().includes(query);
-    }).sort((a, b) => a.title.localeCompare(b.title));
-    holder.replaceChildren();
-    if (!visible.length) { holder.append(el("p", "empty", "No podcasts match this filter.")); return; }
-    visible.forEach((podcast) => {
-      const row = el("div", "podcast-row"), info = el("div"), control = el("label", "switch-control"), checkbox = el("input"), track = el("span", "switch-track"), status = el("p", "podcast-status");
-      checkbox.type = "checkbox"; checkbox.checked = !podcast.adAnalysisEnabled; checkbox.disabled = state.busy.has(podcast.id);
-      checkbox.setAttribute("aria-label", `Exclude ${podcast.title} from ad detection`);
-      checkbox.addEventListener("change", () => savePodcast(podcast, checkbox, status));
-      status.hidden = true;
-      info.append(el("div", "podcast-title", podcast.title), el("div", "podcast-meta", `${fmt(podcast.episodeCount)} episodes${podcast.author ? ` · ${podcast.author}` : ""}`), status);
-      control.append(checkbox, track); row.append(info, control); holder.append(row);
-    });
-  }
-  async function savePodcast(podcast, checkbox, status) {
-    const excluded = checkbox.checked;
-    state.podcastRequest++; state.analysisRequest++;
-    checkbox.disabled = true; state.busy.add(podcast.id);
-    status.hidden = false; status.classList.remove("error"); status.textContent = "Saving…";
-    try {
-      const updated = await request(`podcasts/${podcast.id}`, { method: "PATCH", body: JSON.stringify({ adAnalysisEnabled: !excluded }) });
-      const index = state.podcasts.findIndex((item) => item.id === podcast.id);
-      if (index >= 0) state.podcasts[index] = updated;
-      state.busy.delete(podcast.id);
-      renderPodcasts();
-    } catch (error) {
-      checkbox.checked = !excluded;
-      status.textContent = `Could not save: ${messageFor(error)}`;
-      status.classList.add("error");
-    } finally { state.busy.delete(podcast.id); checkbox.disabled = false; }
   }
   async function saveGlobal() {
     const checkbox = $("global-analysis"), enabled = checkbox.checked;
@@ -378,6 +341,21 @@
     } catch (error) {
       $("model-select").value = state.settings?.classifierModel || selected;
       put("model-status", `Could not save: ${messageFor(error)}`); $("model-status").classList.add("error");
+    } finally { state.settingsBusy = false; updateSettingsControls(); }
+  }
+  async function saveOpenRouterFlex() {
+    const checkbox = $("openrouter-flex"), enabled = checkbox.checked;
+    state.analysisRequest++;
+    state.settingsBusy = true;
+    updateSettingsControls();
+    put("openrouter-flex-status", "Saving…"); $("openrouter-flex-status").classList.remove("error");
+    try {
+      state.settings = await request("settings", { method: "PATCH", body: JSON.stringify({ openrouterFlexEnabled: enabled }) });
+      checkbox.checked = !!state.settings.openrouterFlexEnabled;
+      put("openrouter-flex-status", checkbox.checked ? "Flex preference enabled for future analysis." : "Flex preference off.");
+    } catch (error) {
+      checkbox.checked = !!state.settings?.openrouterFlexEnabled;
+      put("openrouter-flex-status", `Could not save: ${messageFor(error)}`); $("openrouter-flex-status").classList.add("error");
     } finally { state.settingsBusy = false; updateSettingsControls(); }
   }
   async function saveFeedInterval() {
@@ -418,10 +396,9 @@
   $("global-analysis").addEventListener("change", saveGlobal);
   $("model-select").addEventListener("change", updateSettingsControls);
   $("save-model").addEventListener("click", saveModel);
+  $("openrouter-flex").addEventListener("change", saveOpenRouterFlex);
   $("feed-interval").addEventListener("input", feedIntervalChanged);
   $("save-feed-interval").addEventListener("click", saveFeedInterval);
-  $("podcast-search").addEventListener("input", renderPodcasts);
-  $("podcast-filter").addEventListener("change", renderPodcasts);
   document.addEventListener("visibilitychange", () => { if (!document.hidden && state.view === "overview" && !$("app").hidden) loadOverview(); });
   boot();
 })();

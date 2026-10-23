@@ -102,6 +102,12 @@ final class PlayerService {
     @ObservationIgnored private var chainSkipGapSeconds: Double = 5
     @ObservationIgnored private var analysisEnabled: Bool = true
     @ObservationIgnored private var skipPlanner = AdSkipPlanner()
+    /// A decoded server duration is in the same sample timeline as markers.
+    /// AVFoundation can estimate a different duration for headerless VBR MP3.
+    @ObservationIgnored private var measuredEpisodeDuration: Double?
+    /// Hash bound to the loaded stream URL. A sync can advance the mirror to
+    /// new audio while this item still holds the previous render.
+    @ObservationIgnored private var streamAudioSha256: String?
 
     // Two-source plumbing.
     @ObservationIgnored private var loadGeneration = 0
@@ -394,12 +400,18 @@ final class PlayerService {
 
     // MARK: - Sync / download notifications
 
-    /// Markers can arrive mid-playback (streaming a just-published episode
-    /// while the server is still classifying). Re-snapshot and re-sanitise;
+    /// Markers or audio identity can change mid-playback. Re-snapshot and
+    /// re-sanitise against the decoded duration;
     /// skipping only ever seeks forward, so a region already passed is never
     /// revisited.
     func adMarkersDidChange(episodeServerID: Int) {
         guard episodeServerID == currentEpisodeServerID, let episode = currentEpisodeModel() else { return }
+        measuredEpisodeDuration = episode.durationIsMeasured ? Self.positiveFiniteDuration(episode.duration) : nil
+        duration = Self.resolvedDuration(
+            serverDuration: episode.duration,
+            durationIsMeasured: episode.durationIsMeasured,
+            itemDuration: player.currentItem?.duration.seconds
+        )
         let refreshed = regions(for: episode, kind: sourceKind)
         if refreshed != adRegions {
             adRegions = refreshed
@@ -489,6 +501,7 @@ final class PlayerService {
         chapters = []
         isLoadingChapters = false
         sourceKind = .none
+        streamAudioSha256 = nil
         status = .ready
         markersSuppressedForLocalFile = false
         skipPlanner.reset()
@@ -502,7 +515,8 @@ final class PlayerService {
         currentPodcastTitle = episode.podcastTitle ?? podcast?.title ?? ""
         artworkURL = displayArtworkURL
         duration = Self.positiveFiniteDuration(episode.duration) ?? 0
-        analysisEnabled = settings.adAnalysisEnabled && (podcast?.adAnalysisEnabled ?? true)
+        measuredEpisodeDuration = episode.durationIsMeasured ? Self.positiveFiniteDuration(episode.duration) : nil
+        analysisEnabled = settings.adAnalysisEnabled
         adRegions = regions(for: episode, kind: episode.hasLocalFile ? .local : .stream)
         skipAdsEnabled = settings.skipAds
         skipIntrosAndOutrosEnabled = settings.skipIntrosAndOutros
@@ -541,6 +555,13 @@ final class PlayerService {
             if markersSuppressedForLocalFile {
                 Log.player.notice("Local file for \"\(episode.title, privacy: .public)\" differs from the server's audio; not applying its markers")
             }
+            return []
+        }
+        if kind == .stream, sourceKind == .stream,
+           let loadedHash = streamAudioSha256,
+           let currentHash = episode.audioSha256,
+           loadedHash.caseInsensitiveCompare(currentHash) != .orderedSame {
+            markersSuppressedForLocalFile = false
             return []
         }
         markersSuppressedForLocalFile = false
@@ -680,6 +701,9 @@ final class PlayerService {
         player.replaceCurrentItem(with: item)
         loadChapters(from: url, item: item)
         sourceKind = kind
+        streamAudioSha256 = kind == .stream
+            ? (Self.streamHash(from: url) ?? episode?.audioSha256)
+            : nil
         needsItemBuild = false
         isRecovering = false
         stallStartedAt = nil
@@ -731,6 +755,7 @@ final class PlayerService {
         player.pause()
         player.replaceCurrentItem(with: nil)
         sourceKind = .none
+        streamAudioSha256 = nil
         isPlaying = false
         wantsToPlay = false
         needsItemBuild = true
@@ -811,7 +836,7 @@ final class PlayerService {
                 guard let self else { return }
                 if t.isFinite { self.currentTime = t }
                 if let dur = self.player.currentItem?.duration.seconds, dur.isFinite, dur > 0 {
-                    self.duration = dur
+                    self.duration = self.measuredEpisodeDuration ?? dur
                     self.sanitizeAdRegionsForCurrentDuration()
                 }
                 self.accumulatePlayedTime()
@@ -1018,6 +1043,21 @@ final class PlayerService {
     private nonisolated static func positiveFiniteDuration(_ seconds: Double?) -> Double? {
         guard let seconds, seconds.isFinite, seconds > 0 else { return nil }
         return seconds
+    }
+
+    nonisolated static func resolvedDuration(
+        serverDuration: Double?, durationIsMeasured: Bool, itemDuration: Double?
+    ) -> Double {
+        let server = positiveFiniteDuration(serverDuration)
+        if durationIsMeasured, let server { return server }
+        return positiveFiniteDuration(itemDuration) ?? server ?? 0
+    }
+
+    /// New servers bind a signed URL to this SHA. Read it from the URL so a
+    /// stale local mirror cannot apply old markers to freshly minted audio.
+    nonisolated static func streamHash(from url: URL) -> String? {
+        URLComponents(url: url, resolvingAgainstBaseURL: false)?
+            .queryItems?.first(where: { $0.name == "sha" })?.value
     }
 
     nonisolated static func clampedPlaybackTime(_ seconds: Double, duration: Double) -> Double {

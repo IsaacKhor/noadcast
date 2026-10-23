@@ -333,7 +333,7 @@ class WhisperEngine:
     def transcribe(self, request: TaskRequest, progress: ProgressFn) -> dict[str, Any]:
         decode_start = time.perf_counter()
         try:
-            audio, skipped_packets = self._decode_audio(request.audio_path)
+            audio, skipped_packets, mp3_breaks = self._decode_audio(request.audio_path)
         except MemoryError:
             raise
         except OSError as error:  # missing/unreadable file: environmental, not the content
@@ -381,6 +381,7 @@ class WhisperEngine:
                 "pipeline": "batched", "device": self._spec.device, "compute_type": self._spec.compute_type,
                 "cpu_threads": self._spec.cpu_threads, "batch_size": self._spec.batch_size,
                 "decode_skipped_packets": skipped_packets,
+                "mp3_breaks": mp3_breaks,
                 "vad_filter": True, "transcription_options": transcription,
                 "vad_options": jsonable(info.vad_options), "versions": self._versions,
             },

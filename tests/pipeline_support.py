@@ -247,7 +247,8 @@ class FakeRegistry:
         self.classifiers: dict[str, ScriptedClassifier] = {}
         self.requested: list[tuple[str | None, str | None, str | None]] = []
 
-    def get(self, provider: str | None = None, model: str | None = None, thinking: str | None = None) -> ScriptedClassifier:
+    def get(self, provider: str | None = None, model: str | None = None, thinking: str | None = None,
+            *, flex_enabled: bool | None = None) -> ScriptedClassifier:
         self.requested.append((provider, model, thinking))
         name = provider or "openrouter"
         if name != "openrouter" or (model is not None and model not in MODEL_IDS):

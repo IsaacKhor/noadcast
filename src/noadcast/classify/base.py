@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Literal, Protocol, Sequence
 
-from ..transcribe.protocol import Sentence, SilenceRegion
+from ..transcribe.protocol import Mp3Break, Sentence, SilenceRegion
 
 SegmentKind = Literal["ad", "intro", "outro"]
 SEGMENT_KINDS: tuple[str, ...] = ("ad", "intro", "outro")
@@ -19,6 +19,7 @@ class ClassifyRequest:
     episode_title: str | None = None
     podcast_title: str | None = None
     language: str = "en"
+    mp3_breaks: Sequence[Mp3Break] = ()
     # Audio context retained for stored/evaluation request compatibility.
     audio_path: str | None = None
     audio_content_type: str | None = None

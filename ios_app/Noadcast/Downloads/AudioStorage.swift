@@ -1,4 +1,5 @@
 import Foundation
+import CryptoKit
 
 /// On-disk layout for downloaded episode audio and download resume data.
 ///
@@ -49,6 +50,19 @@ nonisolated enum AudioStorage {
     static func fileSize(named filename: String) -> Int64? {
         let attributes = try? FileManager.default.attributesOfItem(atPath: fileURL(for: filename).path)
         return (attributes?[.size] as? NSNumber)?.int64Value
+    }
+
+    /// Hash the bytes that actually reached the device. A response ETag or
+    /// the latest sync mirror alone cannot establish the file's identity:
+    /// either can describe another render after a server re-download.
+    static func sha256(of url: URL) throws -> String {
+        let file = try FileHandle(forReadingFrom: url)
+        defer { try? file.close() }
+        var hasher = SHA256()
+        while let chunk = try file.read(upToCount: 1024 * 1024), !chunk.isEmpty {
+            hasher.update(data: chunk)
+        }
+        return hasher.finalize().map { String(format: "%02x", $0) }.joined()
     }
 
     static func deleteFile(named filename: String?) {

@@ -101,7 +101,10 @@ class SignedAudioUrlTests(ApiTestCase):
         return response.json()["path"]
 
     def signed(self, episode_id: int, exp: int) -> str:
-        return f"exp={exp}&sig={auth.audio_signature(self.settings.signing_secret, episode_id, exp)}"
+        episode = self.ctx.db.read_one("SELECT audio_sha256 FROM episodes WHERE id = ?", (episode_id,))
+        assert episode is not None and episode[0] is not None
+        sha = episode[0]
+        return f"exp={exp}&sha={sha}&sig={auth.audio_signature(self.settings.signing_secret, episode_id, exp, sha)}"
 
     async def test_signed_url_streams_without_a_header(self) -> None:
         path = await self.mint()
@@ -131,6 +134,31 @@ class SignedAudioUrlTests(ApiTestCase):
         response = await self.client.get(f"/api/v1/episodes/{self.episode_id}/audio")
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.content, self.audio)
+
+    async def test_old_signed_url_cannot_stream_replaced_audio(self) -> None:
+        old_path = await self.mint()
+        replacement = self.audio[::-1]
+        store_audio(self.ctx, self.episode_id, replacement)
+        for method, headers in (("GET", {}), ("HEAD", {}), ("GET", {"Range": "bytes=0-9"})):
+            with self.subTest(method=method, headers=headers):
+                response = await self.anon.request(method, old_path, headers=headers)
+                if method == "HEAD":
+                    self.assertEqual(response.status_code, 409)
+                    self.assertEqual(response.content, b"")
+                else:
+                    self.assertError(response, 409, "audioVersionChanged")
+                self.assertNotIn("location", response.headers)
+        self.assertEqual((await self.anon.get(await self.mint())).content, replacement)
+        self.assertEqual((await self.client.get(f"/api/v1/episodes/{self.episode_id}/audio")).content, replacement)
+        self.assertIsNone(self.ctx.db.read_one(
+            "SELECT id FROM jobs WHERE subject_id = ? AND kind = 'download' AND state IN ('pending', 'running')",
+            (self.episode_id,),
+        ))
+
+    async def test_same_audio_hash_keeps_url_valid(self) -> None:
+        path = await self.mint()
+        store_audio(self.ctx, self.episode_id, self.audio)
+        self.assertEqual((await self.anon.get(path)).content, self.audio)
 
     async def test_signature_is_bound_to_its_episode(self) -> None:
         path = await self.mint()
@@ -162,19 +190,24 @@ class SignedAudioUrlTests(ApiTestCase):
     async def test_tampered_signatures_are_rejected(self) -> None:
         path = await self.mint()
         exp = int(re.search(r"exp=(\d+)", path).group(1))
+        sha = re.search(r"sha=([0-9a-f]+)", path).group(1)
         sig = re.search(r"sig=([0-9a-f]+)", path).group(1)
         flipped = ("0" if sig[0] != "0" else "1") + sig[1:]
+        changed_sha = ("0" if sha[0] != "0" else "1") + sha[1:]
         base = f"/api/v1/episodes/{self.episode_id}/audio"
         for query in (
-            f"exp={exp}&sig={flipped}",
-            f"exp={exp + 1}&sig={sig}",
-            f"exp={exp}&sig={sig.upper()}",
-            f"exp={exp}",
-            f"sig={sig}",
-            f"exp={exp}&sig={sig}&sig={sig}",
-            f"exp=-{exp}&sig={sig}",
-            f"exp={exp}.0&sig={sig}",
-            f"exp={'9' * 40}&sig={sig}",
+            f"exp={exp}&sha={sha}&sig={flipped}",
+            f"exp={exp + 1}&sha={sha}&sig={sig}",
+            f"exp={exp}&sha={sha}&sig={sig.upper()}",
+            f"exp={exp}&sha={changed_sha}&sig={sig}",
+            f"exp={exp}&sha={sha.upper()}&sig={sig}",
+            f"exp={exp}&sha={sha}",
+            f"exp={exp}&sig={sig}",
+            f"exp={exp}&sha={sha}&sig={sig}&sig={sig}",
+            f"exp={exp}&sha={sha}&sha={sha}&sig={sig}",
+            f"exp=-{exp}&sha={sha}&sig={sig}",
+            f"exp={exp}.0&sha={sha}&sig={sig}",
+            f"exp={'9' * 40}&sha={sha}&sig={sig}",
         ):
             with self.subTest(query=query):
                 self.assertError(await self.anon.get(f"{base}?{query}"), 401, "unauthorized")

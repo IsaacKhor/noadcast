@@ -2,8 +2,9 @@
 
 Every request except ``/health`` and the fixed web shell/assets must carry ``Authorization: Bearer
 <token>``, compared in constant time. The one other credential is a signed
-audio URL, ``?exp=<unix>&sig=<hex>`` with ``sig = HMAC-SHA256(signing_secret,
-"<episode_id>\\n<exp>")``, accepted only on GET/HEAD of that episode's audio:
+audio URL, ``?exp=<unix>&sha=<audio_sha256>&sig=<hex>`` with ``sig =
+HMAC-SHA256(signing_secret, "<episode_id>\\n<exp>\\n<audio_sha256>")``,
+accepted only on GET/HEAD of that episode's audio:
 AVPlayer has no supported way to attach a header. The raw token is never
 read from a query string, where it would persist in logs.
 
@@ -31,6 +32,7 @@ PUBLIC_WEB_PATHS = frozenset({"/", "/web/app.css", "/web/app.js"})
 AUDIO_PATH = re.compile(r"/api/v1/episodes/(\d+)/audio")
 _SIGNED_METHODS = frozenset({"GET", "HEAD"})
 _MAX_EXP_DIGITS = 12
+_SHA256 = re.compile(r"[0-9a-f]{64}")
 
 
 def route_path(scope: Scope) -> str:
@@ -42,15 +44,20 @@ def route_path(scope: Scope) -> str:
     return path
 
 
-def audio_signature(secret: bytes, episode_id: int, exp: int) -> str:
-    return hmac.new(secret, f"{episode_id}\n{exp}".encode(), hashlib.sha256).hexdigest()
+def audio_signature(secret: bytes, episode_id: int, exp: int, audio_sha256: str) -> str:
+    return hmac.new(secret, f"{episode_id}\n{exp}\n{audio_sha256}".encode(), hashlib.sha256).hexdigest()
 
 
-def signed_audio_path(settings: Settings, episode_id: int, *, now: float) -> tuple[str, dt.datetime]:
+def signed_audio_path(
+    settings: Settings, episode_id: int, audio_sha256: str, *, now: float
+) -> tuple[str, dt.datetime]:
     """Path (with query) of a signed audio URL and the moment it expires."""
     exp = int(now) + settings.audio_url_ttl_seconds
-    sig = audio_signature(settings.signing_secret, episode_id, exp)
-    return f"/api/v1/episodes/{episode_id}/audio?exp={exp}&sig={sig}", dt.datetime.fromtimestamp(exp, dt.UTC)
+    sig = audio_signature(settings.signing_secret, episode_id, exp, audio_sha256)
+    return (
+        f"/api/v1/episodes/{episode_id}/audio?exp={exp}&sha={audio_sha256}&sig={sig}",
+        dt.datetime.fromtimestamp(exp, dt.UTC),
+    )
 
 
 def bearer_failure(headers: Headers, token: str | None) -> str | None:
@@ -67,15 +74,17 @@ def bearer_failure(headers: Headers, token: str | None) -> str | None:
 
 
 def signature_failure(query: QueryParams, secret: bytes, episode_id: int, *, now: float) -> str | None:
-    """Why ``?exp&sig`` does not authorise this episode's audio, or None if it does."""
-    exps, sigs = query.getlist("exp"), query.getlist("sig")
-    if len(exps) != 1 or len(sigs) != 1:
+    """Why ``?exp&sha&sig`` does not authorise this audio version, or None if it does."""
+    exps, shas, sigs = query.getlist("exp"), query.getlist("sha"), query.getlist("sig")
+    if len(exps) != 1 or len(shas) != 1 or len(sigs) != 1:
         return "invalid audio URL signature"
-    exp_text, sig = exps[0], sigs[0]
+    exp_text, sha, sig = exps[0], shas[0], sigs[0]
     if not exp_text.isascii() or not exp_text.isdigit() or len(exp_text) > _MAX_EXP_DIGITS:
         return "invalid audio URL signature"
+    if _SHA256.fullmatch(sha) is None:
+        return "invalid audio URL signature"
     exp = int(exp_text)
-    expected = audio_signature(secret, episode_id, exp)
+    expected = audio_signature(secret, episode_id, exp, sha)
     if not hmac.compare_digest(expected.encode(), sig.encode()):
         return "invalid audio URL signature"
     if exp <= now:
@@ -107,6 +116,8 @@ class AuthMiddleware:
             return None
         audio = AUDIO_PATH.fullmatch(path)
         query = QueryParams(scope.get("query_string", b""))
-        if audio is None or scope["method"] not in _SIGNED_METHODS or ("sig" not in query and "exp" not in query):
+        if audio is None or scope["method"] not in _SIGNED_METHODS or not any(
+            key in query for key in ("sig", "exp", "sha")
+        ):
             return failure
         return signature_failure(query, self.settings.signing_secret, int(audio.group(1)), now=time.time())

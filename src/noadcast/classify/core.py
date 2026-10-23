@@ -21,7 +21,7 @@ from dataclasses import dataclass, replace
 from functools import partial
 from typing import Any, Awaitable, Callable, Sequence
 
-from ..transcribe.protocol import Sentence, SilenceRegion
+from ..transcribe.protocol import Mp3Break, Sentence, SilenceRegion
 from .base import ClassifierError, ClassifyRequest, ClassifyResult, DetectedSegment, TokenUsage
 from .chunking import ChunkPlan, chunk_silences, estimate_tokens, plan_chunks, stitch_chunks
 from .prompts import CHUNK_NOTES, REPAIR_NUDGE, PromptSpec, episode_duration_guidance, get_prompt
@@ -138,7 +138,7 @@ class TranscriptClassifier:
         *,
         model: str,
         thinking: str | None = None,
-        prompt_version: str = "segments-v3",
+        prompt_version: str = "segments-v4",
         render_format: str = "sentences",
         include_silence: bool = False,
         max_input_tokens: int = 120_000,
@@ -179,8 +179,10 @@ class TranscriptClassifier:
         if self.prompt.render_format == "sentences":
             # Use the same complete-sentence units for rendering and chunk
             # boundaries; otherwise a chunk seam could cut a joined line.
-            req = replace(req, sentences=coalesce_sentences(req.sentences))
-        rendered = self._render(req.sentences, req.silences, req.episode_duration)
+            req = replace(req, sentences=coalesce_sentences(
+                req.sentences, req.mp3_breaks if self.prompt.version == "segments-v4" else ()
+            ))
+        rendered = self._render(req.sentences, req.silences, req.episode_duration, req.mp3_breaks)
         guidance = episode_duration_guidance(req.episode_duration, req.sentences)
         user_text = self.prompt.user_message(rendered.text, guidance)
         provider, model = self.request_identity
@@ -196,10 +198,13 @@ class TranscriptClassifier:
         return PreparedRequest(req, rendered, user_text, sha)
 
     def _render(
-        self, sentences: Sequence[Sentence], silences: Sequence[SilenceRegion], duration: float | None
+        self, sentences: Sequence[Sentence], silences: Sequence[SilenceRegion], duration: float | None,
+        mp3_breaks: Sequence[Mp3Break] = (),
     ) -> RenderedTranscript:
         return render_transcript(
-            sentences, silences, fmt=self.prompt.render_format, include_silence=self.include_silence, episode_duration=duration
+            sentences, silences, fmt=self.prompt.render_format, include_silence=self.include_silence,
+            episode_duration=duration,
+            mp3_breaks=mp3_breaks if self.prompt.version == "segments-v4" else (),
         )
 
     def _jobs(self, prepared: PreparedRequest) -> list[_Job]:
@@ -218,7 +223,14 @@ class TranscriptClassifier:
         for plan in plans:
             sentences = list(req.sentences[plan.first : plan.last + 1])
             duration = req.episode_duration if plan.allows_outro else None
-            rendered = self._render(sentences, chunk_silences(plan, req.silences), duration)
+            # Include hints in the silent interval immediately before/after
+            # this window, where no sentence timestamp falls on the splice.
+            lower = 0.0 if plan.first == 0 else req.sentences[plan.first - 1].end
+            upper = math.inf if plan.last + 1 == len(req.sentences) else req.sentences[plan.last + 1].start
+            rendered = self._render(
+                sentences, chunk_silences(plan, req.silences), duration,
+                [hint for hint in req.mp3_breaks if lower <= hint.seconds < upper],
+            )
             # The endpoint only concerns the chunk that can hold the outro.
             guidance = episode_duration_guidance(req.episode_duration, req.sentences) if plan.allows_outro else ""
             note = CHUNK_NOTES[plan.role].format(part=plan.index + 1, total=plan.count)

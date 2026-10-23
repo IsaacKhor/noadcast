@@ -289,15 +289,18 @@ class DownloadTranscribeClassifyTests(StageTestCase):
         self.assertEqual((done.pipeline_state, done.classify_state, done.transcript_state), ("ready", "skipped", "none"))
         self.assertIsNone(jobs.live_stage_job(self.ctx.db, self.episode.id))
 
-    async def test_analysis_switched_off_while_queued_skips_the_stage(self) -> None:
+    async def test_stale_podcast_exclusion_does_not_skip_queued_stage(self) -> None:
         self.process()
         await self.run_next("download")
         with self.ctx.db.write() as tx:
-            repo.set_podcast_switches(tx, self.podcast, auto_process_enabled=None, ad_analysis_enabled=False, now=now_iso())
+            tx.execute(
+                "UPDATE podcasts SET ad_analysis_enabled = 0, updated_at = ?, updated_seq = ? WHERE id = ?",
+                (now_iso(), tx.next_seq(), self.podcast.id),
+            )
         job = await self.run_next("transcribe")
         self.assertEqual(job.state, "done")
-        self.assertEqual(self.transcriber.calls, [])
-        self.assertEqual((self.fresh().pipeline_state, self.fresh().classify_state), ("ready", "skipped"))
+        self.assertEqual(len(self.transcriber.calls), 1)
+        self.assertEqual(self.fresh().pipeline_state, "classify_pending")
 
     async def test_transient_download_failure_retries_with_the_part_kept(self) -> None:
         self.origin.errors.append(DownloadError("connection reset", etag='"part-v1"'))

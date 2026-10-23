@@ -121,3 +121,11 @@ class SilenceRegion:
     start: float
     end: float
     kind: str  # head | gap | tail
+
+
+@dataclass(frozen=True, slots=True)
+class Mp3Break:
+    """Possible splice in encoded audio, timed on the decoded sample axis."""
+
+    seconds: float
+    kind: str  # embedded_id3 | encoder_header | format_change | decode_error

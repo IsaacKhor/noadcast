@@ -519,7 +519,8 @@ final class SyncService {
         guard performsSideEffects else { return }
         let player = PlayerService.shared
         if let current = player.currentEpisodeServerID {
-            if report.markersChangedEpisodeIDs.contains(current) {
+            if report.markersChangedEpisodeIDs.contains(current)
+                || report.audioChangedEpisodeIDs.contains(current) {
                 player.adMarkersDidChange(episodeServerID: current)
             }
             if report.audioBecamePresentEpisodeIDs.contains(current) {

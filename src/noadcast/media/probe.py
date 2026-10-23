@@ -59,7 +59,7 @@ def probe_audio(path: Path) -> AudioProbe:
     not permanently fail an episode.
     """
     try:
-        container = av.open(str(path), metadata_errors="ignore")
+        container = av.open(str(path))
     except OSError:
         raise
     except av.error.FFmpegError as exc:

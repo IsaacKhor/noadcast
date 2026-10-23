@@ -103,6 +103,40 @@ struct NoadcastTests {
         #expect(PlayerService.clampedPlaybackTime(.nan, duration: 100) == 0)
     }
 
+    @Test func decodedDurationKeepsMarkersOnTheServerTimeline() throws {
+        #expect(PlayerService.resolvedDuration(
+            serverDuration: 3_600, durationIsMeasured: true, itemDuration: 3_310
+        ) == 3_600)
+        #expect(PlayerService.resolvedDuration(
+            serverDuration: 3_600, durationIsMeasured: false, itemDuration: 3_310
+        ) == 3_310)
+        #expect(PlayerService.streamHash(from: URL(string: "https://server.example/audio?sha=abc123&sig=x")!) == "abc123")
+    }
+
+    @Test @MainActor func localMarkersRequireMatchingAudioHash() throws {
+        let episode = Episode(serverID: 7, podcastServerID: 1, guid: "g", title: "Test")
+        episode.audioSha256 = "new-render"
+        episode.audioBytes = 3
+        episode.fileSizeBytes = 3
+        #expect(!episode.localFileMatchesServerAudio, "Same-size bytes are not proof of the same render")
+        episode.localAudioSha256 = "old-render"
+        #expect(!episode.localFileMatchesServerAudio)
+        episode.localAudioSha256 = "NEW-RENDER"
+        #expect(episode.localFileMatchesServerAudio)
+    }
+
+    @Test func downloadedAudioIdentityComesFromFileBytes() throws {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try Data("abc".utf8).write(to: url)
+        defer { try? FileManager.default.removeItem(at: url) }
+        let digest = try AudioStorage.sha256(of: url)
+        #expect(digest == "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad")
+        #expect(DownloadSessionDelegate.sha256(fromETag:
+            "\"ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad\"") ==
+            digest)
+        #expect(DownloadSessionDelegate.sha256(fromETag: "opaque-cache-tag") == nil)
+    }
+
     @Test @MainActor func queueDismissalMarksPlayedAndRemovesQueueItem() throws {
         let suiteName = "NoadcastTests.PendingRelease.\(UUID().uuidString)"
         let defaults = try #require(UserDefaults(suiteName: suiteName))

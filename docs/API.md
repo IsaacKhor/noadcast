@@ -72,8 +72,10 @@ their way (`classifying`), and may arrive while the user is listening.
 ```
 
 `autoProcessEnabled`: newly published episodes are downloaded and processed
-on the server automatically. `adAnalysisEnabled`: processed episodes are
-transcribed and classified. Client-side preferences (auto-download to the
+on the server automatically. `adAnalysisEnabled` is a deprecated compatibility
+field, always `true`: podcasts are no longer individually excluded from
+transcription and classification. The global analysis switch still applies.
+Client-side preferences (auto-download to the
 phone, playback speed) are not server fields.
 
 ### Episode
@@ -132,12 +134,17 @@ phone, playback speed) are not server fields.
   "autoProcessEnabled": true,
   "classifier": "openrouter",
   "classifierModel": "deepseek/deepseek-v4.1-flash",
+  "openrouterFlexEnabled": false,
   "feedIntervalMinutes": 30,
   "availableClassifiers": {"openrouter": false}
 }
 ```
 
-Global switches; a per-podcast `false` also disables. `availableClassifiers`
+Global switches. `openrouterFlexEnabled` defaults to `false`; enabling it
+requests OpenRouter's `flex` service tier for future classification requests.
+Flex can have higher latency or lower availability. Savings depend on the
+model's available endpoints; OpenRouter uses standard pricing when no Flex
+endpoint is available. `availableClassifiers`
 reports which providers have server-side keys configured — keys themselves are
 never exposed.
 
@@ -240,6 +247,9 @@ arrives via `/sync`.
   First subscribe admits only the newest `initialBackfillCount` (default 1)
   episodes for processing; the rest of the archive is `discovered`.
 - `PATCH /api/v1/podcasts/{id}` `{"autoProcessEnabled"?: bool, "adAnalysisEnabled"?: bool}` → `200 Podcast`.
+  Podcast create and patch accept the legacy `adAnalysisEnabled` field but
+  normalize it to `true`, including when an older client sends `false`.
+  Existing podcast exclusions are cleared during the database upgrade.
 - `DELETE /api/v1/podcasts/{id}` → `204`. Deletes its episodes, transcripts, markers, and audio.
 - `POST /api/v1/podcasts/{id}/refresh` → `202 {"jobId": n}`.
 - `POST /api/v1/refresh` → `202 {"jobIds": [n, …]}` (all podcasts).
@@ -268,22 +278,26 @@ arrives via `/sync`.
   (`words`: adds `"words": [{"start","end","word","probability"}]`; `text`: `text/plain`).
 - `GET /api/v1/episodes/{id}/classifications` → `200 {"items": [{"id", "provider", "model", "promptVersion", "renderFormat", "isActive", "inputTokens", "thoughtTokens", "outputTokens", "totalCostUsd", "latencyMs", "createdAt", "segments": [...]}]}`.
   Each `segments` entry contains `startSeconds`, `endSeconds`, `kind`, and
-  a content `summary`. Production classifications use `segments-v3` with
+  a content `summary`. Production classifications use `segments-v4` with
   `renderFormat: "sentences"`; the model sees one joined sentence per line,
   formatted `[22.24-23.88] A complete sentence.`. Pause and length fragments
-  are coalesced through punctuation when available. Older prompt and render
+  are coalesced through punctuation when available. Detected MP3 structural
+  breaks are included as timestamped hints of possible dynamic ad insertion;
+  they are not proof that surrounding speech is advertising. These hints are
+  recorded when audio is transcribed; older transcripts need retranscription
+  to acquire them. Older prompt and render
   formats remain available for evaluation.
 
 ### Audio
 
 - `POST /api/v1/episodes/{id}/audio-url` →
-  `200 {"path": "/api/v1/episodes/42/audio?exp=1790000000&sig=…", "url": "http://host:8765/api/v1/episodes/42/audio?exp=…&sig=…", "expiresAt": "…"}`.
+  `200 {"path": "/api/v1/episodes/42/audio?exp=1790000000&sha=…&sig=…", "url": "http://host:8765/api/v1/episodes/42/audio?exp=…&sha=…&sig=…", "expiresAt": "…"}`.
   Clients should resolve `path` against their configured base URL. If the
   audio is not on the server: `409 {"error": {"code": "audioNotReady" | "audioEvicted"}, "jobId": n}`
   with `Retry-After`, and a priority download is enqueued.
 - `GET|HEAD /api/v1/episodes/{id}/audio` — authenticated by the bearer
-  header (downloads) **or** `?exp=<unix>&sig=<hex>` where
-  `sig = HMAC-SHA256(signingSecret, "<episodeId>\n<exp>")` (AVPlayer, which
+  header (downloads) **or** `?exp=<unix>&sha=<audioSha256>&sig=<hex>` where
+  `sig = HMAC-SHA256(signingSecret, "<episodeId>\n<exp>\n<audioSha256>")` (AVPlayer, which
   cannot send headers). Always `Accept-Ranges: bytes`, `ETag` (the quoted
   `audioSha256`), `Content-Type`, `Content-Length`, `Last-Modified`. Single ranges
   → `206` with `Content-Range`; unsatisfiable → `416` with
@@ -291,6 +305,13 @@ arrives via `/sync`.
   `If-Range` mismatch → `200`; `If-None-Match` hit → `304`. `HEAD` returns
   identical headers with no body. Missing audio normally queues a priority
   download and returns `409` as above, except after a played release.
+  A signed URL is bound to the exact audio hash: after the audio changes it
+  returns `409 audioVersionChanged` without queuing work. Obtain a new URL
+  and refresh episode metadata before applying markers. Older signed URLs
+  without `sha` must be renewed after upgrading the server.
+  Signed requests never redirect to the origin enclosure when audio is
+  missing, even if `evicted_redirect` is enabled: dynamically inserted ads
+  could make the origin's bytes differ from the signed version.
 - `DELETE /api/v1/episodes/{id}/audio?reason=played|manual` → `204`. The
   **retention release**: the client sends `reason=played` when the user
   finishes or marks an episode played. This cancels pending and running
@@ -320,7 +341,7 @@ arrives via `/sync`.
 ### Settings, usage, OPML
 
 - `GET /api/v1/settings` → `200 Settings`; `PATCH /api/v1/settings`
-  `{"adAnalysisEnabled"?, "autoProcessEnabled"?, "classifier"?, "classifierModel"?, "feedIntervalMinutes"?}` → `200 Settings`.
+  `{"adAnalysisEnabled"?, "autoProcessEnabled"?, "classifier"?, "classifierModel"?, "openrouterFlexEnabled"?, "feedIntervalMinutes"?}` → `200 Settings`.
   `classifier` accepts only `openrouter`; `OPENROUTER_API_KEY` is required on the server.
   `classifierModel` (and reanalyze `model`) accepts three presets:
   `deepseek/deepseek-v4.1-flash` (default), `qwen/qwen3.8-flash`, and
@@ -328,6 +349,11 @@ arrives via `/sync`.
   by the preset, so no separate settings field is needed.
   `NOADCAST_OPENROUTER_MODEL` overrides the default model. Existing historical
   classifications retain their original provider, model, markers, and costs.
+  `openrouterFlexEnabled` is a boolean, defaulting to
+  `NOADCAST_OPENROUTER_FLEX_ENABLED` (`false` if unset). The saved dashboard
+  choice overrides this default. When enabled, requests send `service_tier:
+  "flex"`; when disabled, the tier is omitted. Provider-reported usage cost
+  remains authoritative; enabling Flex does not assume a fixed discount.
   `feedIntervalMinutes` is an integer from 1 to 1440, defaulting to
   `NOADCAST_FEED_INTERVAL_MINUTES` (30 if unset). Successful feeds are polled
   at that interval with ±15% jitter. Changing it immediately replans feeds

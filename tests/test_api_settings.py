@@ -40,6 +40,7 @@ class SettingsTests(ApiTestCase):
                 "autoProcessEnabled": True,
                 "classifier": "openrouter",
                 "classifierModel": self.settings.openrouter_model,
+                "openrouterFlexEnabled": False,
                 "feedIntervalMinutes": self.settings.feed_interval_minutes,
                 "availableClassifiers": {"openrouter": False},
             },
@@ -65,8 +66,21 @@ class SettingsTests(ApiTestCase):
             self.assertEqual(response.json()["classifierModel"], model)
             self.assertEqual((await self.client.get("/api/v1/settings")).json(), response.json())
 
+    async def test_flex_preference_persists_and_is_idempotent(self) -> None:
+        seq = self.ctx.db.current_seq()
+        response = await self.client.patch("/api/v1/settings", json={"openrouterFlexEnabled": True})
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertTrue(response.json()["openrouterFlexEnabled"])
+        self.assertEqual(self.ctx.db.current_seq(), seq + 1)
+        self.assertTrue((await self.client.get("/api/v1/settings")).json()["openrouterFlexEnabled"])
+        delta = (await self.client.get("/api/v1/sync", params={"since": seq})).json()
+        self.assertTrue(delta["settings"]["openrouterFlexEnabled"])
+        response = await self.client.patch("/api/v1/settings", json={"openrouterFlexEnabled": True})
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(self.ctx.db.current_seq(), seq + 1)
+
     async def test_invalid_values_are_rejected(self) -> None:
-        for body in ({"classifier": "gpt"}, {"classifier": "gemini"}, {"classifier": "fake"}, {"classifierModel": "google/gemini-3.5-flash"}, {"classifierModel": ""}, {"autoProcessEnabled": "sometimes"}, {"feedIntervalMinutes": 0}, {"feedIntervalMinutes": 1441}, {"feedIntervalMinutes": 2.5}, {"feedIntervalMinutes": "30"}, {"feedIntervalMinutes": True}):
+        for body in ({"classifier": "gpt"}, {"classifier": "gemini"}, {"classifier": "fake"}, {"classifierModel": "google/gemini-3.5-flash"}, {"classifierModel": ""}, {"autoProcessEnabled": "sometimes"}, {"openrouterFlexEnabled": "sometimes"}, {"feedIntervalMinutes": 0}, {"feedIntervalMinutes": 1441}, {"feedIntervalMinutes": 2.5}, {"feedIntervalMinutes": "30"}, {"feedIntervalMinutes": True}):
             with self.subTest(body=body):
                 self.assertError(await self.client.patch("/api/v1/settings", json=body), 422, "invalidRequest")
 

@@ -422,7 +422,7 @@ def insert_podcast(
             feed_url,
             title,
             int(auto_process_enabled),
-            int(ad_analysis_enabled),
+            1,
             initial_backfill_count,
             next_fetch_at,
             now,
@@ -442,17 +442,16 @@ def set_podcast_switches(
     ad_analysis_enabled: bool | None,
     now: str,
 ) -> Podcast:
-    """PATCH semantics: None leaves a switch alone; bumps seq only on a real change."""
+    """PATCH the automatic processing switch; legacy analysis values are ignored."""
     auto = podcast.auto_process_enabled if auto_process_enabled is None else auto_process_enabled
-    analysis = podcast.ad_analysis_enabled if ad_analysis_enabled is None else ad_analysis_enabled
-    if (auto, analysis) == (podcast.auto_process_enabled, podcast.ad_analysis_enabled):
+    if auto == podcast.auto_process_enabled and podcast.ad_analysis_enabled:
         return podcast
     row = tx.read_one(
         """
         UPDATE podcasts SET auto_process_enabled = ?, ad_analysis_enabled = ?, updated_at = ?, updated_seq = ?
         WHERE id = ? RETURNING *
         """,
-        (int(auto), int(analysis), now, tx.next_seq(), podcast.id),
+        (int(auto), 1, now, tx.next_seq(), podcast.id),
     )
     assert row is not None
     return _load(Podcast, row)
@@ -1308,9 +1307,10 @@ class ServerSettings:
     classifier: str
     classifier_model: str
     feed_interval_minutes: int
+    openrouter_flex_enabled: bool = False
 
 
-SETTING_KEYS = ("ad_analysis_enabled", "auto_process_enabled", "classifier", "classifier_model", "feed_interval_minutes")
+SETTING_KEYS = ("ad_analysis_enabled", "auto_process_enabled", "classifier", "classifier_model", "feed_interval_minutes", "openrouter_flex_enabled")
 
 
 def default_model_for(config: Settings, provider: str) -> str:
@@ -1330,7 +1330,12 @@ def normalize_classifier_settings(tx: WriteTx, config: Settings, *, now: str) ->
     stored = {row["key"]: json.loads(row["value_json"]) for row in tx.read("SELECT key, value_json FROM settings")}
     provider = stored.get("classifier", config.classifier)
     model = stored.get("classifier_model", config.openrouter_model)
-    changes = {key: value for key, value in (("classifier", provider), ("classifier_model", model)) if key not in stored}
+    changes = {
+        key: value for key, value in (
+            ("classifier", provider), ("classifier_model", model),
+            ("openrouter_flex_enabled", config.openrouter_flex_enabled),
+        ) if key not in stored
+    }
     if provider != "openrouter":
         changes["classifier"] = "openrouter"
         changes["classifier_model"] = DEFAULT_MODEL
@@ -1359,6 +1364,7 @@ def load_server_settings(db: Reader, config: Settings) -> ServerSettings:
         classifier=classifier,
         classifier_model=model,
         feed_interval_minutes=int(stored.get("feed_interval_minutes", config.feed_interval_minutes)),
+        openrouter_flex_enabled=bool(stored.get("openrouter_flex_enabled", config.openrouter_flex_enabled)),
     )
 
 
@@ -1398,6 +1404,8 @@ def update_server_settings(
         raise ValueError("only openrouter classification is supported")
     if "classifier_model" in changes and changes["classifier_model"] not in MODEL_IDS:
         raise ValueError("unsupported classifier model")
+    if "openrouter_flex_enabled" in changes and type(changes["openrouter_flex_enabled"]) is not bool:
+        raise ValueError("OpenRouter flex setting must be a boolean")
     if "feed_interval_minutes" in changes and (
         type(changes["feed_interval_minutes"]) is not int or not 1 <= changes["feed_interval_minutes"] <= 1440
     ):

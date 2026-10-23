@@ -63,8 +63,9 @@ class OpenRouterTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(body["model"], MODEL)
         self.assertEqual(body["reasoning"], {"effort": "low"})
         self.assertEqual(body["provider"], {"require_parameters": True})
+        self.assertNotIn("service_tier", body)
         self.assertFalse(body["stream"])
-        spec = get_prompt("segments-v3", "sentences")
+        spec = get_prompt("segments-v4", "sentences")
         self.assertEqual(body["response_format"], {
             "type": "json_schema",
             "json_schema": {"name": "podcast_segments", "strict": True, "schema": spec.claude_schema},
@@ -73,7 +74,7 @@ class OpenRouterTests(unittest.IsolatedAsyncioTestCase):
         text = body["messages"][1]["content"]
         self.assertIn("[60.00-75.00]", text)
         self.assertEqual(result.request_sha256, request_sha256(
-            provider="openrouter", model=MODEL, thinking="low", prompt_version="segments-v3",
+            provider="openrouter", model=MODEL, thinking="low", prompt_version="segments-v4",
             render_format="sentences", include_silence=False, text=text,
         ))
         self.assertEqual(result.provider, "openrouter")
@@ -84,6 +85,13 @@ class OpenRouterTests(unittest.IsolatedAsyncioTestCase):
         recorder = Recorder((200, response()))
         await self.classifier(recorder).classify(episode())
         self.assertNotIn("reasoning", recorder.bodies()[0])
+
+    async def test_flex_request_is_opt_in_and_has_distinct_identity(self) -> None:
+        recorder = Recorder((200, response()))
+        flex = await self.classifier(recorder, flex_enabled=True).classify(episode())
+        self.assertEqual(recorder.bodies()[0]["service_tier"], "flex")
+        self.assertEqual(flex.model, MODEL)
+        self.assertNotEqual(flex.request_sha256, self.classifier(Recorder(), flex_enabled=False).prepare(episode()).request_sha256)
 
     async def test_usage_excludes_reasoning_from_visible_output_and_preserves_charge(self) -> None:
         result = await self.classifier(Recorder((200, response()))).classify(episode())

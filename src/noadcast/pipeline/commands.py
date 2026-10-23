@@ -32,8 +32,8 @@ class NotFound(LookupError):
 
 
 def analysis_enabled(podcast: repo.Podcast, server: repo.ServerSettings, params: Mapping[str, Any]) -> bool:
-    """Global and per-podcast switches must both be on; an explicit request overrides."""
-    return bool(params.get("force")) or (server.ad_analysis_enabled and podcast.ad_analysis_enabled)
+    """The global analysis switch applies to every podcast; explicit requests override it."""
+    return bool(params.get("force")) or server.ad_analysis_enabled
 
 
 def _chain(params: Mapping[str, Any] | None) -> dict[str, Any]:

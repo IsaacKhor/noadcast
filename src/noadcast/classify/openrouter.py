@@ -114,13 +114,22 @@ class OpenRouterClassifier(TranscriptClassifier):
         api_key: str,
         client: httpx.AsyncClient | None = None,
         api_base: str = DEFAULT_API_BASE,
+        flex_enabled: bool = False,
         **options: Any,
     ) -> None:
         super().__init__(**options)
         self._api_key = api_key
+        self.flex_enabled = flex_enabled
         self._url = f"{api_base.rstrip('/')}/chat/completions"
         self._owns_client = client is None
         self._client = client if client is not None else httpx.AsyncClient(timeout=REQUEST_TIMEOUT_S)
+
+    @property
+    def request_identity(self) -> tuple[str, str]:
+        # The request hash must distinguish the two routing preferences even
+        # though classification history keeps the actual model identifier.
+        model = f"{self.model}:service_tier=flex" if self.flex_enabled else self.model
+        return self.provider, model
 
     async def _call(self, user_text: str, repair: bool) -> CallResult:
         body: dict[str, Any] = {
@@ -143,6 +152,8 @@ class OpenRouterClassifier(TranscriptClassifier):
         }
         if self.thinking:
             body["reasoning"] = {"effort": self.thinking}
+        if self.flex_enabled:
+            body["service_tier"] = "flex"
         try:
             response = await self._client.post(self._url, headers={"Authorization": f"Bearer {self._api_key}"}, json=body)
         except httpx.TimeoutException as exc:

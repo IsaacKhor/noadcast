@@ -49,8 +49,8 @@ struct NoadcastApp: App {
             return
         }
         #endif
-        // Order matters: the generation-1 store must be exported and moved
-        // aside before the generation-2 container opens on the same path.
+        // Select a fresh server-backed store before SwiftData sees an older,
+        // incompatible on-device database.
         Log.signposter.withIntervalSignpost("LocalStoreGeneration.prepare") {
             LocalStoreGeneration.prepare()
         }

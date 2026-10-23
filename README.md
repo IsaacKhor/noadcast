@@ -64,10 +64,17 @@ Open the server URL in a browser (for example,
 `NOADCAST_API_TOKEN` from `secrets.env`. The dashboard shows server health,
 episodes, OpenRouter token and cost history, and storage. Under **Settings**,
 set the feed check interval (1–1,440 minutes), select the model for future
-classifications, and exclude individual podcasts from ad detection. Changes
+classifications, enable the optional OpenRouter Flex preference (off by
+default), and control ad detection globally. Flex savings depend on the
+selected model's endpoint availability; standard pricing applies when no
+Flex endpoint is available. Changes
 apply without restarting the server. Existing markers and classification history are retained.
 The token stays in the browser tab's session storage; data and settings use
 the authenticated API. See [docs/API.md](docs/API.md) for the endpoints.
+
+MP3 structural breaks are included as timestamped hints in new classification
+transcripts. Existing transcripts acquire those hints after retranscription.
+For timing and audio-version issues, see [docs/AD_ALIGNMENT.md](docs/AD_ALIGNMENT.md).
 
 How an episode flows:
 
