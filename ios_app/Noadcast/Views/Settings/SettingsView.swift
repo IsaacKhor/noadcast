@@ -18,6 +18,10 @@ struct SettingsView: View {
     @State private var isImportingOPML = false
     @State private var alertTitle = ""
     @State private var alertMessage: String?
+    @State private var feedIntervalDraft: String?
+    @State private var feedIntervalSaveFailed = false
+    @State private var serverSettingsLoadError: String?
+    @FocusState private var feedIntervalFocused: Bool
 
     private var settings: AppSettings? { settingsList.first }
 
@@ -47,6 +51,8 @@ struct SettingsView: View {
             Form {
                 serverSection
                 if let s = settings {
+                    feedUpdatesSection(settings: s)
+                    adAnalysisSection(settings: s)
                     timeSavedSection(settings: s)
                     usageHistorySection
                     playbackSection(settings: s)
@@ -55,7 +61,6 @@ struct SettingsView: View {
                 streamingSection
                 if let s = settings {
                     downloadsSection(settings: s)
-                    adAnalysisSection(settings: s)
                 }
                 importSection
             }
@@ -72,6 +77,19 @@ struct SettingsView: View {
             }, message: {
                 Text(alertMessage ?? "")
             })
+            .task {
+                await refreshServerSettings()
+            }
+            .onChange(of: storedServerAddress) { _, _ in
+                feedIntervalDraft = nil
+                feedIntervalSaveFailed = false
+                serverSettingsLoadError = nil
+            }
+            .onChange(of: SyncService.shared.serverConfigurationRevision) { _, _ in
+                feedIntervalDraft = nil
+                feedIntervalSaveFailed = false
+                Task { await refreshServerSettings() }
+            }
         }
     }
 
@@ -88,6 +106,23 @@ struct SettingsView: View {
                     .truncationMode(.middle)
             }
             ServerStatusRow(isConfigured: isConfigured)
+            if isConfigured, let serverSettingsLoadError {
+                Label {
+                    Text(verbatim: "Settings unavailable: \(serverSettingsLoadError)")
+                } icon: {
+                    Image(systemName: "exclamationmark.circle")
+                }
+                .foregroundStyle(.red)
+                Button("Retry loading settings") {
+                    Task { await refreshServerSettings() }
+                }
+            } else if isConfigured && !SyncService.shared.hasLoadedServerSettings {
+                HStack(spacing: 8) {
+                    ProgressView()
+                    Text("Loading server settings…")
+                        .foregroundStyle(.secondary)
+                }
+            }
             if let migrationStatus = DeviceStateRestoreService.shared.statusLine {
                 Text(migrationStatus)
                     .font(.caption)
@@ -233,7 +268,96 @@ struct SettingsView: View {
         }
     }
 
-    // MARK: - Downloads & ad detection
+    // MARK: - Server settings
+
+    private func refreshServerSettings() async {
+        guard isConfigured else { return }
+        let requestedServer = serverURL
+        let requestedRevision = SyncService.shared.serverConfigurationRevision
+        serverSettingsLoadError = nil
+        do {
+            try await SyncService.shared.refreshServerSettings()
+        } catch {
+            if serverURL == requestedServer
+                && SyncService.shared.serverConfigurationRevision == requestedRevision {
+                serverSettingsLoadError = error.localizedDescription
+            }
+        }
+    }
+
+    private func feedUpdatesSection(settings: AppSettings) -> some View {
+        let sync = SyncService.shared
+        let current = sync.hasLoadedServerSettings ? settings.serverFeedIntervalMinutes : nil
+        let input = feedIntervalDraft ?? current.map(String.init) ?? ""
+        let parsed = FeedIntervalMinutes.parse(input)
+        let canEdit = isConfigured && sync.hasLoadedServerSettings
+            && !sync.isUpdatingServerSettings && current != nil
+        return Section {
+            HStack {
+                Text("Check every")
+                Spacer()
+                TextField("Minutes", text: Binding(
+                    get: { feedIntervalDraft ?? settings.serverFeedIntervalMinutes.map(String.init) ?? "" },
+                    set: {
+                        feedIntervalDraft = $0
+                        feedIntervalSaveFailed = false
+                    }
+                ))
+                .keyboardType(.numberPad)
+                .multilineTextAlignment(.trailing)
+                .frame(width: 68)
+                .focused($feedIntervalFocused)
+                .accessibilityIdentifier("feedIntervalMinutesField")
+                Text("minutes")
+                    .foregroundStyle(.secondary)
+            }
+            .disabled(!canEdit)
+            if current == nil && sync.hasLoadedServerSettings {
+                Text("Feed refresh interval is unavailable on this server.")
+                    .foregroundStyle(.secondary)
+            } else if canEdit && feedIntervalDraft != nil && parsed == nil {
+                Text("Enter a whole number from 1 to 1,440.")
+                    .foregroundStyle(.red)
+            } else if feedIntervalSaveFailed {
+                Text("Not saved. Try again.")
+                    .foregroundStyle(.red)
+            } else if canEdit && parsed != current {
+                Text("Unsaved change")
+                    .foregroundStyle(.secondary)
+            }
+            Button("Save refresh interval") {
+                feedIntervalFocused = false
+                guard let parsed else { return }
+                Task { await saveFeedInterval(parsed) }
+            }
+            .disabled(!canEdit || parsed == nil || parsed == current)
+            .accessibilityIdentifier("saveFeedIntervalButton")
+            if sync.isUpdatingServerSettings {
+                HStack(spacing: 8) {
+                    ProgressView()
+                    Text("Saving server settings…")
+                        .foregroundStyle(.secondary)
+                }
+            }
+        } header: {
+            Text("Feed updates")
+        } footer: {
+            Text("Your server checks each feed at this interval. Choose 1 to 1,440 minutes.")
+        }
+    }
+
+    private func saveFeedInterval(_ minutes: Int) async {
+        do {
+            try await SyncService.shared.setFeedIntervalMinutes(minutes)
+            feedIntervalDraft = nil
+            feedIntervalSaveFailed = false
+        } catch {
+            feedIntervalSaveFailed = true
+            showAlert(title: "Couldn't Save Refresh Interval", message: error.localizedDescription)
+        }
+    }
+
+    // MARK: - Downloads
 
     @ViewBuilder
     private func downloadsSection(settings: AppSettings) -> some View {
@@ -254,40 +378,77 @@ struct SettingsView: View {
     @ViewBuilder
     private func adAnalysisSection(settings: AppSettings) -> some View {
         let sync = SyncService.shared
-        let selectedModel = sync.pendingClassifierModel?.rawValue
-            ?? settings.serverClassifierModel ?? ClassifierModel.defaultValue.rawValue
+        let selectedModel = sync.hasLoadedServerSettings ? (settings.serverClassifierModel ?? "") : ""
+        let canEdit = isConfigured && sync.hasLoadedServerSettings && !sync.isUpdatingServerSettings
+        let canChooseModel = settings.serverOpenRouterAvailable != false
         Section {
-            Picker("Model", selection: Binding(
-                get: { selectedModel },
-                set: { updateClassifierModel($0) }
-            )) {
-                ForEach(ClassifierModel.allCases) { model in
-                    Text(model.label).tag(model.rawValue)
+            if sync.hasLoadedServerSettings {
+                Toggle("Analyze ads", isOn: Binding(
+                    get: { settings.adAnalysisEnabled },
+                    set: { updateGlobalAdAnalysis($0) }
+                ))
+                .disabled(!canEdit)
+                .accessibilityIdentifier("globalAdAnalysisToggle")
+                Picker("Model", selection: Binding(
+                    get: { selectedModel },
+                    set: { updateClassifierModel($0) }
+                )) {
+                    ForEach(ClassifierModel.allCases) { model in
+                        Text(model.label).tag(model.rawValue)
+                    }
+                    if ClassifierModel(rawValue: selectedModel) == nil {
+                        Text(selectedModel.isEmpty ? "Unavailable" : selectedModel).tag(selectedModel)
+                    }
                 }
-                if ClassifierModel(rawValue: selectedModel) == nil {
-                    Text(selectedModel).tag(selectedModel)
-                }
-            }
-            .pickerStyle(.menu)
-            .accessibilityIdentifier("adAnalysisModelPicker")
-            .disabled(!isConfigured || sync.pendingClassifierModel != nil || settings.serverOpenRouterAvailable == false)
-            if sync.pendingClassifierModel != nil {
-                HStack(spacing: 8) {
-                    ProgressView()
-                    Text("Saving model…").foregroundStyle(.secondary)
-                }
+                .pickerStyle(.menu)
+                .accessibilityIdentifier("adAnalysisModelPicker")
+                .disabled(!canEdit || !canChooseModel)
+                Toggle("OpenRouter Flex", isOn: Binding(
+                    get: { settings.serverOpenRouterFlexEnabled ?? false },
+                    set: { updateOpenRouterFlex($0) }
+                ))
+                .disabled(!canEdit || settings.serverOpenRouterFlexEnabled == nil)
+                .accessibilityIdentifier("openRouterFlexToggle")
+            } else {
+                Text("Load server settings to change ad analysis.")
+                    .foregroundStyle(.secondary)
             }
         } header: {
             Text("Ad analysis")
         } footer: {
             VStack(alignment: .leading, spacing: 4) {
-                Text("Manage ad detection in your server's web interface.")
+                Text("Analysis applies to future episodes. Flex may take longer or be less available; any savings depend on the selected model's endpoints. Standard pricing applies where Flex is unavailable.")
                 if settings.serverOpenRouterAvailable == false {
-                    Text("Add an OpenRouter API key on your server to choose an analysis model.")
+                    Text("Add an OpenRouter API key on your server to run analysis or choose a model.")
+                }
+                if settings.serverOpenRouterFlexEnabled == nil && sync.hasLoadedServerSettings {
+                    Text("Flex is unavailable on this server.")
                 }
                 if !isConfigured {
                     Text("Connect to your server to change this.")
                 }
+            }
+        }
+    }
+
+    private func updateGlobalAdAnalysis(_ enabled: Bool) {
+        guard enabled != settings?.adAnalysisEnabled else { return }
+        Task {
+            do {
+                try await SyncService.shared.setGlobalAdAnalysisEnabled(enabled)
+            } catch {
+                showAlert(title: "Couldn't Change Ad Analysis", message: error.localizedDescription)
+            }
+        }
+    }
+
+    private func updateOpenRouterFlex(_ enabled: Bool) {
+        guard enabled != settings?.serverOpenRouterFlexEnabled else { return }
+        Task {
+            do {
+                try await SyncService.shared.setOpenRouterFlexEnabled(enabled)
+            } catch {
+                showAlert(title: "Couldn't Change Flex", message: error.localizedDescription)
             }
         }
     }

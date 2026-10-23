@@ -78,8 +78,7 @@ ios_app/             Xcode project
 
 - OpenRouter is the only classification provider. Models are
   `deepseek/deepseek-v4.1-flash` (default), `qwen/qwen3.8-flash`, and
-  `openai/gpt-6-luna` (always high reasoning). Select the model in the web
-  dashboard or iOS Settings,
+  `openai/gpt-6-luna` (always high reasoning). Select the model in iOS Settings,
   with `NOADCAST_OPENROUTER_MODEL`, or via `POST /episodes/{id}/reanalyze`.
   Offline replay doubles live only under `tests/support/`; historical
   classification rows retain their original provider and model.
@@ -90,7 +89,9 @@ ios_app/             Xcode project
   version in effect, so comparisons are SQL joins, not re-runs.
   MP3 structural breaks are timestamped hints, not automatic ad labels.
   OpenRouter Flex is opt-in and off by default; savings depend on endpoint
-  availability for the selected model.
+  availability for the selected model. Feed polling, global ad detection,
+  classification model, and Flex are configured in iOS Settings; the web
+  dashboard is for monitoring.
 - Markers are produced by `classify.sanitize.finalize`: intros start at 0,
   outros extend to the measured audio end only across silence, and
   boundaries snap toward silence midpoints.

@@ -41,7 +41,7 @@ Configuration lives in `secrets.env` (see `secrets.env.example` and
 Set `OPENROUTER_API_KEY`; OpenRouter is the only classification provider.
 The default is DeepSeek 4.1 Flash (`deepseek/deepseek-v4.1-flash`). Select
 Qwen 3.8 Flash (`qwen/qwen3.8-flash`) or GPT 6 Luna (`openai/gpt-6-luna`)
-in the web dashboard, iOS Settings, or with `NOADCAST_OPENROUTER_MODEL`. GPT 6 Luna always uses
+in iOS Settings or with `NOADCAST_OPENROUTER_MODEL`. GPT 6 Luna always uses
 high reasoning effort. Only transcript text is sent for classification.
 
 ```bash
@@ -62,13 +62,14 @@ logs, reprocessing, backups), see [deploy/README.md](deploy/README.md).
 Open the server URL in a browser (for example,
 `http://laurel.turkey-galaxy.ts.net:44007/`) and enter the
 `NOADCAST_API_TOKEN` from `secrets.env`. The dashboard shows server health,
-episodes, OpenRouter token and cost history, and storage. Under **Settings**,
-set the feed check interval (1–1,440 minutes), select the model for future
-classifications, enable the optional OpenRouter Flex preference (off by
-default), and control ad detection globally. Flex savings depend on the
-selected model's endpoint availability; standard pricing applies when no
-Flex endpoint is available. Changes
-apply without restarting the server. Existing markers and classification history are retained.
+episodes, OpenRouter token and cost history, and storage. Server configuration
+lives in the iOS app's **Settings** page: set the feed check interval
+(1–1,440 minutes), select the model for future classifications, enable the
+optional OpenRouter Flex preference (off by default), and control ad detection
+globally. Flex savings depend on the selected model's endpoint availability;
+standard pricing applies when no Flex endpoint is available. Changes apply
+without restarting the server. Existing markers and classification history
+are retained.
 The token stays in the browser tab's session storage; data and settings use
 the authenticated API. See [docs/API.md](docs/API.md) for the endpoints.
 
@@ -79,7 +80,7 @@ For timing and audio-version issues, see [docs/AD_ALIGNMENT.md](docs/AD_ALIGNMEN
 How an episode flows:
 
 1. **Refresh** polls each feed every ~30 minutes by default with conditional
-   GETs and ±15% jitter. Configure the interval in the dashboard; failing
+   GETs and ±15% jitter. Configure the interval in iOS Settings; failing
    feeds keep their retry backoff. A new
    subscription admits only its newest episode; later, only genuinely new
    episodes are admitted, so an archive is never processed wholesale.

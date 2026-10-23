@@ -159,6 +159,13 @@ sends the API token as a bearer header to the same protected API endpoints as
 other clients. No token is accepted in a URL. Other methods and paths remain
 protected by the normal default-deny authentication middleware.
 
+The dashboard shows server health, episodes, usage, and storage. Configuration
+controls live in the iOS app's Settings page: feed-check interval, global ad
+detection, classification model, and OpenRouter Flex. The app reads
+`GET /api/v1/settings` when Settings opens and saves changes with
+`PATCH /api/v1/settings`; `/sync` continues to mirror those values. Saved
+settings remain server-owned and apply to every client.
+
 ### `GET /health` (no auth)
 
 ```json
@@ -350,7 +357,7 @@ arrives via `/sync`.
   `NOADCAST_OPENROUTER_MODEL` overrides the default model. Existing historical
   classifications retain their original provider, model, markers, and costs.
   `openrouterFlexEnabled` is a boolean, defaulting to
-  `NOADCAST_OPENROUTER_FLEX_ENABLED` (`false` if unset). The saved dashboard
+  `NOADCAST_OPENROUTER_FLEX_ENABLED` (`false` if unset). The saved app
   choice overrides this default. When enabled, requests send `service_tier:
   "flex"`; when disabled, the tier is omitted. Provider-reported usage cost
   remains authoritative; enabling Flex does not assume a fixed discount.

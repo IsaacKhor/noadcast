@@ -50,6 +50,8 @@ final class AppSettings {
     var serverClassifier: String?
     var serverClassifierModel: String?
     var serverFeedIntervalMinutes: Int?
+    /// Unknown until a server supporting this setting reports its value.
+    var serverOpenRouterFlexEnabled: Bool?
     /// Unknown until a server reports its OpenRouter key availability.
     var serverOpenRouterAvailable: Bool?
 

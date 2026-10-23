@@ -6,7 +6,7 @@
   const healthUrl = new URL("health", location.href);
   const number = new Intl.NumberFormat();
   const money = new Intl.NumberFormat(undefined, { style: "currency", currency: "USD", minimumFractionDigits: 2, maximumFractionDigits: 4 });
-  const state = { token: sessionStorage.getItem("noadcastToken") || "", authRequired: true, view: "overview", podcasts: [], settings: null, episodeOffset: 0, episodeTotal: 0, episodeRequest: 0, podcastRequest: 0, analysisRequest: 0, usageRequest: 0, sessionGeneration: 0, settingsBusy: false, timer: null };
+  const state = { token: sessionStorage.getItem("noadcastToken") || "", authRequired: true, view: "overview", podcasts: [], episodeOffset: 0, episodeTotal: 0, episodeRequest: 0, podcastRequest: 0, usageRequest: 0, sessionGeneration: 0, timer: null };
   const pageSize = 50;
 
   function put(id, value) { $(id).textContent = value; }
@@ -50,9 +50,9 @@
     stopPolling();
     $("connecting").hidden = true;
     state.sessionGeneration++;
-    state.episodeRequest++; state.podcastRequest++; state.analysisRequest++; state.usageRequest++;
+    state.episodeRequest++; state.podcastRequest++; state.usageRequest++;
     state.token = "";
-    state.podcasts = []; state.settings = null; state.episodeOffset = 0; state.episodeTotal = 0;
+    state.podcasts = []; state.episodeOffset = 0; state.episodeTotal = 0;
     sessionStorage.removeItem("noadcastToken");
     $("app").hidden = true;
     $("login").hidden = false;
@@ -148,7 +148,6 @@
     if (state.view === "overview") loadOverview();
     else if (state.view === "episodes") loadEpisodes();
     else if (state.view === "usage") loadUsage();
-    else if (state.view === "analysis") loadAnalysis();
   }
   async function loadOverview() {
     try {
@@ -268,114 +267,6 @@
       row.append(el("td", "num", dollars(item.costUsd))); holder.append(row);
     });
   }
-  function feedIntervalValue() {
-    const raw = $("feed-interval").value.trim();
-    if (!/^\d+$/.test(raw)) return null;
-    const value = Number(raw);
-    return Number.isSafeInteger(value) && value >= 1 && value <= 1440 ? value : null;
-  }
-  function updateSettingsControls() {
-    const disabled = state.settingsBusy || !state.settings;
-    $("global-analysis").disabled = disabled;
-    $("model-select").disabled = disabled;
-    $("save-model").disabled = disabled || $("model-select").value === state.settings?.classifierModel;
-    $("openrouter-flex").disabled = disabled;
-    $("feed-interval").disabled = disabled;
-    const interval = feedIntervalValue();
-    $("save-feed-interval").disabled = disabled || interval === null || interval === state.settings?.feedIntervalMinutes;
-  }
-  function feedIntervalChanged() {
-    const interval = feedIntervalValue();
-    const status = $("feed-interval-status");
-    status.classList.toggle("error", interval === null);
-    put("feed-interval-status", interval === null
-      ? "Enter a whole number from 1 to 1,440 minutes."
-      : interval === state.settings?.feedIntervalMinutes ? "Current interval saved." : "Unsaved change.");
-    updateSettingsControls();
-  }
-  async function loadAnalysis() {
-    if (state.settingsBusy) return;
-    const serial = ++state.analysisRequest;
-    try {
-      const settings = await request("settings");
-      if (serial !== state.analysisRequest) return;
-      state.settings = settings;
-      $("global-analysis").checked = !!settings.adAnalysisEnabled;
-      put("global-status", settings.adAnalysisEnabled ? "Enabled for future analysis." : "Paused for all podcasts.");
-      $("model-select").value = settings.classifierModel;
-      put("model-status", "Current model saved.");
-      $("openrouter-flex").checked = !!settings.openrouterFlexEnabled;
-      put("openrouter-flex-status", settings.openrouterFlexEnabled ? "Flex preference enabled for future analysis." : "Flex preference off.");
-      $("feed-interval").value = String(settings.feedIntervalMinutes ?? 30);
-      $("feed-interval-status").classList.remove("error");
-      put("feed-interval-status", "Current interval saved.");
-      updateSettingsControls();
-      clearError();
-    } catch (error) { if (!$("app").hidden) showError(`Analysis settings: ${messageFor(error)}`); }
-  }
-  async function saveGlobal() {
-    const checkbox = $("global-analysis"), enabled = checkbox.checked;
-    state.analysisRequest++;
-    state.settingsBusy = true;
-    updateSettingsControls();
-    put("global-status", "Saving…"); $("global-status").classList.remove("error");
-    try {
-      state.settings = await request("settings", { method: "PATCH", body: JSON.stringify({ adAnalysisEnabled: enabled }) });
-      checkbox.checked = !!state.settings.adAnalysisEnabled;
-      put("global-status", checkbox.checked ? "Enabled for future analysis." : "Paused for all podcasts.");
-    } catch (error) {
-      checkbox.checked = !enabled;
-      put("global-status", `Could not save: ${messageFor(error)}`); $("global-status").classList.add("error");
-    } finally { state.settingsBusy = false; updateSettingsControls(); }
-  }
-  async function saveModel() {
-    const selected = $("model-select").value;
-    state.analysisRequest++;
-    state.settingsBusy = true;
-    updateSettingsControls();
-    put("model-status", "Saving…"); $("model-status").classList.remove("error");
-    try {
-      state.settings = await request("settings", { method: "PATCH", body: JSON.stringify({ classifierModel: selected }) });
-      $("model-select").value = state.settings.classifierModel;
-      put("model-status", "Current model saved.");
-    } catch (error) {
-      $("model-select").value = state.settings?.classifierModel || selected;
-      put("model-status", `Could not save: ${messageFor(error)}`); $("model-status").classList.add("error");
-    } finally { state.settingsBusy = false; updateSettingsControls(); }
-  }
-  async function saveOpenRouterFlex() {
-    const checkbox = $("openrouter-flex"), enabled = checkbox.checked;
-    state.analysisRequest++;
-    state.settingsBusy = true;
-    updateSettingsControls();
-    put("openrouter-flex-status", "Saving…"); $("openrouter-flex-status").classList.remove("error");
-    try {
-      state.settings = await request("settings", { method: "PATCH", body: JSON.stringify({ openrouterFlexEnabled: enabled }) });
-      checkbox.checked = !!state.settings.openrouterFlexEnabled;
-      put("openrouter-flex-status", checkbox.checked ? "Flex preference enabled for future analysis." : "Flex preference off.");
-    } catch (error) {
-      checkbox.checked = !!state.settings?.openrouterFlexEnabled;
-      put("openrouter-flex-status", `Could not save: ${messageFor(error)}`); $("openrouter-flex-status").classList.add("error");
-    } finally { state.settingsBusy = false; updateSettingsControls(); }
-  }
-  async function saveFeedInterval() {
-    const interval = feedIntervalValue();
-    if (interval === null || state.settingsBusy || !state.settings) return;
-    state.analysisRequest++;
-    state.settingsBusy = true;
-    updateSettingsControls();
-    put("feed-interval-status", "Saving…"); $("feed-interval-status").classList.remove("error");
-    try {
-      state.settings = await request("settings", { method: "PATCH", body: JSON.stringify({ feedIntervalMinutes: interval }) });
-      $("feed-interval").value = String(state.settings.feedIntervalMinutes);
-      put("feed-interval-status", "Current interval saved.");
-    } catch (error) {
-      $("feed-interval").value = String(state.settings?.feedIntervalMinutes ?? interval);
-      put("feed-interval-status", `Could not save: ${messageFor(error)}`);
-      $("feed-interval-status").classList.add("error");
-    } finally { state.settingsBusy = false; updateSettingsControls(); }
-  }
-
   $("login-form").addEventListener("submit", async (event) => {
     event.preventDefault();
     const button = $("login-form").querySelector("button"); button.disabled = true;
@@ -393,12 +284,6 @@
   $("episodes-prev").addEventListener("click", () => { state.episodeOffset = Math.max(0, state.episodeOffset - pageSize); loadEpisodes(); });
   $("episodes-next").addEventListener("click", () => { state.episodeOffset += pageSize; loadEpisodes(); });
   $("usage-period").addEventListener("change", loadUsage);
-  $("global-analysis").addEventListener("change", saveGlobal);
-  $("model-select").addEventListener("change", updateSettingsControls);
-  $("save-model").addEventListener("click", saveModel);
-  $("openrouter-flex").addEventListener("change", saveOpenRouterFlex);
-  $("feed-interval").addEventListener("input", feedIntervalChanged);
-  $("save-feed-interval").addEventListener("click", saveFeedInterval);
   document.addEventListener("visibilitychange", () => { if (!document.hidden && state.view === "overview" && !$("app").hidden) loadOverview(); });
   boot();
 })();

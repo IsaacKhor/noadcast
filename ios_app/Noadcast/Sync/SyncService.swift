@@ -20,13 +20,28 @@ nonisolated enum SyncTrigger: String, Sendable {
 nonisolated enum SyncError: Error, LocalizedError, Equatable {
     case cursorDidNotAdvance(since: Int)
     case instanceChangedDuringResync
+    case serverConfigurationChanged
+    case settingsUpdateInProgress
+    case invalidFeedInterval
+    case settingUnavailable(String)
 
     var errorDescription: String? {
         switch self {
         case .cursorDidNotAdvance(let since): "The server's sync cursor did not advance past \(since)."
         case .instanceChangedDuringResync: "The server was replaced during a resync. Try again."
+        case .serverConfigurationChanged: "The server configuration changed. Try again."
+        case .settingsUpdateInProgress: "A server setting is already being updated."
+        case .invalidFeedInterval: "Feed interval must be between 1 and 1440 minutes."
+        case .settingUnavailable(let name): "This server does not support \(name)."
         }
     }
+}
+
+private enum ServerSettingChange {
+    case adAnalysis(Bool)
+    case classifierModel(ClassifierModel)
+    case feedInterval(Int)
+    case openRouterFlex(Bool)
 }
 
 /// Persistent flags that must survive a relaunch mid-sync.
@@ -111,8 +126,8 @@ nonisolated enum PendingReleaseStore {
 }
 
 /// Orchestrates the offline mirror: delta sync (`/sync`), job-progress
-/// polling (`/jobs/active`), background refresh, retention releases, and the
-/// optimistic server-setting toggles. Page application itself happens off
+/// polling (`/jobs/active`), background refresh, retention releases, and
+/// server settings. Page application itself happens off
 /// the main actor in `SyncEngine`.
 ///
 /// Triggers: launch, foreground after 120 s, pull-to-refresh, after
@@ -147,6 +162,10 @@ final class SyncService {
     private(set) var instanceId: String?
     /// Staged UI selection only; the stored mirror changes after server acceptance.
     private(set) var pendingClassifierModel: ClassifierModel?
+    private(set) var isUpdatingServerSettings = false
+    /// A direct GET has hydrated the controls for this server connection.
+    private(set) var hasLoadedServerSettings = false
+    private(set) var serverConfigurationRevision = 0
 
     // MARK: Dependencies
 
@@ -174,6 +193,8 @@ final class SyncService {
     @ObservationIgnored private var globalAdAnalysisOverride: Bool?
     @ObservationIgnored private var podcastAdAnalysisOverrides: [Int: Bool] = [:]
     @ObservationIgnored private var isFlushingReleases = false
+    @ObservationIgnored private var settingsMutationGeneration = 0
+    @ObservationIgnored private var settingsUpdateWaiters: [CheckedContinuation<Void, Never>] = []
 
     init(
         api: NoadcastAPIClient,
@@ -229,6 +250,8 @@ final class SyncService {
 
     /// After the user saves a new server address or token.
     func serverConfigurationDidChange() async {
+        serverConfigurationRevision += 1
+        hasLoadedServerSettings = false
         setAuthFailed(false)
         jobsETag = nil
         activeJobs = [:]
@@ -239,6 +262,8 @@ final class SyncService {
 
     /// Forgets the credentials; local data stays so downloads keep playing.
     func signOut(forgetServerAddress: Bool) {
+        serverConfigurationRevision += 1
+        hasLoadedServerSettings = false
         APIConfiguration.signOut(forgetServerAddress: forgetServerAddress)
         stopJobPolling()
         cancelRunningSync()
@@ -768,61 +793,158 @@ final class SyncService {
         }
     }
 
-    // MARK: - Server model selection
+    // MARK: - Server settings
 
     func setClassifierModel(_ model: ClassifierModel) async throws {
+        try await updateServerSetting(.classifierModel(model))
+    }
+
+    func setGlobalAdAnalysisEnabled(_ enabled: Bool) async throws {
+        try await updateServerSetting(.adAnalysis(enabled))
+    }
+
+    /// Kept for call sites outside Settings.
+    func setGlobalAdAnalysis(_ enabled: Bool) async throws {
+        try await setGlobalAdAnalysisEnabled(enabled)
+    }
+
+    func setFeedIntervalMinutes(_ minutes: Int) async throws {
+        guard (1...1440).contains(minutes) else { throw SyncError.invalidFeedInterval }
+        try await updateServerSetting(.feedInterval(minutes))
+    }
+
+    func setOpenRouterFlexEnabled(_ enabled: Bool) async throws {
+        try await updateServerSetting(.openRouterFlex(enabled))
+    }
+
+    /// A direct read hydrates fields added after a device's sync cursor last
+    /// passed the settings row. A PATCH started during this read takes priority.
+    func refreshServerSettings() async throws {
         guard isConfigured(), let context = container?.mainContext else {
             throw APIError.notConfigured
         }
-        guard pendingClassifierModel == nil else { return }
-        pendingClassifierModel = model
-        defer { pendingClassifierModel = nil }
-        let dto = try await api.updateSettings(classifierModel: model.rawValue)
-        // Let any page fetched before the PATCH finish before applying the
-        // confirmed selection, so an old in-flight sync cannot restore it.
-        if let runningSync { await runningSync.value }
+        while isUpdatingServerSettings {
+            await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+                settingsUpdateWaiters.append(continuation)
+            }
+        }
+        let generation = settingsMutationGeneration
+        let revision = serverConfigurationRevision
+        let endpoint = try await api.settingsEndpoint()
+        var dto = try await api.settings(expectedEndpoint: endpoint)
+        let currentEndpoint = try await api.settingsEndpoint()
+        guard revision == serverConfigurationRevision, endpoint == currentEndpoint else {
+            throw SyncError.serverConfigurationChanged
+        }
+        guard generation == settingsMutationGeneration, !isUpdatingServerSettings else { return }
+        if let runningSync {
+            await runningSync.value
+            // The page may have observed a newer server value than the GET.
+            // Read again after that page completes before hydrating the UI.
+            dto = try await api.settings(expectedEndpoint: endpoint)
+        }
+        let latestEndpoint = try await api.settingsEndpoint()
+        guard revision == serverConfigurationRevision, endpoint == latestEndpoint else {
+            throw SyncError.serverConfigurationChanged
+        }
+        guard generation == settingsMutationGeneration, !isUpdatingServerSettings else { return }
         let settings = AppSettings.current(in: context)
-        if settings.serverClassifier != dto.classifier {
-            settings.serverClassifier = dto.classifier
+        applyServerSettings(dto, to: settings)
+        if context.hasChanges { try context.save() }
+        hasLoadedServerSettings = true
+    }
+
+    private func updateServerSetting(_ change: ServerSettingChange) async throws {
+        guard isConfigured(), let context = container?.mainContext else {
+            throw APIError.notConfigured
         }
-        if settings.serverClassifierModel != dto.classifierModel {
-            settings.serverClassifierModel = dto.classifierModel
+        // PATCH responses contain all settings. Allow only one in flight so
+        // a late response cannot restore another control's previous value.
+        guard !isUpdatingServerSettings else { throw SyncError.settingsUpdateInProgress }
+        isUpdatingServerSettings = true
+        settingsMutationGeneration += 1
+        if case .classifierModel(let model) = change { pendingClassifierModel = model }
+        defer {
+            pendingClassifierModel = nil
+            isUpdatingServerSettings = false
+            let waiters = settingsUpdateWaiters
+            settingsUpdateWaiters.removeAll()
+            for waiter in waiters { waiter.resume() }
         }
-        let available = dto.availableClassifiers["openrouter"]
-        if settings.serverOpenRouterAvailable != available {
-            settings.serverOpenRouterAvailable = available
+        let revision = serverConfigurationRevision
+        let endpoint = try await api.settingsEndpoint()
+        let dto: ServerSettingsDTO
+        switch change {
+        case .adAnalysis(let enabled):
+            dto = try await api.updateSettings(adAnalysisEnabled: enabled, expectedEndpoint: endpoint)
+        case .classifierModel(let model):
+            dto = try await api.updateSettings(classifierModel: model.rawValue, expectedEndpoint: endpoint)
+        case .feedInterval(let minutes):
+            dto = try await api.updateSettings(feedIntervalMinutes: minutes, expectedEndpoint: endpoint)
+        case .openRouterFlex(let enabled):
+            dto = try await api.updateSettings(openrouterFlexEnabled: enabled, expectedEndpoint: endpoint)
+        }
+        switch change {
+        case .feedInterval where dto.feedIntervalMinutes == nil:
+            throw SyncError.settingUnavailable("feed interval")
+        case .openRouterFlex where dto.openrouterFlexEnabled == nil:
+            throw SyncError.settingUnavailable("OpenRouter Flex")
+        default:
+            break
+        }
+        // An already-fetched sync page may contain the old setting. Let it
+        // finish before writing the server's accepted value.
+        if let runningSync { await runningSync.value }
+        let currentEndpoint = try await api.settingsEndpoint()
+        guard revision == serverConfigurationRevision, endpoint == currentEndpoint else {
+            throw SyncError.serverConfigurationChanged
+        }
+        let settings = AppSettings.current(in: context)
+        switch change {
+        case .adAnalysis:
+            if settings.adAnalysisEnabled != dto.adAnalysisEnabled {
+                settings.adAnalysisEnabled = dto.adAnalysisEnabled
+            }
+        case .classifierModel:
+            if settings.serverClassifier != dto.classifier { settings.serverClassifier = dto.classifier }
+            if settings.serverClassifierModel != dto.classifierModel {
+                settings.serverClassifierModel = dto.classifierModel
+            }
+            let available = dto.availableClassifiers["openrouter"]
+            if settings.serverOpenRouterAvailable != available {
+                settings.serverOpenRouterAvailable = available
+            }
+        case .feedInterval:
+            if settings.serverFeedIntervalMinutes != dto.feedIntervalMinutes {
+                settings.serverFeedIntervalMinutes = dto.feedIntervalMinutes
+            }
+        case .openRouterFlex:
+            if settings.serverOpenRouterFlexEnabled != dto.openrouterFlexEnabled {
+                settings.serverOpenRouterFlexEnabled = dto.openrouterFlexEnabled
+            }
         }
         if context.hasChanges { try context.save() }
         await syncNow(.mutation)
     }
 
-    // MARK: - Optimistic server settings
-
-    /// Global "Detect & skip ads" (`PATCH /api/v1/settings`). Applied locally
-    /// at once and rolled back if the server refuses.
-    func setGlobalAdAnalysis(_ enabled: Bool) async throws {
-        guard let context = container?.mainContext else { return }
-        let settings = AppSettings.current(in: context)
-        let previous = settings.adAnalysisEnabled
-        globalAdAnalysisOverride = enabled
-        if settings.adAnalysisEnabled != enabled {
-            settings.adAnalysisEnabled = enabled
-            try? context.save()
+    private func applyServerSettings(_ dto: ServerSettingsDTO, to settings: AppSettings) {
+        if settings.adAnalysisEnabled != dto.adAnalysisEnabled { settings.adAnalysisEnabled = dto.adAnalysisEnabled }
+        if settings.serverAutoProcessEnabled != dto.autoProcessEnabled {
+            settings.serverAutoProcessEnabled = dto.autoProcessEnabled
         }
-        do {
-            let dto = try await api.updateSettings(adAnalysisEnabled: enabled)
-            globalAdAnalysisOverride = nil
-            if settings.adAnalysisEnabled != dto.adAnalysisEnabled {
-                settings.adAnalysisEnabled = dto.adAnalysisEnabled
-                try? context.save()
-            }
-        } catch {
-            globalAdAnalysisOverride = nil
-            if settings.adAnalysisEnabled != previous {
-                settings.adAnalysisEnabled = previous
-                try? context.save()
-            }
-            throw error
+        if settings.serverClassifier != dto.classifier { settings.serverClassifier = dto.classifier }
+        if settings.serverClassifierModel != dto.classifierModel {
+            settings.serverClassifierModel = dto.classifierModel
+        }
+        if settings.serverFeedIntervalMinutes != dto.feedIntervalMinutes {
+            settings.serverFeedIntervalMinutes = dto.feedIntervalMinutes
+        }
+        if settings.serverOpenRouterFlexEnabled != dto.openrouterFlexEnabled {
+            settings.serverOpenRouterFlexEnabled = dto.openrouterFlexEnabled
+        }
+        let available = dto.availableClassifiers["openrouter"]
+        if settings.serverOpenRouterAvailable != available {
+            settings.serverOpenRouterAvailable = available
         }
     }
 

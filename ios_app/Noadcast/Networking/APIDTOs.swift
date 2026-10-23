@@ -429,7 +429,7 @@ nonisolated struct ServerSettingsDTO: Decodable, Sendable, Equatable {
     let classifierModel: String?
     /// Optional for compatibility with servers predating polling settings.
     let feedIntervalMinutes: Int?
-    /// Dashboard-managed preference; absent on older servers.
+    /// Absent on older servers.
     let openrouterFlexEnabled: Bool?
     /// Which providers have server-side keys. Keys themselves are never sent.
     let availableClassifiers: [String: Bool]

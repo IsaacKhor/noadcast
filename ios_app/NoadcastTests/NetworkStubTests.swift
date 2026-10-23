@@ -65,6 +65,27 @@ struct NetworkStubTests {
         #expect(sent == ["classifier": "openrouter", "classifierModel": model.rawValue])
     }
 
+    @Test func settingsPatchSendsFeedIntervalAndFlexFields() async throws {
+        let host = StubServer.uniqueHost()
+        defer { StubServer.shared.unregister(host: host) }
+        let response = #"{"adAnalysisEnabled":true,"autoProcessEnabled":true,"feedIntervalMinutes":45,"openrouterFlexEnabled":true}"#
+        StubServer.shared.register(host: host) { _, _ in .json(response) }
+        let client = try makeStubClient(host: host)
+
+        let settings = try await client.updateSettings(feedIntervalMinutes: 45, openrouterFlexEnabled: true)
+
+        #expect(settings.feedIntervalMinutes == 45)
+        #expect(settings.openrouterFlexEnabled == true)
+        let request = try #require(StubServer.shared.requests(for: host).first)
+        #expect(request.httpMethod == "PATCH")
+        let requestData = try #require(Self.requestBody(request))
+        let object = try JSONSerialization.jsonObject(with: requestData)
+        let sent = try #require(object as? [String: Any])
+        #expect(sent.count == 2)
+        #expect(sent["feedIntervalMinutes"] as? Int == 45)
+        #expect(sent["openrouterFlexEnabled"] as? Bool == true)
+    }
+
     /// URLSession may move a request's body into a stream before URLProtocol sees it.
     private nonisolated static func requestBody(_ request: URLRequest) -> Data? {
         if let body = request.httpBody { return body }
@@ -164,6 +185,111 @@ struct NetworkStubTests {
         let persisted = AppSettings.current(in: ModelContext(harness.container))
         #expect(persisted.serverClassifierModel == ClassifierModel.deepSeekFlash.rawValue)
         #expect(harness.service.pendingClassifierModel == nil)
+    }
+
+    @Test @MainActor func settingsRefreshHydratesAndAcceptedPatchUsesServerValue() async throws {
+        let host = StubServer.uniqueHost()
+        defer { StubServer.shared.unregister(host: host) }
+        let initial = #"{"adAnalysisEnabled":true,"autoProcessEnabled":true,"classifier":"openrouter","feedIntervalMinutes":30,"openrouterFlexEnabled":false}"#
+        let accepted = #"{"adAnalysisEnabled":true,"autoProcessEnabled":true,"classifier":"openrouter","feedIntervalMinutes":45,"openrouterFlexEnabled":false}"#
+        let sync = StubJSON.syncPage(instanceId: "settings-update", nextSince: 1, hasMore: false)
+        StubServer.shared.register(host: host) { request, _ in
+            guard request.url?.path == "/api/v1/settings" else { return .json(sync) }
+            return .json(request.httpMethod == "PATCH" ? accepted : initial)
+        }
+        let harness = try SyncHarness(host: host)
+        defer { harness.cleanUp() }
+
+        #expect(!harness.service.hasLoadedServerSettings)
+        try await harness.service.refreshServerSettings()
+        #expect(harness.service.hasLoadedServerSettings)
+        let settings = AppSettings.current(in: harness.container.mainContext)
+        #expect(settings.serverFeedIntervalMinutes == 30)
+        #expect(settings.serverOpenRouterFlexEnabled == false)
+        try await harness.service.refreshServerSettings()
+        #expect(!harness.container.mainContext.hasChanges)
+
+        try await harness.service.setFeedIntervalMinutes(60)
+        #expect(settings.serverFeedIntervalMinutes == 45)
+        #expect(settings.serverOpenRouterFlexEnabled == false)
+        #expect(!harness.service.isUpdatingServerSettings)
+    }
+
+    @Test @MainActor func rejectedFlexPatchPreservesMirror() async throws {
+        let host = StubServer.uniqueHost()
+        defer { StubServer.shared.unregister(host: host) }
+        StubServer.shared.register(host: host) { _, _ in
+            .json(StubJSON.error(code: "invalidRequest", message: "Flex unavailable"), status: 400)
+        }
+        let harness = try SyncHarness(host: host)
+        defer { harness.cleanUp() }
+        let settings = AppSettings.current(in: harness.container.mainContext)
+        settings.serverOpenRouterFlexEnabled = false
+        try harness.container.mainContext.save()
+
+        do {
+            try await harness.service.setOpenRouterFlexEnabled(true)
+            Issue.record("Expected the rejected Flex change to throw")
+        } catch let error as APIError {
+            #expect(error == .invalidRequest(code: "invalidRequest", message: "Flex unavailable"))
+        }
+
+        #expect(settings.serverOpenRouterFlexEnabled == false)
+        #expect(!harness.service.isUpdatingServerSettings)
+    }
+
+    @Test @MainActor func olderServerCannotSilentlyAcceptUnsupportedSetting() async throws {
+        let host = StubServer.uniqueHost()
+        defer { StubServer.shared.unregister(host: host) }
+        StubServer.shared.register(host: host) { _, _ in .json(Self.settingsJSON) }
+        let harness = try SyncHarness(host: host)
+        defer { harness.cleanUp() }
+        let settings = AppSettings.current(in: harness.container.mainContext)
+        settings.serverFeedIntervalMinutes = 30
+        try harness.container.mainContext.save()
+
+        do {
+            try await harness.service.setFeedIntervalMinutes(45)
+            Issue.record("Expected an older server to report that the setting is unavailable")
+        } catch let error as SyncError {
+            #expect(error == .settingUnavailable("feed interval"))
+        }
+        #expect(settings.serverFeedIntervalMinutes == 30)
+        #expect(!harness.service.isUpdatingServerSettings)
+
+        do {
+            try await harness.service.setFeedIntervalMinutes(0)
+            Issue.record("Expected an out-of-range interval to be rejected locally")
+        } catch let error as SyncError {
+            #expect(error == .invalidFeedInterval)
+        }
+        #expect(StubServer.shared.requests(for: host).count == 1)
+    }
+
+    @Test @MainActor func settingsRefreshWaitsForInFlightPatch() async throws {
+        let host = StubServer.uniqueHost()
+        defer { StubServer.shared.unregister(host: host) }
+        let gate = StubDeliveryGate()
+        let response = #"{"adAnalysisEnabled":true,"autoProcessEnabled":true,"feedIntervalMinutes":30,"openrouterFlexEnabled":true}"#
+        let sync = StubJSON.syncPage(instanceId: "settings-wait", nextSince: 1, hasMore: false)
+        StubServer.shared.register(host: host) { request, _ in
+            guard request.url?.path == "/api/v1/settings" else { return .json(sync) }
+            return .json(response, deliveryGate: request.httpMethod == "PATCH" ? gate : nil)
+        }
+        let harness = try SyncHarness(host: host)
+        defer { harness.cleanUp() }
+
+        let patch = Task { try await harness.service.setOpenRouterFlexEnabled(true) }
+        for _ in 0..<100 where !harness.service.isUpdatingServerSettings { await Task.yield() }
+        #expect(harness.service.isUpdatingServerSettings)
+        let refresh = Task { try await harness.service.refreshServerSettings() }
+        await Task.yield()
+        #expect(!harness.service.hasLoadedServerSettings)
+        await gate.open()
+        try await patch.value
+        try await refresh.value
+        #expect(harness.service.hasLoadedServerSettings)
+        #expect(AppSettings.current(in: harness.container.mainContext).serverOpenRouterFlexEnabled == true)
     }
 
     @Test @MainActor func syncFollowsHasMoreAndPersistsTheFinalCursor() async throws {

@@ -287,13 +287,26 @@ actor NoadcastAPIClient {
 
     // MARK: - Settings, usage, OPML
 
-    func settings() async throws -> ServerSettingsDTO {
+    func settings(expectedEndpoint: APIConfiguration.Endpoint? = nil) async throws -> ServerSettingsDTO {
+        if let expectedEndpoint, try currentEndpoint() != expectedEndpoint {
+            throw SyncError.serverConfigurationChanged
+        }
         let request = try makeRequest("GET", "/api/v1/settings")
         let (data, _) = try await send(request)
         return try decode(ServerSettingsDTO.self, data)
     }
 
-    func updateSettings(adAnalysisEnabled: Bool? = nil, autoProcessEnabled: Bool? = nil, classifierModel: String? = nil) async throws -> ServerSettingsDTO {
+    func updateSettings(
+        adAnalysisEnabled: Bool? = nil,
+        autoProcessEnabled: Bool? = nil,
+        classifierModel: String? = nil,
+        feedIntervalMinutes: Int? = nil,
+        openrouterFlexEnabled: Bool? = nil,
+        expectedEndpoint: APIConfiguration.Endpoint? = nil
+    ) async throws -> ServerSettingsDTO {
+        if let expectedEndpoint, try currentEndpoint() != expectedEndpoint {
+            throw SyncError.serverConfigurationChanged
+        }
         var body: [String: Any] = [:]
         if let adAnalysisEnabled { body["adAnalysisEnabled"] = adAnalysisEnabled }
         if let autoProcessEnabled { body["autoProcessEnabled"] = autoProcessEnabled }
@@ -301,6 +314,8 @@ actor NoadcastAPIClient {
             body["classifier"] = "openrouter"
             body["classifierModel"] = classifierModel
         }
+        if let feedIntervalMinutes { body["feedIntervalMinutes"] = feedIntervalMinutes }
+        if let openrouterFlexEnabled { body["openrouterFlexEnabled"] = openrouterFlexEnabled }
         let request = try makeRequest("PATCH", "/api/v1/settings", jsonBody: body)
         let (data, _) = try await send(request)
         return try decode(ServerSettingsDTO.self, data)
@@ -340,6 +355,10 @@ actor NoadcastAPIClient {
     private func currentEndpoint() throws -> APIConfiguration.Endpoint {
         guard let endpoint = endpointProvider() else { throw APIError.notConfigured }
         return endpoint
+    }
+
+    func settingsEndpoint() throws -> APIConfiguration.Endpoint {
+        try currentEndpoint()
     }
 
     private func makeRequest(

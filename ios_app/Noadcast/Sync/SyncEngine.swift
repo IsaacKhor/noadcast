@@ -854,6 +854,10 @@ actor SyncEngine {
             settings.serverFeedIntervalMinutes = dto.feedIntervalMinutes
             changed = true
         }
+        if settings.serverOpenRouterFlexEnabled != dto.openrouterFlexEnabled {
+            settings.serverOpenRouterFlexEnabled = dto.openrouterFlexEnabled
+            changed = true
+        }
         let openRouterAvailable = dto.availableClassifiers["openrouter"]
         if settings.serverOpenRouterAvailable != openRouterAvailable {
             settings.serverOpenRouterAvailable = openRouterAvailable

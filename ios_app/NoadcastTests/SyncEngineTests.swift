@@ -111,6 +111,8 @@ struct SyncEngineTests {
                 autoProcessEnabled: true,
                 classifier: "openrouter",
                 classifierModel: ClassifierModel.deepSeekFlash.rawValue,
+                feedIntervalMinutes: 45,
+                openrouterFlexEnabled: true,
                 availableClassifiers: ["openrouter": true]
             ),
             nextSince: 500
@@ -130,6 +132,9 @@ struct SyncEngineTests {
         #expect(unchanged.markersChangedEpisodeIDs.isEmpty)
         #expect(!unchanged.settingsChanged)
         #expect(!unchanged.didSave)
+        let mirroredSettings = AppSettings.current(in: ModelContext(container))
+        #expect(mirroredSettings.serverFeedIntervalMinutes == 45)
+        #expect(mirroredSettings.serverOpenRouterFlexEnabled == true)
 
         var episodes = page.episodes
         episodes[1] = SyncFixtures.episode(11, podcast: 1, title: "Episode 11 (remastered)", state: .classifying)
