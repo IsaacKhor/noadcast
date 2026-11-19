@@ -172,7 +172,7 @@ struct APIDecodingTests {
         let directJSON = #"{"classifier":"openai","classifierModel":"gpt-6-luna","availableClassifiers":{"openrouter":false,"openai":true}}"#
         let directSettings = try APIJSON.makeDecoder().decode(ServerSettingsDTO.self, from: Data(directJSON.utf8))
         #expect(directSettings.classifier == ClassifierProvider.openAI.rawValue)
-        #expect(directSettings.classifierModel == ClassifierModel.directGptLunaHigh.rawValue)
+        #expect(directSettings.classifierModel == ClassifierModel.directGptLunaXHigh.rawValue)
         #expect(directSettings.availableClassifiers["openai"] == true)
     }
 
@@ -180,7 +180,7 @@ struct APIDecodingTests {
         #expect(ClassifierProvider.openRouter.models == [
             .deepSeekFlash, .qwenFlash, .gptLunaHigh
         ])
-        #expect(ClassifierProvider.openAI.models == [.directGptLunaHigh])
+        #expect(ClassifierProvider.openAI.models == [.directGptLunaXHigh])
     }
 
     @Test func timestampsAcceptFractionAndOffsetVariants() throws {

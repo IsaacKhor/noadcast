@@ -22,7 +22,7 @@ nonisolated enum ClassifierModel: String, CaseIterable, Identifiable, Sendable {
     case deepSeekFlash = "deepseek/deepseek-v4.1-flash"
     case qwenFlash = "qwen/qwen3.8-flash"
     case gptLunaHigh = "openai/gpt-6-luna"
-    case directGptLunaHigh = "gpt-6-luna"
+    case directGptLunaXHigh = "gpt-6-luna"
 
     static let defaultValue: ClassifierModel = .deepSeekFlash
 
@@ -31,7 +31,7 @@ nonisolated enum ClassifierModel: String, CaseIterable, Identifiable, Sendable {
     var provider: ClassifierProvider {
         switch self {
         case .deepSeekFlash, .qwenFlash, .gptLunaHigh: .openRouter
-        case .directGptLunaHigh: .openAI
+        case .directGptLunaXHigh: .openAI
         }
     }
 
@@ -40,7 +40,7 @@ nonisolated enum ClassifierModel: String, CaseIterable, Identifiable, Sendable {
         case .deepSeekFlash: "DeepSeek 4.1 Flash"
         case .qwenFlash: "Qwen 3.8 Flash"
         case .gptLunaHigh: "GPT 6 Luna (High)"
-        case .directGptLunaHigh: "GPT 6 Luna (High)"
+        case .directGptLunaXHigh: "GPT 6 Luna (Extra High)"
         }
     }
 }

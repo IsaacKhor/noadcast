@@ -354,8 +354,8 @@ arrives via `/sync`.
   provider's key on the server: `OPENROUTER_API_KEY` or `OPENAI_API_KEY`.
   OpenRouter presets are `deepseek/deepseek-v4.1-flash` (default),
   `qwen/qwen3.8-flash`, and `openai/gpt-6-luna`. Direct OpenAI accepts
-  `gpt-6-luna`, using the Responses API. Both GPT 6 Luna presets always use
-  high reasoning effort; no separate settings field is needed.
+  `gpt-6-luna`, using the Responses API. The Luna presets use `high` reasoning
+  through OpenRouter and `xhigh` through OpenAI directly.
   Models must belong to the selected provider. Switching `classifier` without
   specifying `classifierModel` selects that provider's configured default.
   `NOADCAST_CLASSIFIER`, `NOADCAST_OPENROUTER_MODEL`, and `NOADCAST_OPENAI_MODEL`

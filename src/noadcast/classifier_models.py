@@ -11,4 +11,6 @@ PROVIDER_MODEL_IDS = {"openrouter": MODEL_IDS, "openai": OPENAI_MODEL_IDS}
 
 
 def thinking_for_model(model: str) -> str | None:
-    return "high" if model in {"openai/gpt-6-luna", "gpt-6-luna"} else None
+    if model == OPENAI_DEFAULT_MODEL:
+        return "xhigh"
+    return "high" if model == "openai/gpt-6-luna" else None

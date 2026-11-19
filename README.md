@@ -41,10 +41,10 @@ Configuration lives in `secrets.env` (see `secrets.env.example` and
 Set `OPENROUTER_API_KEY` to use OpenRouter (the default provider).
 The default is DeepSeek 4.1 Flash (`deepseek/deepseek-v4.1-flash`). Select
 Qwen 3.8 Flash (`qwen/qwen3.8-flash`) or GPT 6 Luna (`openai/gpt-6-luna`)
-in iOS Settings or with `NOADCAST_OPENROUTER_MODEL`. GPT 6 Luna always uses
-high reasoning effort. To use OpenAI directly, set `OPENAI_API_KEY` on the
+in iOS Settings or with `NOADCAST_OPENROUTER_MODEL`. OpenRouter's GPT 6 Luna
+uses high reasoning effort. To use OpenAI directly, set `OPENAI_API_KEY` on the
 server, restart it, then select **OpenAI (direct)** in iOS Settings. Direct
-OpenAI uses `gpt-6-luna` with high reasoning through the Responses API.
+OpenAI uses `gpt-6-luna` with `xhigh` reasoning through the Responses API.
 For an environment default, set `NOADCAST_CLASSIFIER=openai` and optionally
 `NOADCAST_OPENAI_MODEL=gpt-6-luna`; saved app settings take precedence.
 Only transcript text is sent for classification.

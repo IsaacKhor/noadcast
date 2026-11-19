@@ -44,7 +44,7 @@ class EvalArmTests(unittest.TestCase):
         self.assertIsNone(harness.parse_arm(ARM)["thinking"])
         self.assertIsNone(harness.parse_arm("openrouter:qwen/qwen3.8-flash")["thinking"])
         self.assertEqual(harness.parse_arm("openrouter:openai/gpt-6-luna")["thinking"], "high")
-        self.assertEqual(harness.parse_arm("openai:gpt-6-luna")["thinking"], "high")
+        self.assertEqual(harness.parse_arm("openai:gpt-6-luna")["thinking"], "xhigh")
         for retired in ("fake:fake", "gemini:gemini-3.5-flash", "claude:claude-sonnet-5",
                         "openrouter:google/gemini-3.5-flash", "openrouter:openai/gpt-6-luna:low",
                         "openai:openai/gpt-6-luna", "openrouter:gpt-6-luna"):

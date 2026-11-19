@@ -81,7 +81,7 @@ ios_app/             Xcode project
   `openai/gpt-6-luna` (always high reasoning). Select the model in iOS Settings,
   with `NOADCAST_OPENROUTER_MODEL`, or via `POST /episodes/{id}/reanalyze`.
   Direct OpenAI is also supported: `NOADCAST_CLASSIFIER=openai`,
-  `OPENAI_API_KEY`, and `NOADCAST_OPENAI_MODEL=gpt-6-luna` (high reasoning),
+  `OPENAI_API_KEY`, and `NOADCAST_OPENAI_MODEL=gpt-6-luna` (`xhigh` reasoning),
   or select OpenAI in iOS Settings. OpenRouter Flex applies only to OpenRouter.
   Offline replay doubles live only under `tests/support/`; historical
   classification rows retain their original provider and model.

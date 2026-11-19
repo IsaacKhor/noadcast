@@ -194,7 +194,7 @@ struct NetworkStubTests {
 
         let persisted = AppSettings.current(in: ModelContext(harness.container))
         #expect(persisted.serverClassifier == "openai")
-        #expect(persisted.serverClassifierModel == ClassifierModel.directGptLunaHigh.rawValue)
+        #expect(persisted.serverClassifierModel == ClassifierModel.directGptLunaXHigh.rawValue)
         #expect(persisted.serverOpenAIAvailable == true)
         #expect(harness.service.pendingClassifierProvider == nil)
     }

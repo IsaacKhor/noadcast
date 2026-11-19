@@ -80,7 +80,7 @@ class RegistryTests(unittest.IsolatedAsyncioTestCase):
                                  openrouter_flex_enabled=True)
         direct = registry.get("openai", thinking="low", flex_enabled=True)
         self.assertIsInstance(direct, OpenAIClassifier)
-        self.assertEqual((direct.provider, direct.model, direct.thinking), ("openai", "gpt-6-luna", "high"))
+        self.assertEqual((direct.provider, direct.model, direct.thinking), ("openai", "gpt-6-luna", "xhigh"))
         self.assertIs(direct, registry.get("openai", "gpt-6-luna", flex_enabled=False))
         self.assertIsNot(direct, registry.get("openrouter", "openai/gpt-6-luna"))
         self.assertEqual(len(registry._cache), 2)

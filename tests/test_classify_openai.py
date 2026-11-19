@@ -37,7 +37,7 @@ class OpenAITests(unittest.IsolatedAsyncioTestCase):
         self.sleep = RecordingSleep()
         client = httpx_client(recorder)
         self.addAsyncCleanup(client.aclose)
-        return OpenAIClassifier(api_key=KEY, client=client, model=MODEL, thinking="high",
+        return OpenAIClassifier(api_key=KEY, client=client, model=MODEL, thinking="xhigh",
                                 sleep=self.sleep, rand=no_jitter, **options)
 
     async def test_request_uses_responses_strict_schema_and_private_key_header(self) -> None:
@@ -53,7 +53,7 @@ class OpenAITests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(body["model"], MODEL)
         self.assertEqual(body["instructions"], spec.system)
         self.assertIn("[60.00-75.00]", body["input"])
-        self.assertEqual(body["reasoning"], {"effort": "high"})
+        self.assertEqual(body["reasoning"], {"effort": "xhigh"})
         self.assertEqual(body["text"], {"format": {
             "type": "json_schema", "name": "podcast_segments", "strict": True, "schema": spec.claude_schema,
         }})
