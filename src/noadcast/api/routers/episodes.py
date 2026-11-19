@@ -8,6 +8,7 @@ from fastapi import APIRouter, Query
 from starlette.responses import Response
 
 from ...db import repo
+from ...classifier_models import PROVIDER_MODEL_IDS
 from ...pipeline import commands
 from ...timeutil import now_iso
 from ..deps import Ctx, episode_or_404
@@ -73,6 +74,9 @@ async def reanalyze_episode(episode_id: int, ctx: Ctx, body: ReanalyzeIn | None 
     # episode marked failed.
     if request.provider is not None and not ctx.classifiers.available().get(request.provider, False):
         raise invalid_request(f"classifier {request.provider!r} is not configured on this server")
+    selected_provider = request.provider or ctx.server_settings().classifier
+    if request.model is not None and request.model not in PROVIDER_MODEL_IDS[selected_provider]:
+        raise invalid_request(f"classifier model {request.model!r} is unsupported for {selected_provider}")
     async with ctx.episode_release_lock(episode_id):
         with ctx.db.write() as tx:
             job_id = commands.reanalyze_episode(

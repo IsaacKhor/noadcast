@@ -12,7 +12,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Mapping
 
-from ..classifier_models import MODEL_IDS
+from ..classifier_models import PROVIDER_MODEL_IDS
 from ..db import repo
 from ..db.engine import WriteTx
 from . import jobs, states
@@ -169,10 +169,11 @@ def reanalyze_episode(
     """Run a fresh classification (optionally a fresh transcription first).
     Earlier classifications are kept for comparison. If a job of the needed
     kind is already live its id is returned and this request folds into it."""
-    if provider is not None and provider != "openrouter":
-        raise ValueError("only openrouter classification is supported")
-    if model is not None and model not in MODEL_IDS:
-        raise ValueError("unsupported classifier model")
+    selected_provider = provider or server.classifier
+    if selected_provider not in PROVIDER_MODEL_IDS:
+        raise ValueError("unsupported classifier provider")
+    if model is not None and model not in PROVIDER_MODEL_IDS[selected_provider]:
+        raise ValueError(f"unsupported classifier model for {selected_provider}")
     episode, podcast = _load(tx, episode_id)
     repo.clear_played_release(tx, episode_id)
     params: dict[str, Any] = {"force": True, "reclassify": True}

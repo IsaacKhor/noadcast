@@ -247,6 +247,22 @@ class DownloadTranscribeClassifyTests(StageTestCase):
         self.assertEqual(sources, ["auto", "auto", "manual"])
         self.assertEqual(self.fresh().marker_revision, 2)
 
+    async def test_direct_openai_reanalysis_preserves_openrouter_history(self) -> None:
+        self.process()
+        await self.run_chain()
+        with self.ctx.db.write() as tx:
+            job_id = commands.reanalyze_episode(
+                tx, self.episode.id, server=self.ctx.server_settings(), now=now_iso(),
+                provider="openai", model="gpt-6-luna",
+            )
+        self.assertEqual(jobs.get_job(self.ctx.db, job_id).kind, "classify")
+        await self.run_next("classify")
+        history = repo.list_classifications(self.ctx.db, self.episode.id)
+        self.assertEqual([(c.provider, c.model, c.is_active) for c in history],
+                         [("openai", "gpt-6-luna", True),
+                          ("openrouter", "deepseek/deepseek-v4.1-flash", False)])
+        self.assertEqual(self.ctx.classifiers.requested[-1][:2], ("openai", "gpt-6-luna"))
+
     async def test_different_bytes_on_redownload_invalidate_markers(self) -> None:
         self.process()
         await self.run_chain()

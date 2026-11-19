@@ -91,6 +91,19 @@ class ProcessingCommandTests(ApiTestCase):
         fake = await self.client.post(f"/api/v1/episodes/{self.ready_id}/reanalyze", json={"provider": "fake"})
         self.assertError(fake, 422, "invalidRequest")
 
+    async def test_direct_openai_reanalyze_requires_configuration_and_matching_model(self) -> None:
+        url = f"/api/v1/episodes/{self.ready_id}/reanalyze"
+        body = {"provider": "openai", "model": "gpt-6-luna"}
+        self.assertError(await self.client.post(url, json=body), 422, "invalidRequest")
+        self.registry.available_map["openai"] = True
+        self.assertError(await self.client.post(url, json={"provider": "openai", "model": "openai/gpt-6-luna"}),
+                         422, "invalidRequest")
+        self.assertEqual([j for j in jobs.list_jobs(self.ctx.db) if j.is_live], [])
+        response = await self.client.post(url, json=body)
+        self.assertEqual(response.status_code, 202, response.text)
+        job = jobs.get_job(self.ctx.db, response.json()["jobId"])
+        self.assertEqual((job.params["provider"], job.params["model"]), ("openai", "gpt-6-luna"))
+
 
 class TranscriptTests(ApiTestCase):
     async def asyncSetUp(self) -> None:

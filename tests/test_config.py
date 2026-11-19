@@ -37,10 +37,23 @@ class ClassificationConfigTests(unittest.TestCase):
         self.assertEqual(settings.openrouter_model, "deepseek/deepseek-v4.1-flash")
         self.assertFalse(settings.openrouter_flex_enabled)
         self.assertEqual(settings.openrouter_api_base, "https://openrouter.ai/api/v1")
+        self.assertEqual(settings.openai_model, "gpt-6-luna")
+        self.assertIsNone(settings.openai_api_key)
+        self.assertEqual(settings.openai_api_base, "https://api.openai.com/v1")
+
+    def test_direct_openai_configuration_and_secret_redaction(self) -> None:
+        settings = Settings.from_mapping({"NOADCAST_ALLOW_NO_AUTH": "1", "NOADCAST_CLASSIFIER": "openai",
+                                          "OPENAI_API_KEY": "test-openai-secret", "OPENAI_API_BASE": "https://openai.example/v1",
+                                          "NOADCAST_OPENAI_MODEL": "gpt-6-luna"})
+        self.assertEqual((settings.classifier, settings.openai_model, settings.openai_api_base),
+                         ("openai", "gpt-6-luna", "https://openai.example/v1"))
+        self.assertEqual(settings.openai_api_key, "test-openai-secret")
+        self.assertNotIn("test-openai-secret", repr(settings))
 
     def test_rejects_retired_provider_or_unknown_model(self) -> None:
         for override in ({"NOADCAST_CLASSIFIER": "gemini"}, {"NOADCAST_CLASSIFIER": "fake"},
-                         {"NOADCAST_OPENROUTER_MODEL": "google/gemini-3.5-flash"}):
+                         {"NOADCAST_OPENROUTER_MODEL": "google/gemini-3.5-flash"},
+                         {"NOADCAST_OPENAI_MODEL": "openai/gpt-6-luna"}):
             with self.subTest(override=override), self.assertRaises(ValueError):
                 Settings.from_mapping({"NOADCAST_ALLOW_NO_AUTH": "1", **override})
 

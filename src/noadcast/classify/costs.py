@@ -19,6 +19,7 @@ log = logging.getLogger(__name__)
 
 PRICE_TABLE_VERSION = "2026-09-26-openrouter"
 OPENROUTER_REPORTED_VERSION = "openrouter-reported-v1"
+OPENAI_PRICE_TABLE_VERSION = "2026-11-12-openai"
 
 
 @dataclass(frozen=True)
@@ -52,6 +53,7 @@ class PriceEntry:
 
 
 _OPENROUTER_SOURCE = "https://openrouter.ai/api/v1/models (retrieved 2026-09-26)"
+_OPENAI_SOURCE = "https://developers.openai.com/api/docs/models/gpt-6-luna (retrieved 2026-11-12)"
 PRICES: dict[tuple[str, str], tuple[PriceEntry, ...]] = {
     ("openrouter", "deepseek/deepseek-v4.1-flash"): (
         PriceEntry(Price(0.035, 0.29, 0.001), _OPENROUTER_SOURCE),
@@ -61,6 +63,9 @@ PRICES: dict[tuple[str, str], tuple[PriceEntry, ...]] = {
     ),
     ("openrouter", "openai/gpt-6-luna"): (
         PriceEntry(Price(0.10, 0.50, 0.01, 0.125), _OPENROUTER_SOURCE),
+    ),
+    ("openai", "gpt-6-luna"): (
+        PriceEntry(Price(0.10, 0.50, 0.01, 0.125), _OPENAI_SOURCE),
     ),
 }
 
@@ -84,11 +89,12 @@ def cost_for(provider: str, model: str, usage: TokenUsage, *, at: dt.datetime | 
     price = price_for(provider, model, at)
     if price is None:
         log.warning("no %s price for %s/%s; recording zero cost", PRICE_TABLE_VERSION, provider, model)
-        return CostBreakdown(0.0, 0.0, 0.0, 0.0)
+        return CostBreakdown(0.0, 0.0, 0.0, 0.0, "unknown-price")
     uncached = max(0, usage.input_tokens - usage.cached_input_tokens - usage.cache_write_tokens)
     input_usd = (
         uncached * price.input + usage.cached_input_tokens * price.cached_input + usage.cache_write_tokens * price.cache_write
     ) / 1e6
     thought_usd = usage.thought_tokens * price.thought / 1e6
     output_usd = usage.output_tokens * price.output / 1e6
-    return CostBreakdown(input_usd, thought_usd, output_usd, input_usd + thought_usd + output_usd)
+    version = OPENAI_PRICE_TABLE_VERSION if provider == "openai" else PRICE_TABLE_VERSION
+    return CostBreakdown(input_usd, thought_usd, output_usd, input_usd + thought_usd + output_usd, version)

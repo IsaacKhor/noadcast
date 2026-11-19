@@ -201,7 +201,7 @@ struct UsageHistoryView: View {
         } header: {
             Text("Server Tokens Per Day")
         } footer: {
-            Text("Thought tokens show reasoning usage when reported by OpenRouter.")
+            Text("Thought tokens show reasoning usage when reported by the provider. Direct OpenAI costs are estimates.")
         }
     }
 

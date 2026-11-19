@@ -129,7 +129,7 @@ class _Job:
 
 
 class TranscriptClassifier:
-    """Shared transcript request flow for OpenRouter and test doubles."""
+    """Shared transcript request flow for classification providers and test doubles."""
 
     provider: str = ""
 

@@ -4,7 +4,7 @@ A self-hosted podcast system that skips ads, intros, and outros. A Python
 server (`src/noadcast/`) polls RSS, downloads and stores audio, transcribes
 it with faster-whisper `tiny.en` on the GPU (CUDA float16; word timestamps
 joined into sentences), and classifies skippable segments from the
-transcript text through OpenRouter. The iOS 26+ app (`ios_app/`) is a thin client: it mirrors the
+transcript text through OpenRouter or OpenAI directly. The iOS 26+ app (`ios_app/`) is a thin client: it mirrors the
 server's podcasts, episodes, and markers into SwiftData, streams or
 downloads the server's audio, and skips segments during playback.
 `docs/API.md` is the contract between the two; change both sides together.
@@ -76,10 +76,13 @@ ios_app/             Xcode project
 
 ### Classification
 
-- OpenRouter is the only classification provider. Models are
+- OpenRouter is the default classification provider. Its models are
   `deepseek/deepseek-v4.1-flash` (default), `qwen/qwen3.8-flash`, and
   `openai/gpt-6-luna` (always high reasoning). Select the model in iOS Settings,
   with `NOADCAST_OPENROUTER_MODEL`, or via `POST /episodes/{id}/reanalyze`.
+  Direct OpenAI is also supported: `NOADCAST_CLASSIFIER=openai`,
+  `OPENAI_API_KEY`, and `NOADCAST_OPENAI_MODEL=gpt-6-luna` (high reasoning),
+  or select OpenAI in iOS Settings. OpenRouter Flex applies only to OpenRouter.
   Offline replay doubles live only under `tests/support/`; historical
   classification rows retain their original provider and model.
 - Prompt versions live in `classify/prompts.py` (`segments-v4` default,

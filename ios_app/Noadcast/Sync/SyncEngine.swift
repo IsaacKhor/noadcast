@@ -863,6 +863,11 @@ actor SyncEngine {
             settings.serverOpenRouterAvailable = openRouterAvailable
             changed = true
         }
+        let openAIAvailable = dto.availableClassifiers["openai"]
+        if settings.serverOpenAIAvailable != openAIAvailable {
+            settings.serverOpenAIAvailable = openAIAvailable
+            changed = true
+        }
         report.settingsChanged = changed
     }
 

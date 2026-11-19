@@ -43,8 +43,11 @@ async def get_settings(ctx: Ctx) -> Response:
 async def update_settings(body: SettingsPatchIn, ctx: Ctx) -> Response:
     # model_dump uses field names, which are exactly repo.SETTING_KEYS.
     changes = body.model_dump(exclude_none=True)
-    with ctx.db.write() as tx:
-        updated = repo.update_server_settings(tx, ctx.settings, changes, now=now_iso())
+    try:
+        with ctx.db.write() as tx:
+            updated = repo.update_server_settings(tx, ctx.settings, changes, now=now_iso())
+    except ValueError as exc:
+        raise invalid_request(str(exc)) from exc
     return json_response(settings_out(updated, ctx.classifiers.available()))
 
 

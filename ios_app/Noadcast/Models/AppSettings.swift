@@ -54,6 +54,8 @@ final class AppSettings {
     var serverOpenRouterFlexEnabled: Bool?
     /// Unknown until a server reports its OpenRouter key availability.
     var serverOpenRouterAvailable: Bool?
+    /// Unknown when the server predates direct OpenAI support.
+    var serverOpenAIAvailable: Bool?
 
     init(
         defaultPlaybackSpeed: Double = 1.0,

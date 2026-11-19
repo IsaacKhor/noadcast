@@ -16,7 +16,7 @@ import httpx
 
 from noadcast.classify.base import ClassifyRequest, ClassifyResult, DetectedSegment, TokenUsage
 from noadcast.config import Settings, settings_for_tests
-from noadcast.classifier_models import DEFAULT_MODEL, MODEL_IDS
+from noadcast.classifier_models import DEFAULT_MODEL, OPENAI_DEFAULT_MODEL, PROVIDER_MODEL_IDS
 from noadcast.context import AppContext
 from noadcast.db import repo
 from noadcast.db.engine import Database
@@ -251,16 +251,17 @@ class FakeRegistry:
             *, flex_enabled: bool | None = None) -> ScriptedClassifier:
         self.requested.append((provider, model, thinking))
         name = provider or "openrouter"
-        if name != "openrouter" or (model is not None and model not in MODEL_IDS):
+        if name not in PROVIDER_MODEL_IDS or (model is not None and model not in PROVIDER_MODEL_IDS[name]):
             from noadcast.classify.base import ClassifierError
             raise ClassifierError("unsupported classifier selection", permanent=True)
+        default = DEFAULT_MODEL if name == "openrouter" else OPENAI_DEFAULT_MODEL
         if name not in self.classifiers:
-            self.classifiers[name] = ScriptedClassifier(provider=name, model=model or DEFAULT_MODEL)
-        self.classifiers[name].model = model or DEFAULT_MODEL
+            self.classifiers[name] = ScriptedClassifier(provider=name, model=model or default)
+        self.classifiers[name].model = model or default
         return self.classifiers[name]
 
     def available(self) -> dict[str, bool]:
-        return {"openrouter": True}
+        return {"openrouter": True, "openai": True}
 
     async def aclose(self) -> None:
         pass

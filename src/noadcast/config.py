@@ -16,7 +16,7 @@ from dataclasses import dataclass, field, fields, replace
 from pathlib import Path
 from typing import Mapping
 
-from .classifier_models import DEFAULT_MODEL, MODEL_IDS
+from .classifier_models import DEFAULT_MODEL, MODEL_IDS, OPENAI_DEFAULT_MODEL, OPENAI_MODEL_IDS, PROVIDER_MODEL_IDS
 
 log = logging.getLogger(__name__)
 
@@ -74,6 +74,7 @@ class Settings:
     # Classification
     classifier: str = "openrouter"
     openrouter_model: str = DEFAULT_MODEL
+    openai_model: str = OPENAI_DEFAULT_MODEL
     openrouter_flex_enabled: bool = False
     prompt_version: str = "segments-v4"
     transcript_format: str = "sentences"  # production: [22.24-23.88] A complete sentence.
@@ -82,6 +83,8 @@ class Settings:
     classifier_max_input_tokens: int = 120_000
     openrouter_api_key: str | None = field(default=None, repr=False)
     openrouter_api_base: str = "https://openrouter.ai/api/v1"
+    openai_api_key: str | None = field(default=None, repr=False)
+    openai_api_base: str = "https://api.openai.com/v1"
 
     # Transcription
     asr_model_dir: Path = Path("data/models/tiny.en")
@@ -177,6 +180,7 @@ class Settings:
             "NOADCAST_AUDIO_URL_TTL_SECONDS": ("audio_url_ttl_seconds", int),
             "NOADCAST_CLASSIFIER": ("classifier", str),
             "NOADCAST_OPENROUTER_MODEL": ("openrouter_model", str),
+            "NOADCAST_OPENAI_MODEL": ("openai_model", str),
             "NOADCAST_OPENROUTER_FLEX_ENABLED": ("openrouter_flex_enabled", _bool),
             "NOADCAST_PROMPT_VERSION": ("prompt_version", str),
             "NOADCAST_TRANSCRIPT_FORMAT": ("transcript_format", str),
@@ -185,6 +189,8 @@ class Settings:
             "NOADCAST_CLASSIFIER_MAX_INPUT_TOKENS": ("classifier_max_input_tokens", int),
             "OPENROUTER_API_KEY": ("openrouter_api_key", _optional),
             "OPENROUTER_API_BASE": ("openrouter_api_base", str),
+            "OPENAI_API_KEY": ("openai_api_key", _optional),
+            "OPENAI_API_BASE": ("openai_api_base", str),
             "NOADCAST_ASR_MODEL_DIR": ("asr_model_dir", Path),
             "NOADCAST_ASR_MODEL_ID": ("asr_model_id", str),
             "NOADCAST_ASR_LANGUAGE": ("asr_language", _optional),
@@ -248,10 +254,12 @@ class Settings:
                 raise ValueError("NOADCAST_API_TOKEN is required (or set NOADCAST_ALLOW_NO_AUTH=1 for local testing)")
             if len(self.api_token) < 32:
                 raise ValueError("NOADCAST_API_TOKEN must be at least 32 characters")
-        if self.classifier != "openrouter":
+        if self.classifier not in PROVIDER_MODEL_IDS:
             raise ValueError(f"unknown NOADCAST_CLASSIFIER {self.classifier!r}")
         if self.openrouter_model not in MODEL_IDS:
             raise ValueError(f"unsupported NOADCAST_OPENROUTER_MODEL {self.openrouter_model!r}; expected one of {MODEL_IDS}")
+        if self.openai_model not in OPENAI_MODEL_IDS:
+            raise ValueError(f"unsupported NOADCAST_OPENAI_MODEL {self.openai_model!r}; expected one of {OPENAI_MODEL_IDS}")
         if self.transcript_format not in {"index", "seconds", "sentences"}:
             raise ValueError(f"unknown NOADCAST_TRANSCRIPT_FORMAT {self.transcript_format!r}")
         if self.transcript_format == "sentences" and self.include_silence:

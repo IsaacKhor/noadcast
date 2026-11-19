@@ -3,14 +3,14 @@
 A self-hosted podcast system that skips ads, intros, and outros. A Python
 server polls RSS feeds, downloads each episode once, transcribes it locally
 with faster-whisper `tiny.en` using word-level timestamps joined into
-sentences, and asks a cloud model through OpenRouter to find the skippable
+sentences, and asks a cloud model through OpenRouter or OpenAI directly to find the skippable
 segments from the transcript text alone — audio never leaves the machine
 except to the phone. The iOS app is a thin client: it syncs podcasts,
 episodes, and skip markers from the server, and streams or downloads the
 audio the server stores.
 
 ```
-            RSS feeds                         OpenRouter
+            RSS feeds                    OpenRouter / OpenAI
                 │                         (transcript text only)
                 ▼                                   ▲
  ┌──────────────────────────── laurel ──────────────┼──────────────┐
@@ -38,17 +38,22 @@ classify, evict), a pool of spawned faster-whisper workers, and the HTTP API.
 Configuration lives in `secrets.env` (see `secrets.env.example` and
 `src/noadcast/config.py`); API keys never leave the server.
 
-Set `OPENROUTER_API_KEY`; OpenRouter is the only classification provider.
+Set `OPENROUTER_API_KEY` to use OpenRouter (the default provider).
 The default is DeepSeek 4.1 Flash (`deepseek/deepseek-v4.1-flash`). Select
 Qwen 3.8 Flash (`qwen/qwen3.8-flash`) or GPT 6 Luna (`openai/gpt-6-luna`)
 in iOS Settings or with `NOADCAST_OPENROUTER_MODEL`. GPT 6 Luna always uses
-high reasoning effort. Only transcript text is sent for classification.
+high reasoning effort. To use OpenAI directly, set `OPENAI_API_KEY` on the
+server, restart it, then select **OpenAI (direct)** in iOS Settings. Direct
+OpenAI uses `gpt-6-luna` with high reasoning through the Responses API.
+For an environment default, set `NOADCAST_CLASSIFIER=openai` and optionally
+`NOADCAST_OPENAI_MODEL=gpt-6-luna`; saved app settings take precedence.
+Only transcript text is sent for classification.
 
 ```bash
 export UV_CACHE_DIR="$PWD/.cache/uv" TMPDIR="$PWD/.cache/tmp"
 uv pip install --python .venv/bin/python -e .
 cp secrets.env.example secrets.env && chmod 600 secrets.env
-.venv/bin/noadcast token        # paste into NOADCAST_API_TOKEN; add OPENROUTER_API_KEY
+.venv/bin/noadcast token        # paste into NOADCAST_API_TOKEN; add your provider API key
 .venv/bin/noadcast models link benchmarks/tal/models/tiny.en   # or: noadcast models fetch
 .venv/bin/noadcast migrate
 .venv/bin/noadcast serve
@@ -62,9 +67,9 @@ logs, reprocessing, backups), see [deploy/README.md](deploy/README.md).
 Open the server URL in a browser (for example,
 `http://laurel.turkey-galaxy.ts.net:44007/`) and enter the
 `NOADCAST_API_TOKEN` from `secrets.env`. The dashboard shows server health,
-episodes, OpenRouter token and cost history, and storage. Server configuration
+episodes, classification token and cost history, and storage. Server configuration
 lives in the iOS app's **Settings** page: set the feed check interval
-(1–1,440 minutes), select the model for future classifications, enable the
+(1–1,440 minutes), select the provider and model for future classifications, enable the
 optional OpenRouter Flex preference (off by default), and control ad detection
 globally. Flex savings depend on the selected model's endpoint availability;
 standard pricing applies when no Flex endpoint is available. Changes apply
@@ -93,7 +98,7 @@ How an episode flows:
    (`src/noadcast/transcribe/joiner.py`) and stored along with the words.
 4. **Classify** joins pause and length fragments through their next punctuation
    boundary, then sends lines such as `[22.24-23.88] A complete sentence.`
-   to OpenRouter. Each returned intro, ad, or outro has start and end
+   to the selected provider. Each returned intro, ad, or outro has start and end
    timestamps and a summary of its content. The server sanitises boundaries
    against the transcript and true audio length, then exposes the segments
    as episode markers for the app.

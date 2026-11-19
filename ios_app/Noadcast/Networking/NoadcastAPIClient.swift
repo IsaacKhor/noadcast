@@ -299,6 +299,7 @@ actor NoadcastAPIClient {
     func updateSettings(
         adAnalysisEnabled: Bool? = nil,
         autoProcessEnabled: Bool? = nil,
+        classifier: String? = nil,
         classifierModel: String? = nil,
         feedIntervalMinutes: Int? = nil,
         openrouterFlexEnabled: Bool? = nil,
@@ -310,10 +311,8 @@ actor NoadcastAPIClient {
         var body: [String: Any] = [:]
         if let adAnalysisEnabled { body["adAnalysisEnabled"] = adAnalysisEnabled }
         if let autoProcessEnabled { body["autoProcessEnabled"] = autoProcessEnabled }
-        if let classifierModel {
-            body["classifier"] = "openrouter"
-            body["classifierModel"] = classifierModel
-        }
+        if let classifier { body["classifier"] = classifier }
+        if let classifierModel { body["classifierModel"] = classifierModel }
         if let feedIntervalMinutes { body["feedIntervalMinutes"] = feedIntervalMinutes }
         if let openrouterFlexEnabled { body["openrouterFlexEnabled"] = openrouterFlexEnabled }
         let request = try makeRequest("PATCH", "/api/v1/settings", jsonBody: body)

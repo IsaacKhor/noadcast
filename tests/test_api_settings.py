@@ -42,7 +42,7 @@ class SettingsTests(ApiTestCase):
                 "classifierModel": self.settings.openrouter_model,
                 "openrouterFlexEnabled": False,
                 "feedIntervalMinutes": self.settings.feed_interval_minutes,
-                "availableClassifiers": {"openrouter": False},
+                "availableClassifiers": {"openrouter": False, "openai": False},
             },
         )
 
@@ -65,6 +65,22 @@ class SettingsTests(ApiTestCase):
             self.assertEqual(response.status_code, 200, response.text)
             self.assertEqual(response.json()["classifierModel"], model)
             self.assertEqual((await self.client.get("/api/v1/settings")).json(), response.json())
+
+    async def test_switching_providers_selects_their_default_models(self) -> None:
+        response = await self.client.patch("/api/v1/settings", json={"classifier": "openai"})
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual((response.json()["classifier"], response.json()["classifierModel"]), ("openai", "gpt-6-luna"))
+        response = await self.client.patch("/api/v1/settings", json={"classifier": "openrouter"})
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual((response.json()["classifier"], response.json()["classifierModel"]),
+                         ("openrouter", self.settings.openrouter_model))
+
+    async def test_mismatched_model_rejected_without_writes(self) -> None:
+        seq = self.ctx.db.current_seq()
+        for body in ({"classifier": "openai", "classifierModel": "openai/gpt-6-luna"},
+                     {"classifierModel": "gpt-6-luna"}):
+            self.assertError(await self.client.patch("/api/v1/settings", json=body), 422, "invalidRequest")
+        self.assertEqual(self.ctx.db.current_seq(), seq)
 
     async def test_flex_preference_persists_and_is_idempotent(self) -> None:
         seq = self.ctx.db.current_seq()

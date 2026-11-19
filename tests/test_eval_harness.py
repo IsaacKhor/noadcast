@@ -40,12 +40,14 @@ ARM = "openrouter:deepseek/deepseek-v4.1-flash"
 
 
 class EvalArmTests(unittest.TestCase):
-    def test_only_openrouter_presets_can_be_recorded(self) -> None:
+    def test_only_supported_provider_presets_can_be_recorded(self) -> None:
         self.assertIsNone(harness.parse_arm(ARM)["thinking"])
         self.assertIsNone(harness.parse_arm("openrouter:qwen/qwen3.8-flash")["thinking"])
         self.assertEqual(harness.parse_arm("openrouter:openai/gpt-6-luna")["thinking"], "high")
+        self.assertEqual(harness.parse_arm("openai:gpt-6-luna")["thinking"], "high")
         for retired in ("fake:fake", "gemini:gemini-3.5-flash", "claude:claude-sonnet-5",
-                        "openrouter:google/gemini-3.5-flash", "openrouter:openai/gpt-6-luna:low"):
+                        "openrouter:google/gemini-3.5-flash", "openrouter:openai/gpt-6-luna:low",
+                        "openai:openai/gpt-6-luna", "openrouter:gpt-6-luna"):
             with self.subTest(arm=retired), self.assertRaises(VerificationError):
                 harness.parse_arm(retired)
 

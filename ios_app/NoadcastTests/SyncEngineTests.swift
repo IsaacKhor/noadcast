@@ -74,9 +74,9 @@ struct SyncEngineTests {
         let availabilities: [Bool?] = [true, false, nil]
         for availability in availabilities {
             let dto = ServerSettingsDTO(
-                classifier: "openrouter",
-                classifierModel: ClassifierModel.gptLunaHigh.rawValue,
-                availableClassifiers: availability.map { ["openrouter": $0] } ?? [:]
+                classifier: "openai",
+                classifierModel: ClassifierModel.directGptLunaHigh.rawValue,
+                availableClassifiers: availability.map { ["openrouter": true, "openai": $0] } ?? ["openrouter": true]
             )
             _ = try await engine.apply(
                 page: SyncFixtures.page(settings: dto, nextSince: 10),
@@ -84,8 +84,10 @@ struct SyncEngineTests {
                 save: true
             )
             let settings = AppSettings.current(in: ModelContext(container))
-            #expect(settings.serverClassifierModel == ClassifierModel.gptLunaHigh.rawValue)
-            #expect(settings.serverOpenRouterAvailable == availability)
+            #expect(settings.serverClassifier == "openai")
+            #expect(settings.serverClassifierModel == ClassifierModel.directGptLunaHigh.rawValue)
+            #expect(settings.serverOpenRouterAvailable == true)
+            #expect(settings.serverOpenAIAvailable == availability)
         }
     }
 

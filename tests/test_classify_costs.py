@@ -3,7 +3,7 @@ from __future__ import annotations
 import unittest
 
 from noadcast.classify.base import TokenUsage
-from noadcast.classify.costs import PRICE_TABLE_VERSION, PRICES, cost_for, price_for
+from noadcast.classify.costs import OPENAI_PRICE_TABLE_VERSION, PRICE_TABLE_VERSION, PRICES, cost_for, price_for
 
 
 class CostTests(unittest.TestCase):
@@ -39,10 +39,19 @@ class CostTests(unittest.TestCase):
 
     def test_every_supported_model_has_a_documented_fallback(self) -> None:
         models = {"deepseek/deepseek-v4.1-flash", "qwen/qwen3.8-flash", "openai/gpt-6-luna"}
-        self.assertEqual(set(PRICES), {("openrouter", model) for model in models})
+        self.assertEqual(set(PRICES), {("openrouter", model) for model in models} | {("openai", "gpt-6-luna")})
         for model in models:
             self.assertIsNotNone(price_for("openrouter", model))
             self.assertTrue(PRICES[("openrouter", model)][0].source.startswith("https://openrouter.ai/"))
+
+    def test_direct_openai_standard_price_is_versioned(self) -> None:
+        usage = TokenUsage(input_tokens=1_000_000, cached_input_tokens=100_000, cache_write_tokens=100_000,
+                           thought_tokens=100_000, output_tokens=900_000)
+        cost = cost_for("openai", "gpt-6-luna", usage)
+        self.assertAlmostEqual(cost.input_usd, 0.8 * .10 + 0.1 * .01 + 0.1 * .125)
+        self.assertAlmostEqual(cost.thought_usd + cost.output_usd, 0.5)
+        self.assertEqual(cost.price_table_version, OPENAI_PRICE_TABLE_VERSION)
+        self.assertIn("developers.openai.com", PRICES[("openai", "gpt-6-luna")][0].source)
 
     def test_unknown_model_warns_when_no_charge_was_reported(self) -> None:
         with self.assertLogs("noadcast.classify.costs", level="WARNING"):

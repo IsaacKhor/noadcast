@@ -7,6 +7,7 @@ from pathlib import Path
 from noadcast.classifier_models import DEFAULT_MODEL, MODEL_IDS
 from noadcast.classify.base import ClassifierError
 from noadcast.classify.openrouter import OpenRouterClassifier
+from noadcast.classify.openai import OpenAIClassifier
 from noadcast.classify.registry import ClassifierRegistry
 from noadcast.config import settings_for_tests
 from tests.test_classify_helpers import Recorder, RecordingSleep, episode, httpx_client
@@ -24,9 +25,10 @@ class RegistryTests(unittest.IsolatedAsyncioTestCase):
         self.addAsyncCleanup(registry.aclose)
         return registry
 
-    def test_available_reports_only_openrouter(self) -> None:
-        self.assertEqual(self.registry().available(), {"openrouter": False})
-        self.assertEqual(self.registry(openrouter_api_key="test").available(), {"openrouter": True})
+    def test_available_reports_both_providers(self) -> None:
+        self.assertEqual(self.registry().available(), {"openrouter": False, "openai": False})
+        self.assertEqual(self.registry(openrouter_api_key="router", openai_api_key="direct").available(),
+                         {"openrouter": True, "openai": True})
 
     def test_missing_key_is_permanent(self) -> None:
         with self.assertRaises(ClassifierError) as caught:
@@ -72,6 +74,25 @@ class RegistryTests(unittest.IsolatedAsyncioTestCase):
         configured = self.registry(openrouter_api_key="test", openrouter_flex_enabled=True)
         self.assertTrue(configured.get().flex_enabled)
         self.assertFalse(configured.get(flex_enabled=False).flex_enabled)
+
+    def test_direct_openai_preset_and_cache_are_separate(self) -> None:
+        registry = self.registry(openrouter_api_key="router", openai_api_key="direct",
+                                 openrouter_flex_enabled=True)
+        direct = registry.get("openai", thinking="low", flex_enabled=True)
+        self.assertIsInstance(direct, OpenAIClassifier)
+        self.assertEqual((direct.provider, direct.model, direct.thinking), ("openai", "gpt-6-luna", "high"))
+        self.assertIs(direct, registry.get("openai", "gpt-6-luna", flex_enabled=False))
+        self.assertIsNot(direct, registry.get("openrouter", "openai/gpt-6-luna"))
+        self.assertEqual(len(registry._cache), 2)
+        for provider, model in (("openai", "openai/gpt-6-luna"), ("openrouter", "gpt-6-luna")):
+            with self.subTest(provider=provider), self.assertRaises(ClassifierError):
+                registry.get(provider, model)
+
+    def test_direct_openai_missing_key_is_permanent(self) -> None:
+        with self.assertRaises(ClassifierError) as caught:
+            self.registry(classifier="openai").get()
+        self.assertTrue(caught.exception.permanent)
+        self.assertIn("OPENAI_API_KEY", str(caught.exception))
 
     async def test_injected_client_classifies_and_stays_open(self) -> None:
         recorder = Recorder((200, response()))

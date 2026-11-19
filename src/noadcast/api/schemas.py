@@ -20,7 +20,8 @@ from ..classifier_models import ClassifierModel
 from ..db import repo
 from ..pipeline import jobs
 
-Provider = Literal["openrouter"]
+Provider = Literal["openrouter", "openai"]
+AnyClassifierModel = ClassifierModel | Literal["gpt-6-luna"]
 JobState = Literal["pending", "running", "done", "failed", "canceled"]
 # Spelled out for validation; a test pins it to pipeline.states.JOB_KINDS.
 JobKind = Literal["refresh_feed", "download", "transcribe", "classify", "evict"]
@@ -445,7 +446,7 @@ class PodcastPatchIn(ApiModel):
 
 class ReanalyzeIn(ApiModel):
     provider: Provider | None = None
-    model: ClassifierModel | None = None
+    model: AnyClassifierModel | None = None
     thinking: Literal["high"] | None = None
     retranscribe: bool = False
 
@@ -456,6 +457,6 @@ class SettingsPatchIn(ApiModel):
     ad_analysis_enabled: bool | None = None
     auto_process_enabled: bool | None = None
     classifier: Provider | None = None
-    classifier_model: ClassifierModel | None = None
+    classifier_model: AnyClassifierModel | None = None
     openrouter_flex_enabled: bool | None = None
     feed_interval_minutes: int | None = Field(default=None, ge=1, le=1440, strict=True)

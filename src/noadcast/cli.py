@@ -21,7 +21,7 @@ import sys
 from pathlib import Path
 from typing import Any, Sequence
 
-from .classifier_models import MODEL_IDS
+from .classifier_models import MODEL_IDS, OPENAI_MODEL_IDS
 from .config import Settings
 from .db.engine import Database
 from .timeutil import now_iso
@@ -159,8 +159,8 @@ def build_parser() -> argparse.ArgumentParser:
 
     reprocess = sub.add_parser("reprocess", help="queue a fresh classification of an episode")
     reprocess.add_argument("episode_id", type=int)
-    reprocess.add_argument("--provider", choices=("openrouter",))
-    reprocess.add_argument("--model", choices=MODEL_IDS)
+    reprocess.add_argument("--provider", choices=("openrouter", "openai"))
+    reprocess.add_argument("--model", choices=MODEL_IDS + OPENAI_MODEL_IDS)
     reprocess.add_argument("--thinking")
     reprocess.add_argument("--retranscribe", action="store_true", help="transcribe again first")
     reprocess.set_defaults(func=cmd_reprocess)

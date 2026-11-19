@@ -25,7 +25,7 @@ import sqlite3
 from dataclasses import dataclass
 from typing import Any, Iterable, Mapping, Protocol, Sequence, TypeVar
 
-from ..classifier_models import DEFAULT_MODEL, MODEL_IDS
+from ..classifier_models import DEFAULT_MODEL, PROVIDER_MODEL_IDS
 from ..config import Settings
 from ..transcribe.protocol import Sentence
 from ..timeutil import iso, parse_iso
@@ -1314,9 +1314,11 @@ SETTING_KEYS = ("ad_analysis_enabled", "auto_process_enabled", "classifier", "cl
 
 
 def default_model_for(config: Settings, provider: str) -> str:
-    if provider != "openrouter":
-        raise ValueError(f"unsupported classifier provider {provider!r}")
-    return config.openrouter_model
+    if provider == "openrouter":
+        return config.openrouter_model
+    if provider == "openai":
+        return config.openai_model
+    raise ValueError(f"unsupported classifier provider {provider!r}")
 
 
 def normalize_classifier_settings(tx: WriteTx, config: Settings, *, now: str) -> None:
@@ -1329,18 +1331,18 @@ def normalize_classifier_settings(tx: WriteTx, config: Settings, *, now: str) ->
     """
     stored = {row["key"]: json.loads(row["value_json"]) for row in tx.read("SELECT key, value_json FROM settings")}
     provider = stored.get("classifier", config.classifier)
-    model = stored.get("classifier_model", config.openrouter_model)
+    model = stored.get("classifier_model", default_model_for(config, provider) if provider in PROVIDER_MODEL_IDS else DEFAULT_MODEL)
     changes = {
         key: value for key, value in (
             ("classifier", provider), ("classifier_model", model),
             ("openrouter_flex_enabled", config.openrouter_flex_enabled),
         ) if key not in stored
     }
-    if provider != "openrouter":
+    if provider not in PROVIDER_MODEL_IDS:
         changes["classifier"] = "openrouter"
         changes["classifier_model"] = DEFAULT_MODEL
-    elif model not in MODEL_IDS:
-        changes["classifier_model"] = DEFAULT_MODEL
+    elif model not in PROVIDER_MODEL_IDS[provider]:
+        changes["classifier_model"] = default_model_for(config, provider)
     for key, value in changes.items():
         if stored.get(key) == value:
             continue
@@ -1355,9 +1357,11 @@ def normalize_classifier_settings(tx: WriteTx, config: Settings, *, now: str) ->
 def load_server_settings(db: Reader, config: Settings) -> ServerSettings:
     stored = {row["key"]: json.loads(row["value_json"]) for row in db.read("SELECT key, value_json FROM settings")}
     classifier = stored.get("classifier", config.classifier)
-    model = stored.get("classifier_model") or config.openrouter_model
-    if classifier != "openrouter" or model not in MODEL_IDS:
+    model = stored.get("classifier_model") or (default_model_for(config, classifier) if classifier in PROVIDER_MODEL_IDS else DEFAULT_MODEL)
+    if classifier not in PROVIDER_MODEL_IDS:
         classifier, model = "openrouter", DEFAULT_MODEL
+    elif model not in PROVIDER_MODEL_IDS[classifier]:
+        model = default_model_for(config, classifier)
     return ServerSettings(
         ad_analysis_enabled=bool(stored.get("ad_analysis_enabled", True)),
         auto_process_enabled=bool(stored.get("auto_process_enabled", True)),
@@ -1400,10 +1404,8 @@ def update_server_settings(
     unknown = set(changes) - set(SETTING_KEYS)
     if unknown:
         raise ValueError(f"unknown settings: {sorted(unknown)}")
-    if "classifier" in changes and changes["classifier"] != "openrouter":
-        raise ValueError("only openrouter classification is supported")
-    if "classifier_model" in changes and changes["classifier_model"] not in MODEL_IDS:
-        raise ValueError("unsupported classifier model")
+    if "classifier" in changes and changes["classifier"] not in PROVIDER_MODEL_IDS:
+        raise ValueError("unsupported classifier provider")
     if "openrouter_flex_enabled" in changes and type(changes["openrouter_flex_enabled"]) is not bool:
         raise ValueError("OpenRouter flex setting must be a boolean")
     if "feed_interval_minutes" in changes and (
@@ -1414,6 +1416,9 @@ def update_server_settings(
     target = dict(changes)
     if "classifier" in target and "classifier_model" not in target and target["classifier"] != current.classifier:
         target["classifier_model"] = default_model_for(config, target["classifier"])
+    provider = target.get("classifier", current.classifier)
+    if "classifier_model" in target and target["classifier_model"] not in PROVIDER_MODEL_IDS[provider]:
+        raise ValueError(f"unsupported classifier model for {provider}")
     for key in SETTING_KEYS:
         if key in target and target[key] != getattr(current, key):
             tx.execute(

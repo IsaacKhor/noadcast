@@ -44,25 +44,41 @@ struct NetworkStubTests {
     }
 
     @Test(arguments: ClassifierModel.allCases)
-    func modelSelectionSendsOpenRouterAndExactModel(_ model: ClassifierModel) async throws {
+    func modelSelectionSendsProviderAndExactModel(_ model: ClassifierModel) async throws {
         let host = StubServer.uniqueHost()
         defer { StubServer.shared.unregister(host: host) }
         let body = LockedBox<Data?>(nil)
-        let response = #"{"adAnalysisEnabled":true,"autoProcessEnabled":true,"classifier":"openrouter","classifierModel":"\#(model.rawValue)","availableClassifiers":{"openrouter":true}}"#
+        let response = #"{"adAnalysisEnabled":true,"autoProcessEnabled":true,"classifier":"\#(model.provider.rawValue)","classifierModel":"\#(model.rawValue)","availableClassifiers":{"openrouter":true,"openai":true}}"#
         StubServer.shared.register(host: host) { request, _ in
             body.withLock { $0 = Self.requestBody(request) }
             return .json(response)
         }
         let client = try makeStubClient(host: host)
 
-        let settings = try await client.updateSettings(classifierModel: model.rawValue)
+        let settings = try await client.updateSettings(classifier: model.provider.rawValue, classifierModel: model.rawValue)
 
         #expect(settings.classifierModel == model.rawValue)
         let request = try #require(StubServer.shared.requests(for: host).first)
         #expect(request.httpMethod == "PATCH")
         #expect(request.url?.path == "/api/v1/settings")
         let sent = try JSONDecoder().decode([String: String].self, from: #require(body.value))
-        #expect(sent == ["classifier": "openrouter", "classifierModel": model.rawValue])
+        #expect(sent == ["classifier": model.provider.rawValue, "classifierModel": model.rawValue])
+    }
+
+    @Test func providerSelectionSendsProviderWithoutModel() async throws {
+        let host = StubServer.uniqueHost()
+        defer { StubServer.shared.unregister(host: host) }
+        let response = #"{"classifier":"openai","classifierModel":"gpt-6-luna","availableClassifiers":{"openrouter":true,"openai":true}}"#
+        StubServer.shared.register(host: host) { _, _ in .json(response) }
+        let client = try makeStubClient(host: host)
+
+        let settings = try await client.updateSettings(classifier: ClassifierProvider.openAI.rawValue)
+
+        #expect(settings.classifier == "openai")
+        #expect(settings.classifierModel == "gpt-6-luna")
+        let request = try #require(StubServer.shared.requests(for: host).first)
+        let sent = try JSONDecoder().decode([String: String].self, from: #require(Self.requestBody(request)))
+        #expect(sent == ["classifier": "openai"])
     }
 
     @Test func settingsPatchSendsFeedIntervalAndFlexFields() async throws {
@@ -161,6 +177,26 @@ struct NetworkStubTests {
         #expect(persisted.serverClassifier == "openrouter")
         #expect(persisted.serverOpenRouterAvailable == true)
         #expect(harness.service.pendingClassifierModel == nil)
+    }
+
+    @Test @MainActor func acceptedProviderSelectionPersistsTheServerResponse() async throws {
+        let host = StubServer.uniqueHost()
+        defer { StubServer.shared.unregister(host: host) }
+        let response = #"{"adAnalysisEnabled":true,"autoProcessEnabled":true,"classifier":"openai","classifierModel":"gpt-6-luna","availableClassifiers":{"openrouter":true,"openai":true}}"#
+        let sync = StubJSON.syncPage(instanceId: "provider-selection", nextSince: 1, hasMore: false)
+        StubServer.shared.register(host: host) { request, _ in
+            request.url?.path == "/api/v1/settings" ? .json(response) : .json(sync)
+        }
+        let harness = try SyncHarness(host: host)
+        defer { harness.cleanUp() }
+
+        try await harness.service.setClassifierProvider(.openAI)
+
+        let persisted = AppSettings.current(in: ModelContext(harness.container))
+        #expect(persisted.serverClassifier == "openai")
+        #expect(persisted.serverClassifierModel == ClassifierModel.directGptLunaHigh.rawValue)
+        #expect(persisted.serverOpenAIAvailable == true)
+        #expect(harness.service.pendingClassifierProvider == nil)
     }
 
     @Test @MainActor func rejectedModelSelectionPreservesTheStoredChoice() async throws {

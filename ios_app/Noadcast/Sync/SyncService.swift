@@ -39,6 +39,7 @@ nonisolated enum SyncError: Error, LocalizedError, Equatable {
 
 private enum ServerSettingChange {
     case adAnalysis(Bool)
+    case classifierProvider(ClassifierProvider)
     case classifierModel(ClassifierModel)
     case feedInterval(Int)
     case openRouterFlex(Bool)
@@ -162,6 +163,7 @@ final class SyncService {
     private(set) var instanceId: String?
     /// Staged UI selection only; the stored mirror changes after server acceptance.
     private(set) var pendingClassifierModel: ClassifierModel?
+    private(set) var pendingClassifierProvider: ClassifierProvider?
     private(set) var isUpdatingServerSettings = false
     /// A direct GET has hydrated the controls for this server connection.
     private(set) var hasLoadedServerSettings = false
@@ -799,6 +801,10 @@ final class SyncService {
         try await updateServerSetting(.classifierModel(model))
     }
 
+    func setClassifierProvider(_ provider: ClassifierProvider) async throws {
+        try await updateServerSetting(.classifierProvider(provider))
+    }
+
     func setGlobalAdAnalysisEnabled(_ enabled: Bool) async throws {
         try await updateServerSetting(.adAnalysis(enabled))
     }
@@ -864,8 +870,10 @@ final class SyncService {
         isUpdatingServerSettings = true
         settingsMutationGeneration += 1
         if case .classifierModel(let model) = change { pendingClassifierModel = model }
+        if case .classifierProvider(let provider) = change { pendingClassifierProvider = provider }
         defer {
             pendingClassifierModel = nil
+            pendingClassifierProvider = nil
             isUpdatingServerSettings = false
             let waiters = settingsUpdateWaiters
             settingsUpdateWaiters.removeAll()
@@ -877,8 +885,14 @@ final class SyncService {
         switch change {
         case .adAnalysis(let enabled):
             dto = try await api.updateSettings(adAnalysisEnabled: enabled, expectedEndpoint: endpoint)
+        case .classifierProvider(let provider):
+            dto = try await api.updateSettings(classifier: provider.rawValue, expectedEndpoint: endpoint)
         case .classifierModel(let model):
-            dto = try await api.updateSettings(classifierModel: model.rawValue, expectedEndpoint: endpoint)
+            dto = try await api.updateSettings(
+                classifier: model.provider.rawValue,
+                classifierModel: model.rawValue,
+                expectedEndpoint: endpoint
+            )
         case .feedInterval(let minutes):
             dto = try await api.updateSettings(feedIntervalMinutes: minutes, expectedEndpoint: endpoint)
         case .openRouterFlex(let enabled):
@@ -905,7 +919,7 @@ final class SyncService {
             if settings.adAnalysisEnabled != dto.adAnalysisEnabled {
                 settings.adAnalysisEnabled = dto.adAnalysisEnabled
             }
-        case .classifierModel:
+        case .classifierProvider, .classifierModel:
             if settings.serverClassifier != dto.classifier { settings.serverClassifier = dto.classifier }
             if settings.serverClassifierModel != dto.classifierModel {
                 settings.serverClassifierModel = dto.classifierModel
@@ -913,6 +927,10 @@ final class SyncService {
             let available = dto.availableClassifiers["openrouter"]
             if settings.serverOpenRouterAvailable != available {
                 settings.serverOpenRouterAvailable = available
+            }
+            let openAIAvailable = dto.availableClassifiers["openai"]
+            if settings.serverOpenAIAvailable != openAIAvailable {
+                settings.serverOpenAIAvailable = openAIAvailable
             }
         case .feedInterval:
             if settings.serverFeedIntervalMinutes != dto.feedIntervalMinutes {
@@ -945,6 +963,10 @@ final class SyncService {
         let available = dto.availableClassifiers["openrouter"]
         if settings.serverOpenRouterAvailable != available {
             settings.serverOpenRouterAvailable = available
+        }
+        let openAIAvailable = dto.availableClassifiers["openai"]
+        if settings.serverOpenAIAvailable != openAIAvailable {
+            settings.serverOpenAIAvailable = openAIAvailable
         }
     }
 

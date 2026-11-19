@@ -136,12 +136,13 @@ phone, playback speed) are not server fields.
   "classifierModel": "deepseek/deepseek-v4.1-flash",
   "openrouterFlexEnabled": false,
   "feedIntervalMinutes": 30,
-  "availableClassifiers": {"openrouter": false}
+  "availableClassifiers": {"openrouter": false, "openai": false}
 }
 ```
 
 Global switches. `openrouterFlexEnabled` defaults to `false`; enabling it
-requests OpenRouter's `flex` service tier for future classification requests.
+requests OpenRouter's `flex` service tier for future OpenRouter classifications.
+It is retained but ignored when the selected provider is `openai`.
 Flex can have higher latency or lower availability. Savings depend on the
 model's available endpoints; OpenRouter uses standard pricing when no Flex
 endpoint is available. `availableClassifiers`
@@ -161,7 +162,7 @@ protected by the normal default-deny authentication middleware.
 
 The dashboard shows server health, episodes, usage, and storage. Configuration
 controls live in the iOS app's Settings page: feed-check interval, global ad
-detection, classification model, and OpenRouter Flex. The app reads
+detection, classification provider and model, and OpenRouter Flex. The app reads
 `GET /api/v1/settings` when Settings opens and saves changes with
 `PATCH /api/v1/settings`; `/sync` continues to mirror those values. Saved
 settings remain server-owned and apply to every client.
@@ -276,7 +277,7 @@ arrives via `/sync`.
   transcribed and classified. Idempotent; `jobId` is null when nothing is
   left to do. Clients call this when the user plays or downloads an episode
   whose `audioState` is not `present`.
-- `POST /api/v1/episodes/{id}/reanalyze` `{"provider"?: "openrouter", "model"?: str, "thinking"?: str, "retranscribe"?: bool}`
+- `POST /api/v1/episodes/{id}/reanalyze` `{"provider"?: "openrouter" | "openai", "model"?: str, "thinking"?: str, "retranscribe"?: bool}`
   → `202 {"jobId": n}`; `422` if the provider has no server-side key. Keeps prior
   classifications for comparison. One classify job runs per episode at a time, so a
   second request while one is live folds into it.
@@ -349,16 +350,20 @@ arrives via `/sync`.
 
 - `GET /api/v1/settings` → `200 Settings`; `PATCH /api/v1/settings`
   `{"adAnalysisEnabled"?, "autoProcessEnabled"?, "classifier"?, "classifierModel"?, "openrouterFlexEnabled"?, "feedIntervalMinutes"?}` → `200 Settings`.
-  `classifier` accepts only `openrouter`; `OPENROUTER_API_KEY` is required on the server.
-  `classifierModel` (and reanalyze `model`) accepts three presets:
-  `deepseek/deepseek-v4.1-flash` (default), `qwen/qwen3.8-flash`, and
-  `openai/gpt-6-luna` (always high reasoning effort). Reasoning is determined
-  by the preset, so no separate settings field is needed.
-  `NOADCAST_OPENROUTER_MODEL` overrides the default model. Existing historical
+  `classifier` accepts `openrouter` (default) or `openai`. Configure the selected
+  provider's key on the server: `OPENROUTER_API_KEY` or `OPENAI_API_KEY`.
+  OpenRouter presets are `deepseek/deepseek-v4.1-flash` (default),
+  `qwen/qwen3.8-flash`, and `openai/gpt-6-luna`. Direct OpenAI accepts
+  `gpt-6-luna`, using the Responses API. Both GPT 6 Luna presets always use
+  high reasoning effort; no separate settings field is needed.
+  Models must belong to the selected provider. Switching `classifier` without
+  specifying `classifierModel` selects that provider's configured default.
+  `NOADCAST_CLASSIFIER`, `NOADCAST_OPENROUTER_MODEL`, and `NOADCAST_OPENAI_MODEL`
+  set environment defaults; saved settings override them. Existing historical
   classifications retain their original provider, model, markers, and costs.
   `openrouterFlexEnabled` is a boolean, defaulting to
   `NOADCAST_OPENROUTER_FLEX_ENABLED` (`false` if unset). The saved app
-  choice overrides this default. When enabled, requests send `service_tier:
+  choice overrides this default. For OpenRouter, enabled requests send `service_tier:
   "flex"`; when disabled, the tier is omitted. Provider-reported usage cost
   remains authoritative; enabling Flex does not assume a fixed discount.
   `feedIntervalMinutes` is an integer from 1 to 1440, defaulting to
@@ -375,7 +380,11 @@ arrives via `/sync`.
   across requests and stored with price-table version `openrouter-reported-v1`.
   Its input/thought/output cost breakdown is unavailable (stored as zero), while
   the total remains billed cost. If the response omits billed cost, the server
-  falls back to its price table for known models.
+  falls back to its price table for known models. Direct OpenAI costs are
+  estimates from versioned standard token prices, including cached input and
+  reasoning tokens; they are not an invoice-reported charge. These estimates
+  exclude regional premiums and the premium for requests above 272,000 input
+  tokens (the default input limit is 120,000 tokens).
   `thoughtTokens` records separately reported reasoning usage. Historical
   provider rows preserve their original token accounting.
 - `POST /api/v1/opml` (body: OPML XML) → `200 {"added": [Podcast], "existing": [Podcast], "failed": [{"feedUrl", "error"}]}`.

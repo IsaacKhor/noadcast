@@ -379,8 +379,11 @@ struct SettingsView: View {
     private func adAnalysisSection(settings: AppSettings) -> some View {
         let sync = SyncService.shared
         let selectedModel = sync.hasLoadedServerSettings ? (settings.serverClassifierModel ?? "") : ""
+        let selectedProvider = ClassifierProvider(rawValue: settings.serverClassifier ?? "") ?? .openRouter
         let canEdit = isConfigured && sync.hasLoadedServerSettings && !sync.isUpdatingServerSettings
-        let canChooseModel = settings.serverOpenRouterAvailable != false
+        let providerAvailable = selectedProvider == .openRouter
+            ? settings.serverOpenRouterAvailable != false
+            : settings.serverOpenAIAvailable == true
         Section {
             if sync.hasLoadedServerSettings {
                 Toggle("Analyze ads", isOn: Binding(
@@ -389,26 +392,42 @@ struct SettingsView: View {
                 ))
                 .disabled(!canEdit)
                 .accessibilityIdentifier("globalAdAnalysisToggle")
+                Picker("Provider", selection: Binding(
+                    get: { selectedProvider.rawValue },
+                    set: { updateClassifierProvider($0) }
+                )) {
+                    ForEach(ClassifierProvider.allCases) { provider in
+                        Text(provider.label).tag(provider.rawValue)
+                            .disabled(provider == .openRouter
+                                ? settings.serverOpenRouterAvailable == false
+                                : settings.serverOpenAIAvailable != true)
+                    }
+                }
+                .pickerStyle(.menu)
+                .accessibilityIdentifier("adAnalysisProviderPicker")
+                .disabled(!canEdit)
                 Picker("Model", selection: Binding(
                     get: { selectedModel },
                     set: { updateClassifierModel($0) }
                 )) {
-                    ForEach(ClassifierModel.allCases) { model in
+                    ForEach(selectedProvider.models) { model in
                         Text(model.label).tag(model.rawValue)
                     }
-                    if ClassifierModel(rawValue: selectedModel) == nil {
+                    if ClassifierModel(rawValue: selectedModel)?.provider != selectedProvider {
                         Text(selectedModel.isEmpty ? "Unavailable" : selectedModel).tag(selectedModel)
                     }
                 }
                 .pickerStyle(.menu)
                 .accessibilityIdentifier("adAnalysisModelPicker")
-                .disabled(!canEdit || !canChooseModel)
-                Toggle("OpenRouter Flex", isOn: Binding(
-                    get: { settings.serverOpenRouterFlexEnabled ?? false },
-                    set: { updateOpenRouterFlex($0) }
-                ))
-                .disabled(!canEdit || settings.serverOpenRouterFlexEnabled == nil)
-                .accessibilityIdentifier("openRouterFlexToggle")
+                .disabled(!canEdit || !providerAvailable)
+                if selectedProvider == .openRouter {
+                    Toggle("OpenRouter Flex", isOn: Binding(
+                        get: { settings.serverOpenRouterFlexEnabled ?? false },
+                        set: { updateOpenRouterFlex($0) }
+                    ))
+                    .disabled(!canEdit || settings.serverOpenRouterFlexEnabled == nil)
+                    .accessibilityIdentifier("openRouterFlexToggle")
+                }
             } else {
                 Text("Load server settings to change ad analysis.")
                     .foregroundStyle(.secondary)
@@ -417,12 +436,18 @@ struct SettingsView: View {
             Text("Ad analysis")
         } footer: {
             VStack(alignment: .leading, spacing: 4) {
-                Text("Analysis applies to future episodes. Flex may take longer or be less available; any savings depend on the selected model's endpoints. Standard pricing applies where Flex is unavailable.")
+                Text("Analysis applies to future episodes.")
                 if settings.serverOpenRouterAvailable == false {
-                    Text("Add an OpenRouter API key on your server to run analysis or choose a model.")
+                    Text("OpenRouter is not configured. Add its API key on your server to use it.")
                 }
-                if settings.serverOpenRouterFlexEnabled == nil && sync.hasLoadedServerSettings {
-                    Text("Flex is unavailable on this server.")
+                if settings.serverOpenAIAvailable == false {
+                    Text("OpenAI is not configured. Add its API key on your server to use it.")
+                }
+                if selectedProvider == .openRouter {
+                    Text("Flex may take longer or be less available; savings depend on the selected model's endpoints. Standard pricing applies where Flex is unavailable.")
+                    if settings.serverOpenRouterFlexEnabled == nil && sync.hasLoadedServerSettings {
+                        Text("Flex is unavailable on this server.")
+                    }
                 }
                 if !isConfigured {
                     Text("Connect to your server to change this.")
@@ -461,6 +486,18 @@ struct SettingsView: View {
                 try await SyncService.shared.setClassifierModel(model)
             } catch {
                 showAlert(title: "Couldn't Change Analysis Model", message: error.localizedDescription)
+            }
+        }
+    }
+
+    private func updateClassifierProvider(_ rawValue: String) {
+        guard let provider = ClassifierProvider(rawValue: rawValue),
+              rawValue != settings?.serverClassifier else { return }
+        Task {
+            do {
+                try await SyncService.shared.setClassifierProvider(provider)
+            } catch {
+                showAlert(title: "Couldn't Change Analysis Provider", message: error.localizedDescription)
             }
         }
     }

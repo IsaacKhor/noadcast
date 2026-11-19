@@ -312,6 +312,17 @@ class RepoTests(unittest.TestCase):
         self.assertEqual(self.seq(), before)
         self.assertEqual(repo.load_server_settings(self.db, self.settings).classifier_model, "openai/gpt-6-luna")
 
+    def test_direct_openai_saved_selection_survives_normalization(self) -> None:
+        with self.db.write() as tx:
+            repo.normalize_classifier_settings(tx, self.settings, now=now_iso())
+            repo.update_server_settings(tx, self.settings, {"classifier": "openai"}, now=now_iso())
+        before = self.seq()
+        with self.db.write() as tx:
+            repo.normalize_classifier_settings(tx, self.settings, now=now_iso())
+        self.assertEqual(self.seq(), before)
+        selection = repo.load_server_settings(self.db, self.settings)
+        self.assertEqual((selection.classifier, selection.classifier_model), ("openai", "gpt-6-luna"))
+
     def test_config_only_upgrade_announces_new_defaults_after_existing_cursor(self) -> None:
         seed_podcast(self.db)
         cursor = self.seq()  # The old client already mirrored its config-only Gemini selection.

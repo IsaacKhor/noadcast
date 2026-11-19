@@ -164,10 +164,23 @@ struct APIDecodingTests {
         #expect(settings.classifier == "openrouter")
         #expect(settings.classifierModel == ClassifierModel.defaultValue.rawValue)
         #expect(settings.availableClassifiers["openrouter"] == true)
+        #expect(settings.availableClassifiers["openai"] == nil)
         #expect(settings.openrouterFlexEnabled == nil)
         let flexJSON = json.replacingOccurrences(of: "\"classifier\":", with: "\"openrouterFlexEnabled\":true,\"classifier\":")
         let flexSettings = try APIJSON.makeDecoder().decode(ServerSettingsDTO.self, from: Data(flexJSON.utf8))
         #expect(flexSettings.openrouterFlexEnabled == true)
+        let directJSON = #"{"classifier":"openai","classifierModel":"gpt-6-luna","availableClassifiers":{"openrouter":false,"openai":true}}"#
+        let directSettings = try APIJSON.makeDecoder().decode(ServerSettingsDTO.self, from: Data(directJSON.utf8))
+        #expect(directSettings.classifier == ClassifierProvider.openAI.rawValue)
+        #expect(directSettings.classifierModel == ClassifierModel.directGptLunaHigh.rawValue)
+        #expect(directSettings.availableClassifiers["openai"] == true)
+    }
+
+    @Test func classifierModelsAreFilteredByProvider() {
+        #expect(ClassifierProvider.openRouter.models == [
+            .deepSeekFlash, .qwenFlash, .gptLunaHigh
+        ])
+        #expect(ClassifierProvider.openAI.models == [.directGptLunaHigh])
     }
 
     @Test func timestampsAcceptFractionAndOffsetVariants() throws {
